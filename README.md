@@ -51,21 +51,6 @@ When a valid workspace folder is set in Project Settings, DataTUI persists:
 
 On exit or when requested, TDV writes the current view to Parquet per tab (if applicable) so you can quickly resume where you left off.
 
-## Examples
-
-This repo includes runnable examples under `examples/`:
-
-```bash
-# Data tab manager demo
-cargo run --release --example data_tab_manager_demo
-
-# Data import workflow
-cargo run --release --example data_import_demo
-
-# Table operations and dialogs
-cargo run --release --example datatable_demo
-```
-
 ## Development
 
 - Rust toolchain required
