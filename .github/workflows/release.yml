@@ -71,9 +71,8 @@ jobs:
         $ErrorActionPreference = "Stop"
         $BinName = "datatui.exe"
         $TagName = "${env:GITHUB_REF_NAME}"
-        $OS = "${env:RUNNER_OS}"
-        $ARCH = "${env:RUNNER_ARCH}"
-        $Artifact = "datatui-$TagName-$OS-$ARCH.zip"
+        $Target = "${{ matrix.target }}"
+        $Artifact = "datatui-$TagName-$Target.zip"
         New-Item -ItemType Directory -Force -Path dist | Out-Null
         Copy-Item "target\release\datatui.exe" "dist\"
         if (Test-Path "README.md") { Copy-Item "README.md" "dist\" }
