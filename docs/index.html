@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DataTUI — A Terminal UI for Data</title>
+  <meta name="description" content="DataTUI is a fast, keyboard-first terminal data viewer for CSV, Excel, SQLite, Parquet, and JSON. Tabs, SQL, filters, JMES, exports, and more.">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav">
+      <a class="logo" href="#">DataTUI</a>
+      <nav class="main-nav">
+        <a href="#features">Features</a>
+        <a href="https://github.com/forensicmatt/datatui" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <h1>DataTUI</h1>
+          <p class="tag">A Terminal UI for Data.</p>
+          <p class="sub">A fast, keyboard-first terminal UI for exploring CSV/TSV, Excel, SQLite, Parquet, and JSON with tabs, sorting, filtering, SQL (Polars), and more.</p>
+          <div class="cta">
+            <a class="btn primary" href="#install">Get Started</a>
+            <a class="btn" href="https://github.com/forensicmatt/datatui" target="_blank" rel="noopener">View on GitHub</a>
+          </div>
+        </div>
+        <div class="hero-art">
+          <img src="./assets/hero.png" alt="DataTUI overview" loading="eager" width="1200" height="700" />
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="features">
+      <div class="container">
+        <h2 class="section-title">Features</h2>
+      </div>
+      <!-- Feature 3 -->
+      <section class="feature">
+        <div class="container feature-grid">
+          <div class="feature-text">
+            <h3>Broad import support</h3>
+            <p>Guided dialogs for CSV/TSV, Excel, SQLite, Parquet, and JSON with type-aware options.</p>
+            <ul>
+              <li>Delimiter, header, quoting for CSV/TSV</li>
+              <li>Sheet/table selection for Excel/SQLite</li>
+              <li>Native Parquet/JSON flows</li>
+            </ul>
+          </div>
+          <div class="feature-media"><img src="./assets/feature3.png" alt="Broad import support" loading="lazy" width="1200" height="700" /></div>
+        </div>
+      </section>
+
+      <!-- Feature 6 -->
+      <section class="feature">
+        <div class="container feature-grid reverse">
+          <div class="feature-text">
+            <h3>Multi-column sort</h3>
+            <p>Sort by multiple columns with clear header indicators and toggle behavior.</p>
+            <ul>
+              <li>Ascending/descending toggles</li>
+              <li>Stable multi-key sorting</li>
+              <li>Visual arrows and order badges</li>
+            </ul>
+          </div>
+          <div class="feature-media"><img src="./assets/feature6.png" alt="Multi-column sort" loading="lazy" width="1200" height="700" /></div>
+        </div>
+      </section>
+
+      <!-- Feature 7 -->
+      <section class="feature">
+        <div class="container feature-grid">
+          <div class="feature-text">
+            <h3>Custom filter builder</h3>
+            <p>Compose complex filters without writing code. Apply and clear against your base dataset.</p>
+            <ul>
+              <li>Variety of operators</li>
+              <li>Export/Import filters</li>
+              <li>Nested AND/OR conditions</li>
+            </ul>
+          </div>
+          <div class="feature-media"><img src="./assets/feature7.png" alt="Custom filter builder" loading="lazy" width="1200" height="700" /></div>
+        </div>
+      </section>
+
+      <!-- Feature 8 -->
+      <section class="feature">
+        <div class="container feature-grid reverse">
+          <div class="feature-text">
+            <h3>SQL on your data</h3>
+            <p>Run SQL via Polars SQLContext, including custom UDFs for specialized logic.</p>
+            <ul>
+              <li>Register and use UDFs</li>
+              <li>Blend with non-SQL workflows</li>
+              <li>Fast in-memory execution</li>
+            </ul>
+          </div>
+          <div class="feature-media"><img src="./assets/feature8.png" alt="SQL on your data" loading="lazy" width="1200" height="700" /></div>
+        </div>
+      </section>
+
+      
+
+      <!-- Feature 10 -->
+      <section class="feature">
+        <div class="container feature-grid">
+          <div class="feature-text">
+            <h3>JMESPath transforms</h3>
+            <p>Apply JMES expressions and add derived columns with a runtime preloaded with custom functions.</p>
+            <ul>
+              <li>Built-in plus custom functions</li>
+              <li>Safe expression evaluation</li>
+              <li>Composable with filters</li>
+            </ul>
+          </div>
+          <div class="feature-media"><img src="./assets/feature10.png" alt="JMESPath transforms" loading="lazy" width="1200" height="700" /></div>
+        </div>
+      </section>
+
+      <!-- Feature 11 -->
+      <section class="feature">
+        <div class="container feature-grid reverse">
+          <div class="feature-text">
+            <h3>Find and Find All</h3>
+            <p>Regex/whole-word/case options, forward/back, wrap, and a contextual results list to jump to matches.</p>
+            <ul>
+              <li>Regex and normal modes</li>
+              <li>Match context preview</li>
+              <li>Jump to selection</li>
+            </ul>
+          </div>
+          <div class="feature-media"><img src="./assets/feature11.png" alt="Find and Find All" loading="lazy" width="1200" height="700" /></div>
+        </div>
+      </section>
+
+      <!-- Feature: DataFrame Details -->
+      <section class="feature">
+        <div class="container feature-grid">
+          <div class="feature-text">
+            <h3>DataFrame details</h3>
+            <p>Inspect schema, shapes, and types at a glance with a dedicated details view.</p>
+            <ul>
+              <li>Rows, columns, and dtypes summary</li>
+              <li>Per-column types and metadata</li>
+              <li>Quick copy of schema</li>
+              <li>Heatmap</li>
+            </ul>
+          </div>
+          <div class="feature-media"><img src="./assets/feature-dataframe-details.png" alt="DataFrame details" loading="lazy" width="1200" height="700" /></div>
+        </div>
+      </section>
+
+      <!-- Feature 12 -->
+      <section class="feature">
+        <div class="container feature-grid reverse">
+          <div class="feature-text">
+            <h3>Column width control</h3>
+            <p>Auto-expand columns by content or set manual widths. Hide/show columns as needed.</p>
+            <ul>
+              <li>Auto or manual sizing</li>
+              <li>Per-column overrides</li>
+              <li>Hide/show visibility</li>
+            </ul>
+          </div>
+          <div class="feature-media"><img src="./assets/feature12.png" alt="Column width control" loading="lazy" width="1200" height="700" /></div>
+        </div>
+      </section>
+
+      <!-- Feature 13 -->
+      <section class="feature">
+        <div class="container feature-grid">
+          <div class="feature-text">
+            <h3>Column operations</h3>
+            <p>Reorder columns, cast types, and perform advanced operations including clustering flows.</p>
+            <ul>
+              <li>Generate embeddings</li>
+              <li>Clustering options (k-means, DBSCAN)</li>
+              <li>Principal Component Analysis</li>
+            </ul>
+          </div>
+          <div class="feature-media"><img src="./assets/feature13.png" alt="Column operations" loading="lazy" width="1200" height="700" /></div>
+        </div>
+      </section>
+
+      
+
+      
+    </section>
+
+    <section id="more-features" class="more-features">
+      <div class="container">
+        <h2 class="section-title">More features</h2>
+        <div class="cards">
+          <article class="card">
+            <h3>Keyboard-first terminal UI</h3>
+            <p>Navigate, search, sort, and filter without leaving the keyboard.</p>
+            <ul>
+              <li>Consistent shortcuts across dialogs</li>
+              <li>High-FPS rendering path</li>
+              <li>Minimal latency input handling</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Tabbed data views</h3>
+            <p>Open multiple datasets at once and manage them with ease.</p>
+            <ul>
+              <li>Independent state per tab</li>
+              <li>Quick switch and reordering</li>
+              <li>Join multiple datasets with SQL</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Workspace persistence</h3>
+            <p>Resume where you left off with saved state and snapshots.</p>
+            <ul>
+              <li>State and settings files</li>
+              <li>Per-tab Parquet snapshots</li>
+              <li>Instant startup on large datasets</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Polars-powered engine</h3>
+            <p>Efficient transformations and fast rendering on large data.</p>
+            <ul>
+              <li>Lazy query plans</li>
+              <li>Efficient collection to views</li>
+              <li>Scales to millions of rows</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>AI embeddings in SQL (optional)</h3>
+            <p>Generate vector embeddings for text columns via an external provider.</p>
+            <ul>
+              <li>Opt-in integration</li>
+              <li>Batch unique value optimization</li>
+              <li>Great for semantic workflows</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Export data</h3>
+            <p>Export current view or dataset with guided dialogs and defaults.</p>
+            <ul>
+              <li>Choose format and scope</li>
+              <li>Preview before writing</li>
+              <li>Fast I/O paths</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Project settings & data hub</h3>
+            <p>Configure your workspace and manage sources from one place.</p>
+            <ul>
+              <li>Project defaults and paths</li>
+              <li>Source browsing and selection</li>
+              <li>One-click tab creation</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <div>
+        <div class="logo">DataTUI</div>
+        <div class="muted">DataTUI</div>
+      </div>
+      <nav>
+        <a href="#features">Features</a>
+        <a href="https://github.com/forensicmatt/datatui" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </footer>
+
+  
+</body>
+</html>
+
+
