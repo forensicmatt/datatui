@@ -81,6 +81,10 @@ struct DescribeRow {
     max: Option<f64>,
 }
 
+impl Default for DataFrameDetailsDialog {
+    fn default() -> Self { Self::new() }
+}
+
 impl DataFrameDetailsDialog {
     pub fn new() -> Self {
         Self {
@@ -647,7 +651,6 @@ impl DataFrameDetailsDialog {
             let scroll_bar_x = area.x + area.width.saturating_sub(1);
             let scroll_bar_height = max_rows;
             let scroll_bar_y_start = area.y + 1; // below header
-            let total_items = total_items;
             let visible_items = max_rows;
             let thumb_size = std::cmp::max(1, (visible_items * visible_items) / total_items);
             let thumb_position = if total_items > visible_items {
@@ -708,7 +711,6 @@ impl DataFrameDetailsDialog {
             let scroll_bar_x = area.x + area.width.saturating_sub(1);
             let scroll_bar_height = max_rows;
             let scroll_bar_y_start = area.y + 1; // below header
-            let total_items = total_items;
             let visible_items = max_rows;
             let thumb_size = std::cmp::max(1, (visible_items * visible_items) / total_items);
             let thumb_position = if total_items > visible_items {
@@ -768,7 +770,6 @@ impl DataFrameDetailsDialog {
             let scroll_bar_x = area.x + area.width.saturating_sub(1);
             let scroll_bar_height = max_rows;
             let scroll_bar_y_start = area.y + 1; // below header
-            let total_items = total_items;
             let visible_items = max_rows;
             let thumb_size = std::cmp::max(1, (visible_items * visible_items) / total_items);
             let thumb_position = if total_items > visible_items {
@@ -982,12 +983,11 @@ impl DataFrameDetailsDialog {
 
         // Route to export dialog if active
         if let Some(dialog) = &mut self.export_dialog {
-            if let Some(action) = dialog.handle_key_event(key) {
-                if action == Action::DialogClose {
+            if let Some(action) = dialog.handle_key_event(key)
+                && action == Action::DialogClose {
                     self.export_dialog = None;
                     return None;
                 }
-            }
             return None;
         }
 
@@ -1105,8 +1105,8 @@ impl DataFrameDetailsDialog {
 
         // Open cast overlay on Columns tab
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if matches!(self.tab, DetailsTab::Columns) {
-                if let Some(df) = &self.df {
+            if matches!(self.tab, DetailsTab::Columns)
+                && let Some(df) = &self.df {
                     let name_opt = self.columns_info.get(self.selected_row).map(|(n, _)| n.clone());
                     if let Some(col) = name_opt.as_deref() && let Ok(s) = df.column(col) {
                         let cur_dt = s.dtype().clone();
@@ -1127,7 +1127,6 @@ impl DataFrameDetailsDialog {
                         self.cast_overlay_open = true;
                     }
                 }
-            }
             return None;
         }
 

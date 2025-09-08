@@ -115,6 +115,10 @@ pub struct DataImportDialog {
     pub json_options_dialog: Option<JsonOptionsDialog>,
 }
 
+impl Default for DataImportDialog {
+    fn default() -> Self { Self::new() }
+}
+
 impl DataImportDialog {
     /// Create a new DataImportDialog
     pub fn new() -> Self {
@@ -252,7 +256,7 @@ impl DataImportDialog {
                     Style::default()
                 };
                 
-                let text = format!("{}", data_source);
+                let text = format!("{data_source}");
                 ListItem::new(text).style(style)
             })
             .collect();

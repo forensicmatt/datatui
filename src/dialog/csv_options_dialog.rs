@@ -150,9 +150,7 @@ impl CsvOptionsDialog {
         
         // If file browser mode is active, render the file browser
         if self.file_browser_mode {
-            if let Some(browser) = &self.file_browser {
-                browser.render(area, buf);
-            }
+            if let Some(browser) = &self.file_browser { browser.render(area, buf); }
             return;
         }
         
@@ -226,8 +224,8 @@ impl CsvOptionsDialog {
         let option_lines = [
             format!("Delimiter: '{}'", self.csv_options.delimiter),
             format!("Has Header: {}", self.csv_options.has_header),
-            format!("Quote Char: {}", self.csv_options.quote_char.map(|c| format!("'{}'", c)).unwrap_or_else(|| "None".to_string())),
-            format!("Escape Char: {}", self.csv_options.escape_char.map(|c| format!("'{}'", c)).unwrap_or_else(|| "None".to_string())),
+            format!("Quote Char: {}", self.csv_options.quote_char.map(|c| format!("'{c}'")).unwrap_or_else(|| "None".to_string())),
+            format!("Escape Char: {}", self.csv_options.escape_char.map(|c| format!("'{c}'")).unwrap_or_else(|| "None".to_string())),
         ];
 
         // Render each option line with highlighting
@@ -284,30 +282,29 @@ impl Component for CsvOptionsDialog {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // Handle file browser events if file browser mode is active
         if self.file_browser_mode {
-            if let Some(browser) = &mut self.file_browser {
-                if let Some(action) = browser.handle_key_event(key) {
-                    match action {
-                        FileBrowserAction::Selected(path) => {
-                            // Update the file path with the selected file
-                            self.file_path = path.to_string_lossy().to_string();
-                            self.update_file_path(self.file_path.clone());
-                            // Update the TextArea to reflect the new file path
-                            self.file_path_input = TextArea::from(vec![self.file_path.clone()]);
-                            self.file_path_input.set_block(
-                                Block::default()
-                                    .title("File Path")
-                                    .borders(Borders::ALL)
-                            );
-                            self.file_browser_mode = false;
-                            self.file_browser = None;
-                            return Ok(None);
-                        }
-                        FileBrowserAction::Cancelled => {
-                            // Cancel file browser
-                            self.file_browser_mode = false;
-                            self.file_browser = None;
-                            return Ok(None);
-                        }
+            if let Some(browser) = &mut self.file_browser
+                && let Some(action) = browser.handle_key_event(key) {
+                match action {
+                    FileBrowserAction::Selected(path) => {
+                        // Update the file path with the selected file
+                        self.file_path = path.to_string_lossy().to_string();
+                        self.update_file_path(self.file_path.clone());
+                        // Update the TextArea to reflect the new file path
+                        self.file_path_input = TextArea::from(vec![self.file_path.clone()]);
+                        self.file_path_input.set_block(
+                            Block::default()
+                                .title("File Path")
+                                .borders(Borders::ALL)
+                        );
+                        self.file_browser_mode = false;
+                        self.file_browser = None;
+                        return Ok(None);
+                    }
+                    FileBrowserAction::Cancelled => {
+                        // Cancel file browser
+                        self.file_browser_mode = false;
+                        self.file_browser = None;
+                        return Ok(None);
                     }
                 }
             }
@@ -457,13 +454,11 @@ impl Component for CsvOptionsDialog {
                 }
                 KeyCode::Char('p') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
                     // Ctrl+P: Paste clipboard text into the File Path when focused
-                    if self.file_path_focused {
-                        if let Ok(mut clipboard) = Clipboard::new() {
-                            if let Ok(text) = clipboard.get_text() {
-                                let first_line = text.lines().next().unwrap_or("").to_string();
-                                self.set_file_path(first_line);
-                            }
-                        }
+                    if self.file_path_focused
+                        && let Ok(mut clipboard) = Clipboard::new()
+                        && let Ok(text) = clipboard.get_text() {
+                        let first_line = text.lines().next().unwrap_or("").to_string();
+                        self.set_file_path(first_line);
                     }
                     None
                 }

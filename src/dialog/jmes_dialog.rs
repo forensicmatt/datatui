@@ -59,6 +59,10 @@ pub struct JmesPathDialog {
     add_pair_value: TextArea<'static>,
 }
 
+impl Default for JmesPathDialog {
+    fn default() -> Self { Self::new() }
+}
+
 impl JmesPathDialog {
     pub fn new() -> Self {
         let mut textarea = TextArea::default();

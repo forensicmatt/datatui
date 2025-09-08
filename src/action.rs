@@ -158,8 +158,8 @@ mod tests {
     fn test_action_display() {
         let a1 = Action::DialogClose;
         let a2 = Action::SortDialogApplied(vec![SortColumn { name: "test".to_string(), ascending: true }]);
-        let a1_str = format!("{}", a1);
-        let a2_str = format!("{}", a2);
+        let a1_str = format!("{a1}");
+        let a2_str = format!("{a2}");
         info!("Action::DialogClose Display: {}", a1_str);
         info!("Action::SortDialogApplied Display: {}", a2_str);
         // Accept any non-empty string for now, or adjust to match actual output

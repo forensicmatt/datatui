@@ -202,7 +202,7 @@ impl SqliteOptionsDialog {
                 let y = options_area.y + 4 + i as u16;
                 let is_selected = self.sqlite_options.selected_tables.contains(table);
                 let checkbox = if is_selected { "[x]" } else { "[ ]" };
-                let table_text = format!("{} {}", checkbox, table);
+                let table_text = format!("{checkbox} {table}");
                 
                 let style = if i == self.selected_table_index && !self.file_path_focused && !self.browse_button_selected {
                     Style::default().fg(Color::Black).bg(Color::White)
@@ -246,30 +246,29 @@ impl Component for SqliteOptionsDialog {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // Handle file browser events if file browser mode is active
         if self.file_browser_mode {
-            if let Some(browser) = &mut self.file_browser {
-                if let Some(action) = browser.handle_key_event(key) {
-                    match action {
-                        crate::dialog::file_browser_dialog::FileBrowserAction::Selected(path) => {
-                            // Update the file path with the selected file
-                            self.file_path = path.to_string_lossy().to_string();
-                            self.update_file_path(self.file_path.clone());
-                            // Update the TextArea to reflect the new file path
-                            self.file_path_input = TextArea::from(vec![self.file_path.clone()]);
-                            self.file_path_input.set_block(
-                                Block::default()
-                                    .title("File Path")
-                                    .borders(Borders::ALL)
-                            );
-                            self.file_browser_mode = false;
-                            self.file_browser = None;
-                            return Ok(None);
-                        }
-                        crate::dialog::file_browser_dialog::FileBrowserAction::Cancelled => {
-                            // Cancel file browser
-                            self.file_browser_mode = false;
-                            self.file_browser = None;
-                            return Ok(None);
-                        }
+            if let Some(browser) = &mut self.file_browser
+                && let Some(action) = browser.handle_key_event(key) {
+                match action {
+                    crate::dialog::file_browser_dialog::FileBrowserAction::Selected(path) => {
+                        // Update the file path with the selected file
+                        self.file_path = path.to_string_lossy().to_string();
+                        self.update_file_path(self.file_path.clone());
+                        // Update the TextArea to reflect the new file path
+                        self.file_path_input = TextArea::from(vec![self.file_path.clone()]);
+                        self.file_path_input.set_block(
+                            Block::default()
+                                .title("File Path")
+                                .borders(Borders::ALL)
+                        );
+                        self.file_browser_mode = false;
+                        self.file_browser = None;
+                        return Ok(None);
+                    }
+                    crate::dialog::file_browser_dialog::FileBrowserAction::Cancelled => {
+                        // Cancel file browser
+                        self.file_browser_mode = false;
+                        self.file_browser = None;
+                        return Ok(None);
                     }
                 }
             }

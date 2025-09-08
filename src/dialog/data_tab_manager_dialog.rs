@@ -558,8 +558,7 @@ impl DataTabManagerDialog {
             };
             
             // Use alias if available, otherwise use source name
-            let title = tab.display_name().to_string();
-            title
+            tab.display_name().to_string()
             // Line::from(vec![Span::styled(title, style)])
         }).collect();
 
@@ -656,8 +655,8 @@ impl DataTabManagerDialog {
             return Ok(());
         }
 
-        if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
-            if let Some(container) = self.containers.get_mut(&active_tab.id()) {
+        if let Some(active_tab) = self.tabs.get(self.active_tab_index)
+            && let Some(container) = self.containers.get_mut(&active_tab.id()) {
                 // Render the container in the content area
                 // Sync auto expand option from project settings to container before draw
                 container.auto_expand_value_display = self.project_settings_dialog
@@ -665,7 +664,6 @@ impl DataTabManagerDialog {
                     .data_viewer
                     .auto_exapand_value_display;
                 container.draw(frame, area)?;
-            }
         }
 
         Ok(())
@@ -673,14 +671,13 @@ impl DataTabManagerDialog {
 
     /// Render instructions
     fn render_instructions(&self, instructions: &str, instructions_area: Option<Rect>, buf: &mut Buffer) {
-        if self.show_instructions {
-            if let Some(instructions_area) = instructions_area {
+        if self.show_instructions
+            && let Some(instructions_area) = instructions_area {
                 let instructions_paragraph = Paragraph::new(instructions)
                     .block(Block::default().borders(Borders::ALL).title("Instructions"))
                     .style(Style::default().fg(Color::Yellow))
                     .wrap(Wrap { trim: true });
                 instructions_paragraph.render(instructions_area, buf);
-            }
         }
     }
 }
@@ -737,11 +734,10 @@ impl Component for DataTabManagerDialog {
         } else if self.show_data_management {
             // Handle events for DataManagementDialog
             // Allow opening ProjectSettings with Alt+S even while Data Management is open
-            if key.kind == crossterm::event::KeyEventKind::Press {
-                if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::ALT) {
-                    self.show_project_settings = true;
-                    return Ok(None);
-                }
+            if key.kind == crossterm::event::KeyEventKind::Press
+                && key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::ALT) {
+                self.show_project_settings = true;
+                return Ok(None);
             }
             if let Some(Event::Key(key_event)) = Some(Event::Key(key)) {
                 let result = self.data_management_dialog.handle_events(Some(Event::Key(key_event)))?;
@@ -750,9 +746,7 @@ impl Component for DataTabManagerDialog {
                 if let Some(Action::CloseDataManagementDialog) = result {
                     self.show_data_management = false;
                     // Auto-sync tabs when DataManagementDialog is closed
-                    if let Err(e) = self.sync_tabs_from_data_management() {
-                        return Ok(Some(Action::Error(format!("Failed to auto-sync tabs: {}", e))));
-                    }
+                    if let Err(e) = self.sync_tabs_from_data_management() { return Ok(Some(Action::Error(format!("Failed to auto-sync tabs: {e}")))); }
 
                     // Update all containers with the latest available dataframes
                     let _ = self.update_all_containers_dataframes();
@@ -798,10 +792,9 @@ impl Component for DataTabManagerDialog {
                     }
                     KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
                         // Move current tab to front
-                        if !self.tabs.is_empty() {
-                            if let Err(e) = self.move_tab_to_front(self.active_tab_index) {
-                                return Ok(Some(Action::Error(format!("Failed to move tab to front: {e}"))));
-                            }
+                        if !self.tabs.is_empty()
+                            && let Err(e) = self.move_tab_to_front(self.active_tab_index) {
+                            return Ok(Some(Action::Error(format!("Failed to move tab to front: {e}"))));
                         }
                         Ok(None)
                     }
