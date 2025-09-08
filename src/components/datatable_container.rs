@@ -902,6 +902,7 @@ impl DataTableContainer {
         if let (Some(pattern), Some(search_mode), Some(options)) = 
             (&self.current_search_pattern, &self.current_search_mode, &self.current_search_options)
             && !pattern.is_empty() {
+                let cell_value_safe = cell_value.replace("\n", "").replace("\r", "");
                 match search_mode {
                     SearchMode::Normal => {
                         // Normal text search
@@ -911,9 +912,9 @@ impl DataTableContainer {
                             pattern.to_lowercase() 
                         };
                         let cell_text = if options.match_case { 
-                            cell_value.clone() 
+                            cell_value_safe.clone() 
                         } else { 
-                            cell_value.to_lowercase() 
+                            cell_value_safe.to_lowercase() 
                         };
                         
                         if options.whole_word {
@@ -925,17 +926,17 @@ impl DataTableContainer {
                                 if let Some(pos) = cell_value.to_lowercase().find(search_word) {
                                     let mut spans = Vec::new();
                                     if pos > 0 {
-                                        spans.push(Span::raw(cell_value[..pos].to_string()));
+                                        spans.push(Span::raw(cell_value_safe[..pos].to_string()));
                                     }
                                     spans.push(Span::styled(
-                                        cell_value[pos..pos + search_word.len()].to_string(),
+                                        cell_value_safe[pos..pos + search_word.len()].to_string(),
                                         ratatui::style::Style::default()
                                             .fg(ratatui::style::Color::Black)
                                             .bg(ratatui::style::Color::Yellow)
                                             .add_modifier(ratatui::style::Modifier::BOLD)
                                     ));
                                     if pos + search_word.len() < cell_value.len() {
-                                        spans.push(Span::raw(cell_value[pos + search_word.len()..].to_string()));
+                                        spans.push(Span::raw(cell_value_safe[pos + search_word.len()..].to_string()));
                                     }
                                     return Ok(Line::from(spans));
                                 }
@@ -945,17 +946,17 @@ impl DataTableContainer {
                             if let Some(pos) = cell_text.find(&search_text) {
                                 let mut spans = Vec::new();
                                 if pos > 0 {
-                                    spans.push(Span::raw(cell_value[..pos].to_string()));
+                                    spans.push(Span::raw(cell_value_safe[..pos].to_string()));
                                 }
                                 spans.push(Span::styled(
-                                    cell_value[pos..pos + search_text.len()].to_string(),
+                                    cell_value_safe[pos..pos + search_text.len()].to_string(),
                                     ratatui::style::Style::default()
                                         .fg(ratatui::style::Color::Black)
                                         .bg(ratatui::style::Color::Yellow)
                                         .add_modifier(ratatui::style::Modifier::BOLD)
                                 ));
-                                if pos + search_text.len() < cell_value.len() {
-                                    spans.push(Span::raw(cell_value[pos + search_text.len()..].to_string()));
+                                if pos + search_text.len() < cell_value_safe.len() {
+                                    spans.push(Span::raw(cell_value_safe[pos + search_text.len()..].to_string()));
                                 }
                                 return Ok(Line::from(spans));
                             }
@@ -971,15 +972,15 @@ impl DataTableContainer {
                         if let Ok(re) = re {
                             let mut spans = Vec::new();
                             let mut last_end = 0;
-                            
-                            for mat in re.find_iter(&cell_value) {
+                            let cell_value_safe = cell_value.replace("\n", "").replace("\r", "");
+                            for mat in re.find_iter(&cell_value_safe) {
                                 // Add text before match
                                 if mat.start() > last_end {
-                                    spans.push(Span::raw(cell_value[last_end..mat.start()].to_string()));
+                                    spans.push(Span::raw(cell_value_safe[last_end..mat.start()].to_string()));
                                 }
                                 // Add highlighted match
                                 spans.push(Span::styled(
-                                    cell_value[mat.start()..mat.end()].to_string(),
+                                    cell_value_safe[mat.start()..mat.end()].to_string(),
                                     ratatui::style::Style::default()
                                         .fg(ratatui::style::Color::Black)
                                         .bg(ratatui::style::Color::Yellow)
@@ -989,7 +990,7 @@ impl DataTableContainer {
                             }
                             // Add remaining text
                             if last_end < cell_value.len() {
-                                spans.push(Span::raw(cell_value[last_end..].to_string()));
+                                spans.push(Span::raw(cell_value_safe[last_end..].to_string()));
                             }
                             return Ok(Line::from(spans));
                         }

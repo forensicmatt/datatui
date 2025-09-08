@@ -153,9 +153,14 @@ impl FindAllResultsDialog {
                 let row_idx = start_idx + i;
                 let is_selected = row_idx == self.selected;
                 let is_zebra = row_idx % 2 == 0; // Zebra striping
-                
-                // Create highlighted context with search hit highlighted
-                let highlighted_context = self.highlight_search_hit(&result.context);
+
+                // Remove newlines and carriage returns from the context
+                // because in a Span they are treated as separate lines and it causes issues
+                // with rendering the context in the dialog.
+                let context_str = result.context
+                    .replace("\n", "")
+                    .replace("\r", "");
+                let highlighted_context = self.highlight_search_hit(&context_str);
                 
                 let mut style = Style::default();
                 if is_selected {
@@ -217,12 +222,13 @@ impl FindAllResultsDialog {
             }
             
             // Add highlighted match
+            let matched_style = Style::default()
+                .bg(Color::Yellow)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD);
             spans.push(Span::styled(
                 context[actual_start..actual_end].to_string(),
-                Style::default()
-                    .bg(Color::Yellow)
-                    .fg(Color::Black)
-                    .add_modifier(Modifier::BOLD)
+                matched_style
             ));
             
             last_end = actual_end;
