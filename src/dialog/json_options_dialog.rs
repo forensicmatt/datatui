@@ -18,16 +18,10 @@ use tui_textarea::TextArea;
 use arboard::Clipboard;
 
 /// JSON import options
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct JsonImportOptions {
     /// If true, treat file as NDJSON (each line is a JSON object); otherwise expect a JSON array of objects
     pub ndjson: bool,
-}
-
-impl Default for JsonImportOptions {
-    fn default() -> Self {
-        Self { ndjson: false }
-    }
 }
 
 /// JsonOptionsDialog: Dialog for selecting a JSON file and format
@@ -89,9 +83,7 @@ impl JsonOptionsDialog {
         
         // If file browser mode is active, render the file browser
         if self.file_browser_mode {
-            if let Some(browser) = &self.file_browser {
-                browser.render(area, buf);
-            }
+            if let Some(browser) = &self.file_browser { browser.render(area, buf); }
             return;
         }
         
@@ -199,30 +191,29 @@ impl Component for JsonOptionsDialog {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // Handle file browser events if file browser mode is active
         if self.file_browser_mode {
-            if let Some(browser) = &mut self.file_browser {
-                if let Some(action) = browser.handle_key_event(key) {
-                    match action {
-                        crate::dialog::file_browser_dialog::FileBrowserAction::Selected(path) => {
-                            // Update the file path with the selected file
-                            self.file_path = path.to_string_lossy().to_string();
-                            self.update_file_path(self.file_path.clone());
-                            // Update the TextArea to reflect the new file path
-                            self.file_path_input = TextArea::from(vec![self.file_path.clone()]);
-                            self.file_path_input.set_block(
-                                Block::default()
-                                    .title("File Path")
-                                    .borders(Borders::ALL)
-                            );
-                            self.file_browser_mode = false;
-                            self.file_browser = None;
-                            return Ok(None);
-                        }
-                        crate::dialog::file_browser_dialog::FileBrowserAction::Cancelled => {
-                            // Cancel file browser
-                            self.file_browser_mode = false;
-                            self.file_browser = None;
-                            return Ok(None);
-                        }
+            if let Some(browser) = &mut self.file_browser
+                && let Some(action) = browser.handle_key_event(key) {
+                match action {
+                    crate::dialog::file_browser_dialog::FileBrowserAction::Selected(path) => {
+                        // Update the file path with the selected file
+                        self.file_path = path.to_string_lossy().to_string();
+                        self.update_file_path(self.file_path.clone());
+                        // Update the TextArea to reflect the new file path
+                        self.file_path_input = TextArea::from(vec![self.file_path.clone()]);
+                        self.file_path_input.set_block(
+                            Block::default()
+                                .title("File Path")
+                                .borders(Borders::ALL)
+                        );
+                        self.file_browser_mode = false;
+                        self.file_browser = None;
+                        return Ok(None);
+                    }
+                    crate::dialog::file_browser_dialog::FileBrowserAction::Cancelled => {
+                        // Cancel file browser
+                        self.file_browser_mode = false;
+                        self.file_browser = None;
+                        return Ok(None);
                     }
                 }
             }
@@ -349,19 +340,17 @@ impl Component for JsonOptionsDialog {
                 }
                 KeyCode::Char('p') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
                     // Ctrl+P: Paste clipboard text into the File Path when focused
-                    if self.file_path_focused {
-                        if let Ok(mut clipboard) = Clipboard::new() {
-                            if let Ok(text) = clipboard.get_text() {
-                                let first_line = text.lines().next().unwrap_or("").to_string();
-                                self.file_path = first_line.clone();
-                                self.file_path_input = TextArea::from(vec![first_line]);
-                                self.file_path_input.set_block(
-                                    Block::default()
-                                        .title("File Path")
-                                        .borders(Borders::ALL)
-                                );
-                            }
-                        }
+                    if self.file_path_focused
+                        && let Ok(mut clipboard) = Clipboard::new()
+                        && let Ok(text) = clipboard.get_text() {
+                        let first_line = text.lines().next().unwrap_or("").to_string();
+                        self.file_path = first_line.clone();
+                        self.file_path_input = TextArea::from(vec![first_line]);
+                        self.file_path_input.set_block(
+                            Block::default()
+                                .title("File Path")
+                                .borders(Borders::ALL)
+                        );
                     }
                     None
                 }

@@ -194,7 +194,7 @@ impl FilterDialog {
                             style = style.bg(Color::Rgb(30,30,30));
                         }
                         let indent_str = "  ".repeat(*indent);
-                        buf.set_string(start_x, y, format!("{}{}", indent_str, label), style);
+                        buf.set_string(start_x, y, format!("{indent_str}{label}"), style);
                     }
                 }
             }
@@ -284,15 +284,14 @@ impl FilterDialog {
             }
         }
         // --- Render instructions at the bottom with a border ---
-        if self.show_instructions {
-            if let Some(instructions_area) = instructions_area {
+        if self.show_instructions
+            && let Some(instructions_area) = instructions_area {
                 let instructions_paragraph = Paragraph::new(instructions)
                     .block(Block::default().borders(Borders::ALL).title("Instructions"))
                     .style(Style::default().fg(Color::Yellow))
                     .wrap(Wrap { trim: true });
                 instructions_paragraph.render(instructions_area, buf);
             }
-        }
         // --- End instructions ---
         max_rows
     }
@@ -302,12 +301,11 @@ impl FilterDialog {
         use crossterm::event::{KeyCode, KeyModifiers};
         
         // Handle Ctrl+I to toggle instructions
-        if key.kind == KeyEventKind::Press {
-            if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if key.kind == KeyEventKind::Press
+            && key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.show_instructions = !self.show_instructions;
                 return None;
             }
-        }
         
         match &mut self.mode {
             FilterDialogMode::List => {
@@ -343,11 +341,10 @@ impl FilterDialog {
                         }
                         KeyCode::Right => {
                             let node = self.root_expr.get_mut(&self.selected_path);
-                            if let Some(FilterExpr::And(children)) | Some(FilterExpr::Or(children)) = node {
-                                if !children.is_empty() {
+                            if let Some(FilterExpr::And(children)) | Some(FilterExpr::Or(children)) = node
+                                && !children.is_empty() {
                                     self.selected_path.push(0);
                                 }
-                            }
                         }
                         KeyCode::Char('a') => {
                             let node = self.root_expr.get_mut(&self.selected_path);
@@ -706,15 +703,11 @@ impl FilterDialog {
                                 FilterCondition::IsNull => FilterCondition::IsNull,
                             };
                             let filter = ColumnFilter { column, condition };
-                            if let Some(path) = self.add_insertion_path.clone() {
-                                match self.mode {
-                                    FilterDialogMode::Edit(_) => {
-                                        replace_condition_at(&mut self.root_expr, &path, FilterExpr::Condition(filter));
-                                        self.selected_path = path;
-                                    }
-                                    _ => {}
+                            if let Some(path) = self.add_insertion_path.clone()
+                                && let FilterDialogMode::Edit(_) = self.mode {
+                                    replace_condition_at(&mut self.root_expr, &path, FilterExpr::Condition(filter));
+                                    self.selected_path = path;
                                 }
-                            }
                             self.mode = FilterDialogMode::List;
                             self.add_insertion_path = None;
                         }
@@ -905,11 +898,11 @@ impl ColumnFilter {
                 match column_type {
                     DataType::String => {
                         if *case_sensitive {
-                            return column.str()?
+                            column.str()?
                                 .contains_literal(value)
                                 .map_err(|e| color_eyre::eyre::eyre!("Filter error: {}", e))
                         } else {
-                            return column.str()?
+                            column.str()?
                                 .to_lowercase()
                                 .contains_literal(&value.to_lowercase())
                                 .map_err(|e| color_eyre::eyre::eyre!("Filter error: {}", e))
@@ -919,11 +912,11 @@ impl ColumnFilter {
                         // Convert the integer column to string for contains matching
                         let str_series = column.cast(&DataType::String)?;
                         if *case_sensitive {
-                           return  str_series.str()?
+                           str_series.str()?
                                 .contains_literal(value)
                                 .map_err(|e| color_eyre::eyre::eyre!("Filter error: {}", e))
                         } else {
-                            return str_series.str()?
+                            str_series.str()?
                                 .to_lowercase()
                                 .contains_literal(&value.to_lowercase()) 
                                 .map_err(|e| color_eyre::eyre::eyre!("Filter error: {}", e))
@@ -931,37 +924,37 @@ impl ColumnFilter {
                     }
                     _ => {
                         // TODO: Handle other types of columns
-                        return Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type));
+                        Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type))
                     }
                 }
             }
             FilterCondition::NotNull => {
                 // For any dtype, return mask of not-null values
-                return Ok(column.is_not_null())
+                Ok(column.is_not_null())
             }
             FilterCondition::IsNull => {
                 // For any dtype, return mask of null values
-                return Ok(column.is_null())
+                Ok(column.is_null())
             }
             FilterCondition::IsEmpty => {
                 // For any dtype, return mask of empty values
-                return Ok( BooleanChunked::full("".into(), true, df.height()))
+                Ok( BooleanChunked::full("".into(), true, df.height()))
             }
             FilterCondition::IsNotEmpty => {
                 // For any dtype, return mask of not-empty values
-                return Ok( BooleanChunked::full("".into(), false, df.height()))
+                Ok( BooleanChunked::full("".into(), false, df.height()))
             }
             FilterCondition::Regex { pattern, case_sensitive } => {
                 match column_type {
                     DataType::String => {
                         if *case_sensitive {
-                            return column.str()?
+                            column.str()?
                                 .contains(pattern, false)
                                 .map_err(|e| color_eyre::eyre::eyre!("Filter error: {}", e))
                         } else {
-                            return column.str()?
+                            column.str()?
                                 .to_lowercase()
-                                .contains(&pattern, true)
+                                .contains(pattern, true)
                                 .map_err(|e| color_eyre::eyre::eyre!("Filter error: {}", e))
                         }
                     }
@@ -969,18 +962,18 @@ impl ColumnFilter {
                         // Convert the column to string for regex matching
                         let str_series = column.cast(&DataType::String)?;
                         if *case_sensitive {
-                            return str_series.str()?
+                            str_series.str()?
                                 .contains(pattern, false)
                                 .map_err(|e| color_eyre::eyre::eyre!("Filter error: {}", e))
                         } else {
-                            return str_series.str()?
+                            str_series.str()?
                                 .to_lowercase()
-                                .contains(&pattern, true)
+                                .contains(pattern, true)
                                 .map_err(|e| color_eyre::eyre::eyre!("Filter error: {}", e))
                         }
                     }
                     _ => {
-                        return Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type));
+                        Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type))
                     }
                 }
             }
@@ -988,32 +981,32 @@ impl ColumnFilter {
                 match column_type {
                     DataType::String => {
                         if *case_sensitive {
-                            return Ok(column.str()?.equal(value.as_str()))
+                            Ok(column.str()?.equal(value.as_str()))
                         } else {
                             let value_lc = value.to_lowercase();
-                            return Ok(column.str()?.to_lowercase().equal(value_lc.as_str()))
+                            Ok(column.str()?.to_lowercase().equal(value_lc.as_str()))
                         }
                     }
                     DataType::Int16 | DataType::Int32 | DataType::Int64 => {
                         let numeric_value = value.parse::<i128>().unwrap();
                         let series = column.cast(&DataType::Int128)?;
-                        return Ok(series.i64()?
+                        Ok(series.i64()?
                             .equal(numeric_value))
                     }
                     DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
                         let numeric_value = value.parse::<u64>().unwrap();
                         let series = column.cast(&DataType::UInt64)?;
-                        return Ok(series.u64()?
+                        Ok(series.u64()?
                             .equal(numeric_value))
                     }
                     DataType::Float32 | DataType::Float64 => {
                         let numeric_value = value.parse::<f64>().unwrap();
                         let series = column.cast(&DataType::Float64)?;
-                        return Ok(series.f64()?
+                        Ok(series.f64()?
                             .equal(numeric_value))
                     }
                     _ => {
-                        return Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type));
+                        Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type))
                     }
                 }
             },
@@ -1021,21 +1014,21 @@ impl ColumnFilter {
                 match column_type {
                     DataType::Int16 | DataType::Int32 | DataType::Int64 => {
                         let numeric_value = value.parse::<i64>().unwrap();
-                        return Ok(column.i64()?
+                        Ok(column.i64()?
                             .gt(numeric_value))
                     }
                     DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
                         let numeric_value = value.parse::<u64>().unwrap();
-                        return Ok(column.u64()?
+                        Ok(column.u64()?
                             .gt(numeric_value))
                     }
                     DataType::Float32 | DataType::Float64 => {
                         let numeric_value = value.parse::<f64>().unwrap();
-                        return Ok(column.f64()?
+                        Ok(column.f64()?
                             .gt(numeric_value))
                     }
                     _ => {
-                        return Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type));
+                        Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type))
                     }
                 }
             },
@@ -1043,21 +1036,21 @@ impl ColumnFilter {
                 match column_type {
                     DataType::Int16 | DataType::Int32 | DataType::Int64 => {
                         let numeric_value = value.parse::<i64>().unwrap();
-                        return Ok(column.i64()?
+                        Ok(column.i64()?
                             .lt(numeric_value))
                     }
                     DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
                         let numeric_value = value.parse::<u64>().unwrap();
-                        return Ok(column.u64()?
+                        Ok(column.u64()?
                             .lt(numeric_value))
                     }
                     DataType::Float32 | DataType::Float64 => {
                         let numeric_value = value.parse::<f64>().unwrap();
-                        return Ok(column.f64()?
+                        Ok(column.f64()?
                             .lt(numeric_value))
                     }
                     _ => {
-                        return Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type));
+                        Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type))
                     }
                 }
             },
@@ -1065,21 +1058,21 @@ impl ColumnFilter {
                 match column_type {
                     DataType::Int16 | DataType::Int32 | DataType::Int64 => {
                         let numeric_value = value.parse::<i64>().unwrap();
-                        return Ok(column.i64()?
+                        Ok(column.i64()?
                             .gt_eq(numeric_value))
                     }
                     DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
                         let numeric_value = value.parse::<u64>().unwrap();
-                        return Ok(column.u64()?
+                        Ok(column.u64()?
                             .gt_eq(numeric_value))
                     }
                     DataType::Float32 | DataType::Float64 => {
                         let numeric_value = value.parse::<f64>().unwrap();
-                        return Ok(column.f64()?
+                        Ok(column.f64()?
                             .gt_eq(numeric_value))
                     }
                     _ => {
-                        return Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type));
+                        Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type))
                     }
                 }
             },
@@ -1087,21 +1080,21 @@ impl ColumnFilter {
                 match column_type {
                     DataType::Int16 | DataType::Int32 | DataType::Int64 => {
                         let numeric_value = value.parse::<i64>().unwrap();
-                        return Ok(column.i64()?
+                        Ok(column.i64()?
                             .lt_eq(numeric_value))
                     }
                     DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
                         let numeric_value = value.parse::<u64>().unwrap();
-                        return Ok(column.u64()?
+                        Ok(column.u64()?
                             .lt_eq(numeric_value))
                     }
                     DataType::Float32 | DataType::Float64 => {
                         let numeric_value = value.parse::<f64>().unwrap();
-                        return Ok(column.f64()?
+                        Ok(column.f64()?
                             .lt_eq(numeric_value))
                     }
                     _ => {
-                        return Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type));
+                        Err(color_eyre::eyre::eyre!("Unsupported column type: {}", column_type))
                     }
                 }
             },

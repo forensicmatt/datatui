@@ -201,8 +201,8 @@ impl SortDialog {
                 .viewport_content_length(viewport);
             scrollbar.render(inner, buf, &mut state);
         }
-        if self.show_instructions {
-            if let Some(instructions_area) = instructions_area {
+        if self.show_instructions
+            && let Some(instructions_area) = instructions_area {
                 use ratatui::widgets::{Paragraph, Wrap};
                 let instructions_paragraph = Paragraph::new(instructions)
                     .block(Block::default().borders(Borders::ALL).title("Instructions"))
@@ -210,7 +210,6 @@ impl SortDialog {
                     .wrap(Wrap { trim: true });
                 instructions_paragraph.render(instructions_area, buf);
             }
-        }
         max_rows
     }
 

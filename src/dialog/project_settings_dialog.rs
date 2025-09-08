@@ -67,10 +67,8 @@ impl ProjectSettingsDialog {
         let mut openai_key_input = config.openai_key.clone().unwrap_or_default();
         if openai_key_input.trim().is_empty()
             && let Ok(env_key) = std::env::var("OPENAI_API_KEY")
-        {
-            if !env_key.trim().is_empty() {
-                openai_key_input = env_key;
-            }
+            && !env_key.trim().is_empty() {
+            openai_key_input = env_key;
         }
         let workspace_path_input = String::new();
         
@@ -232,7 +230,7 @@ impl ProjectSettingsDialog {
                 } else {
                     Style::default().fg(Color::White)
                 };
-                buf.set_string(dv_inner.x, dv_inner.y, format!("{}{}", dv_label, dv_value), dv_style);
+                buf.set_string(dv_inner.x, dv_inner.y, format!("{dv_label}{dv_value}"), dv_style);
 
                 // [Save] button at bottom-right of content area
                 let save_text = "[Save]";
@@ -276,11 +274,10 @@ impl ProjectSettingsDialog {
         use crossterm::event::{KeyCode, KeyModifiers};
         
         // Handle Ctrl+I to toggle instructions
-        if key.kind == KeyEventKind::Press {
-            if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                self.show_instructions = !self.show_instructions;
-                return None;
-            }
+        if key.kind == KeyEventKind::Press
+            && key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.show_instructions = !self.show_instructions;
+            return None;
         }
         
         match &mut self.mode {
@@ -301,36 +298,30 @@ impl ProjectSettingsDialog {
 
                 // If message dialog mode is active, forward events to it
                 if self.message_dialog_mode {
-                    if let Some(dialog) = &mut self.message_dialog {
-                        if let Ok(Some(action)) = Component::handle_key_event(dialog, key) {
-                            match action {
-                                Action::DialogClose => {
-                                    self.message_dialog_mode = false;
-                                    self.message_dialog = None;
-                                }
-                                _ => {}
-                            }
+                    if let Some(dialog) = &mut self.message_dialog
+                        && let Ok(Some(action)) = Component::handle_key_event(dialog, key)
+                        && action == Action::DialogClose {
+                            self.message_dialog_mode = false;
+                            self.message_dialog = None;
                         }
-                    }
                     return None;
                 }
 
                 // If file browser mode is active, forward events to it
                 if self.file_browser_mode {
-                    if let Some(browser) = &mut self.file_browser {
-                        if let Some(action) = browser.handle_key_event(key) {
-                            match action {
-                                FileBrowserAction::Selected(path) => {
-                                    self.workspace_path_input = path.to_string_lossy().to_string();
-                                    self.file_browser_mode = false;
-                                    self.file_browser = None;
-                                    self.browse_button_selected = false;
-                                }
-                                FileBrowserAction::Cancelled => {
-                                    self.file_browser_mode = false;
-                                    self.file_browser = None;
-                                    self.browse_button_selected = false;
-                                }
+                    if let Some(browser) = &mut self.file_browser
+                        && let Some(action) = browser.handle_key_event(key) {
+                        match action {
+                            FileBrowserAction::Selected(path) => {
+                                self.workspace_path_input = path.to_string_lossy().to_string();
+                                self.file_browser_mode = false;
+                                self.file_browser = None;
+                                self.browse_button_selected = false;
+                            }
+                            FileBrowserAction::Cancelled => {
+                                self.file_browser_mode = false;
+                                self.file_browser = None;
+                                self.browse_button_selected = false;
                             }
                         }
                     }
@@ -560,7 +551,7 @@ impl ProjectSettingsDialog {
         if !workspace_input.is_empty() {
             let path = PathBuf::from(workspace_input);
             if !path.is_dir() {
-                self.set_error(format!("Workspace path is not a valid folder: {}", workspace_input));
+                self.set_error(format!("Workspace path is not a valid folder: {workspace_input}"));
                 return Err(color_eyre::eyre::eyre!("invalid workspace path"));
             }
             self.config.workspace_path = Some(path.clone());
@@ -604,11 +595,10 @@ impl Component for ProjectSettingsDialog {
         use crossterm::event::{KeyCode, KeyModifiers};
         
         // Handle Ctrl+I to toggle instructions
-        if key.kind == KeyEventKind::Press {
-            if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                self.show_instructions = !self.show_instructions;
-                return Ok(None);
-            }
+        if key.kind == KeyEventKind::Press
+            && key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.show_instructions = !self.show_instructions;
+            return Ok(None);
         }
         
         match &mut self.mode {
@@ -629,20 +619,19 @@ impl Component for ProjectSettingsDialog {
 
                 // If file browser mode is active, forward events to it
                 if self.file_browser_mode {
-                    if let Some(browser) = &mut self.file_browser {
-                        if let Some(action) = browser.handle_key_event(key) {
-                            match action {
-                                FileBrowserAction::Selected(path) => {
-                                    self.workspace_path_input = path.to_string_lossy().to_string();
-                                    self.file_browser_mode = false;
-                                    self.file_browser = None;
-                                    self.browse_button_selected = false;
-                                }
-                                FileBrowserAction::Cancelled => {
-                                    self.file_browser_mode = false;
-                                    self.file_browser = None;
-                                    self.browse_button_selected = false;
-                                }
+                    if let Some(browser) = &mut self.file_browser
+                        && let Some(action) = browser.handle_key_event(key) {
+                        match action {
+                            FileBrowserAction::Selected(path) => {
+                                self.workspace_path_input = path.to_string_lossy().to_string();
+                                self.file_browser_mode = false;
+                                self.file_browser = None;
+                                self.browse_button_selected = false;
+                            }
+                            FileBrowserAction::Cancelled => {
+                                self.file_browser_mode = false;
+                                self.file_browser = None;
+                                self.browse_button_selected = false;
                             }
                         }
                     }

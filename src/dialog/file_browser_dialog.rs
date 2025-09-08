@@ -76,23 +76,22 @@ impl FileBrowserDialog {
         };
         entries.sort_by_key(|e| e.file_name());
         if folder_only {
-            entries = entries.into_iter().filter(|e| {
+            entries.retain(|e| {
                 e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
-            }).collect();
+            });
         } else if let Some(exts) = filter_ext {
-            entries = entries.into_iter().filter(|e| {
+            entries.retain(|e| {
                 if let Ok(ft) = e.file_type() {
                     if ft.is_dir() {
-                        return true;
+                        true
                     } else {
-                        return e.path().extension()
+                        e.path().extension()
                             .and_then(|x| x.to_str())
                             .map(|x| exts.iter().any(|ext| x == ext))
-                            .unwrap_or(false);
+                            .unwrap_or(false)
                     }
-                }
-                false
-            }).collect();
+                } else { false }
+            });
         }
         entries
     }
@@ -194,7 +193,7 @@ impl FileBrowserDialog {
             } else {
                 ("📄", Color::White)
             };
-            let display = format!("{} {}", icon, name);
+            let display = format!("{icon} {name}");
             buf.set_string(inner.x, y, display, style.fg(color));
             display_row += 1;
         }
@@ -250,7 +249,7 @@ impl FileBrowserDialog {
                 .borders(Borders::ALL)
                 .title("File Name");
             block.render(filename_area, buf);
-            buf.set_string(filename_area.x + 1, filename_area.y + 1, format!("{}", input), style);
+            buf.set_string(filename_area.x + 1, filename_area.y + 1, input, style);
         }
         // Render footer with [Open] button in Load mode
         if let Some(footer) = footer_area {
@@ -283,14 +282,13 @@ impl FileBrowserDialog {
             }
         }
         // Render instructions at the bottom
-        if self.show_instructions {
-            if let Some(instructions_area) = instructions_area {
+        if self.show_instructions
+            && let Some(instructions_area) = instructions_area {
                 let instructions_paragraph = Paragraph::new(instructions)
                     .block(Block::default().borders(Borders::ALL).title("Instructions"))
                     .style(Style::default().fg(Color::Yellow))
                     .wrap(Wrap { trim: true });
                 instructions_paragraph.render(instructions_area, buf);
-            }
         }
     }
 
@@ -419,8 +417,8 @@ impl FileBrowserDialog {
                         return None;
                     }
                     let entry_idx = self.selected - entries_offset;
-                    if let Some(entry) = self.entries.get(entry_idx) {
-                        if let Ok(ft) = entry.file_type() {
+                    if let Some(entry) = self.entries.get(entry_idx)
+                        && let Ok(ft) = entry.file_type() {
                             if ft.is_dir() {
                                 self.current_dir = entry.path();
                                 self.entries = Self::read_dir(&self.current_dir, self.filter_ext.as_ref(), self.folder_only);
@@ -435,7 +433,6 @@ impl FileBrowserDialog {
                                 return None;
                             }
                         }
-                    }
                 }
                 KeyCode::Esc => {
                     // If footer button is selected, unselect first; otherwise cancel
@@ -446,14 +443,13 @@ impl FileBrowserDialog {
                     return Some(FileBrowserAction::Cancelled);
                 }
                 KeyCode::Backspace => {
-                    if !self.at_root() {
-                        if let Some(parent) = self.current_dir.parent() {
+                    if !self.at_root()
+                        && let Some(parent) = self.current_dir.parent() {
                             self.current_dir = parent.to_path_buf();
                             self.entries = Self::read_dir(&self.current_dir, self.filter_ext.as_ref(), self.folder_only);
                             self.selected = 0;
                             self.scroll_offset = 0; // Reset scroll when changing directories
                         }
-                    }
                 }
                 _ => {}
             }

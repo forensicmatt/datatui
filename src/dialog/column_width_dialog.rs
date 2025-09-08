@@ -98,7 +98,7 @@ impl ColumnWidthDialog {
     pub fn set_columns(&mut self, columns: Vec<String>) {
         self.columns = columns;
         // Reset active index if it's out of bounds
-        if self.active_index >= self.columns.len() + 1 { // +1 for auto-expand toggle
+        if self.active_index > self.columns.len() { // +1 for auto-expand toggle
             self.active_index = 0;
         }
         // Ensure scroll offset is within bounds
@@ -267,7 +267,7 @@ impl ColumnWidthDialog {
                     let is_hidden = self.get_column_hidden(col);
                     
                     let width_display = match self.get_column_width(col) {
-                        Some(w) => format!("{}", w),
+                        Some(w) => format!("{w}"),
                         None => "auto".to_string(),
                     };
                     
@@ -277,14 +277,14 @@ impl ColumnWidthDialog {
                     let text = if selected {
                         if is_editing {
                             match self.input_mode {
-                                InputMode::Number => format!("> {} {}: [{}]", toggle_box, col, self.input_buffer),
-                                InputMode::Auto => format!("> {} {}: [auto]", toggle_box, col),
+                                InputMode::Number => format!("> {toggle_box} {col}: [{}]", self.input_buffer),
+                                InputMode::Auto => format!("> {toggle_box} {col}: [auto]"),
                             }
                         } else {
-                            format!("> {} {}: {}", toggle_box, col, width_display)
+                            format!("> {toggle_box} {col}: {width_display}")
                         }
                     } else {
-                        format!("  {} {}: {}", toggle_box, col, width_display)
+                        format!("  {toggle_box} {col}: {width_display}")
                     };
                     
                     let mut style = Style::default();
@@ -298,24 +298,19 @@ impl ColumnWidthDialog {
                     }
                     
                     // Use the appropriate x position based on whether scroll bar is shown
-                    let x_pos = if self.columns.len() > max_rows {
-                        content_area.x
-                    } else {
-                        content_area.x
-                    } + 2;// +2 for scroll bar (1 char) + space;
+                    let x_pos = content_area.x + 2; // +2 for scroll bar (1 char) + space;
                     buf.set_string(x_pos, y, text, style);
                 }
             }
         }
-        if self.show_instructions {
-            if let Some(instructions_area) = instructions_area {
+        if self.show_instructions
+            && let Some(instructions_area) = instructions_area {
                 let instructions_paragraph = Paragraph::new(instructions)
                     .block(Block::default().borders(Borders::ALL).title("Instructions"))
                     .style(Style::default().fg(Color::Yellow))
                     .wrap(Wrap { trim: true });
                 instructions_paragraph.render(instructions_area, buf);
             }
-        }
         max_rows
     }
 
@@ -337,12 +332,11 @@ impl ColumnWidthDialog {
                                 // Ctrl+Up: Move column up
                                 if self.active_index > 0 {
                                     let col_idx = self.active_index - 1; // -1 because index 0 is auto-expand
-                                    if col_idx < self.columns.len() {
-                                        if self.move_column(col_idx, -1) {
+                                    if col_idx < self.columns.len()
+                                        && self.move_column(col_idx, -1) {
                                             // Return the reorder action
                                             return Some(Action::ColumnWidthDialogReordered(self.columns.clone()));
                                         }
-                                    }
                                 }
                             } else {
                                 // Normal Up: Move selection up
@@ -360,12 +354,11 @@ impl ColumnWidthDialog {
                                 // Ctrl+Down: Move column down
                                 if self.active_index > 0 {
                                     let col_idx = self.active_index - 1; // -1 because index 0 is auto-expand
-                                    if col_idx < self.columns.len() {
-                                        if self.move_column(col_idx, 1) {
+                                    if col_idx < self.columns.len()
+                                        && self.move_column(col_idx, 1) {
                                             // Return the reorder action
                                             return Some(Action::ColumnWidthDialogReordered(self.columns.clone()));
                                         }
-                                    }
                                 }
                             } else {
                                 // Normal Down: Move selection down
@@ -417,23 +410,21 @@ impl ColumnWidthDialog {
                         }
                         KeyCode::Enter => {
                             // Apply the current editing state immediately
-                            if let Some(col_idx) = self.editing_column {
-                                if col_idx < self.columns.len() {
+                            if let Some(col_idx) = self.editing_column
+                                && col_idx < self.columns.len() {
                                     let col_name = self.columns[col_idx].clone();
                                     match self.input_mode {
                                         InputMode::Number => {
-                                            if let Ok(width) = self.input_buffer.parse::<u16>() {
-                                                if width >= 4 && width <= 255 {
+                                            if let Ok(width) = self.input_buffer.parse::<u16>()
+                                                && (4..=255).contains(&width) {
                                                     self.set_column_width(&col_name, Some(width));
                                                 }
-                                            }
                                         }
                                         InputMode::Auto => {
                                             self.set_column_width(&col_name, None);
                                         }
                                     }
                                 }
-                            }
                             // Stop editing
                             self.editing_column = None;
                             self.input_buffer.clear();
@@ -450,21 +441,18 @@ impl ColumnWidthDialog {
                         }
                         KeyCode::Char(c) => {
                             // Handle direct number input when editing
-                            if let Some(editing_col) = self.editing_column {
-                                if editing_col == self.active_index - 1 && matches!(self.input_mode, InputMode::Number) {
-                                    if c.is_ascii_digit() {
+                            if let Some(editing_col) = self.editing_column
+                                && editing_col == self.active_index - 1 && matches!(self.input_mode, InputMode::Number)
+                                    && c.is_ascii_digit() {
                                         self.input_buffer.push(c);
                                     }
-                                }
-                            }
                         }
                         KeyCode::Backspace => {
                             // Handle backspace when editing
-                            if let Some(editing_col) = self.editing_column {
-                                if editing_col == self.active_index - 1 && matches!(self.input_mode, InputMode::Number) {
+                            if let Some(editing_col) = self.editing_column
+                                && editing_col == self.active_index - 1 && matches!(self.input_mode, InputMode::Number) {
                                     self.input_buffer.pop();
                                 }
-                            }
                         }
                         _ => {}
                     }

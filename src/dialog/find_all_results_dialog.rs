@@ -317,14 +317,10 @@ impl FindAllResultsDialog {
             }
             KeyCode::Enter => {
                 // Go to the selected result in the main DataTable
-                if let Some(result) = self.results.get(self.selected) {
-                    Some(Action::GoToResult {
-                        row: result.row,
-                        column: result.column.clone(),
-                    })
-                } else {
-                    None
-                }
+                self.results.get(self.selected).map(|result| Action::GoToResult {
+                    row: result.row,
+                    column: result.column.clone(),
+                })
             }
             KeyCode::Esc => {
                 // Close the dialog

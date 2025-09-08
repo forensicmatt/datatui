@@ -101,7 +101,7 @@ impl ManagedDataFrame {
         );
         s.push_str("Column Types:\n");
         for (name, dtype) in self.column_types() {
-            s.push_str(&format!("  {}: {:?}\n", name, dtype));
+            s.push_str(&format!("  {name}: {dtype:?}\n"));
         }
         s
     }
@@ -220,7 +220,7 @@ impl ManagedDataFrame {
             if c.name().as_str() == column {
                 let mut out = casted.clone();
                 out.rename(polars::prelude::PlSmallStr::from_str(column));
-                cols.push(Column::from(out));
+                cols.push(out);
             } else {
                 cols.push(c.clone());
             }
@@ -252,7 +252,7 @@ impl fmt::Display for DataFrameMetadata {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name)?;
         if let Some(desc) = &self.description {
-            write!(f, " - {}", desc)?;
+            write!(f, " - {desc}")?;
         }
         if let Some(path) = &self.source_path {
             write!(f, "\nSource: {}", path.display())?;
@@ -314,10 +314,9 @@ impl ManagedDataFrame {
     pub fn sort_toggle_for_column(&mut self, column: &str) -> color_eyre::Result<()> {
         let col_name = column.to_string();
         let mut ascending = true;
-        if let Some(ref last) = self.last_sort {
-            if last.len() == 1 && last[0].name == col_name {
-                ascending = !last[0].ascending;
-            }
+        if let Some(ref last) = self.last_sort
+            && last.len() == 1 && last[0].name == col_name {
+            ascending = !last[0].ascending;
         }
         let source: Arc<DataFrame> = self.ensure_current_df()?;
         let by = vec![col_name.clone()];
@@ -364,6 +363,12 @@ impl FilterableDataFrame for ManagedDataFrame {
 pub struct DataFrameManagerImpl {
     dataframes: BTreeMap<usize, ManagedDataFrame>,
     next_id: usize,
+}
+
+impl Default for DataFrameManagerImpl {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DataFrameManagerImpl {
@@ -452,10 +457,10 @@ mod tests {
         assert!(summary.contains("Columns: 2"));
         assert!(summary.contains("a: Int32"));
         // Accept either "b: Utf8" or "b: String" or "b: Str" for the string column
-        assert!(summary.contains("b: Utf8") || summary.contains("b: String") || summary.contains("b: Str"), "Summary did not contain expected string column type. Actual summary: {}", summary);
+        assert!(summary.contains("b: Utf8") || summary.contains("b: String") || summary.contains("b: Str"), "Summary did not contain expected string column type. Actual summary: {summary}");
         // Test Display impls
         let meta_str = format!("{}", retrieved.metadata);
-        let df_str = format!("{}", retrieved);
+        let df_str = format!("{retrieved}");
         assert!(meta_str.contains("TestDF"));
         assert!(df_str.contains("Rows: 3"));
     }

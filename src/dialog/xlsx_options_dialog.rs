@@ -21,17 +21,9 @@ use tracing::error;
 use crate::excel_operations::{ExcelOperations, WorksheetInfo};
 
 /// XLSX import options
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct XlsxImportOptions {
     pub worksheets: Vec<WorksheetInfo>,
-}
-
-impl Default for XlsxImportOptions {
-    fn default() -> Self {
-        Self {
-            worksheets: Vec::new(),
-        }
-    }
 }
 
 /// XlsxOptionsDialog: Dialog for configuring Excel import options
@@ -160,9 +152,7 @@ impl XlsxOptionsDialog {
         
         // If file browser mode is active, render the file browser
         if self.file_browser_mode {
-            if let Some(browser) = &self.file_browser {
-                browser.render(area, buf);
-            }
+            if let Some(browser) = &self.file_browser { browser.render(area, buf); }
             return;
         }
         
@@ -330,32 +320,31 @@ impl Component for XlsxOptionsDialog {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // Handle file browser events if file browser mode is active
         if self.file_browser_mode {
-            if let Some(browser) = &mut self.file_browser {
-                if let Some(action) = browser.handle_key_event(key) {
-                    match action {
-                        crate::dialog::file_browser_dialog::FileBrowserAction::Selected(path) => {
-                            // Update the file path with the selected file
-                            self.file_path = path.to_string_lossy().to_string();
-                            self.update_file_path(self.file_path.clone());
-                            // Update the TextArea to reflect the new file path
-                            self.file_path_input = TextArea::from(vec![self.file_path.clone()]);
-                            self.file_path_input.set_block(
-                                Block::default()
-                                    .title("File Path")
-                                    .borders(Borders::ALL)
-                            );
-                            // Load worksheets from the selected file
-                            let _ = self.load_worksheets();
-                            self.file_browser_mode = false;
-                            self.file_browser = None;
-                            return Ok(None);
-                        }
-                        crate::dialog::file_browser_dialog::FileBrowserAction::Cancelled => {
-                            // Cancel file browser
-                            self.file_browser_mode = false;
-                            self.file_browser = None;
-                            return Ok(None);
-                        }
+            if let Some(browser) = &mut self.file_browser
+                && let Some(action) = browser.handle_key_event(key) {
+                match action {
+                    crate::dialog::file_browser_dialog::FileBrowserAction::Selected(path) => {
+                        // Update the file path with the selected file
+                        self.file_path = path.to_string_lossy().to_string();
+                        self.update_file_path(self.file_path.clone());
+                        // Update the TextArea to reflect the new file path
+                        self.file_path_input = TextArea::from(vec![self.file_path.clone()]);
+                        self.file_path_input.set_block(
+                            Block::default()
+                                .title("File Path")
+                                .borders(Borders::ALL)
+                        );
+                        // Load worksheets from the selected file
+                        let _ = self.load_worksheets();
+                        self.file_browser_mode = false;
+                        self.file_browser = None;
+                        return Ok(None);
+                    }
+                    crate::dialog::file_browser_dialog::FileBrowserAction::Cancelled => {
+                        // Cancel file browser
+                        self.file_browser_mode = false;
+                        self.file_browser = None;
+                        return Ok(None);
                     }
                 }
             }
@@ -502,10 +491,11 @@ impl Component for XlsxOptionsDialog {
                 }
                 KeyCode::Char(' ') => {
                     // Space key toggles worksheet load status when a worksheet is selected
-                    if !self.file_path_focused && !self.browse_button_selected && !self.finish_button_selected {
-                        if !self.xlsx_options.worksheets.is_empty() {
-                            self.toggle_worksheet_load(self.selected_worksheet_index);
-                        }
+                    if !self.file_path_focused
+                        && !self.browse_button_selected
+                        && !self.finish_button_selected
+                        && !self.xlsx_options.worksheets.is_empty() {
+                        self.toggle_worksheet_load(self.selected_worksheet_index);
                     }
                     None
                 }
@@ -522,14 +512,12 @@ impl Component for XlsxOptionsDialog {
                 }
                 KeyCode::Char('p') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
                     // Ctrl+P: Paste clipboard text into the File Path when focused
-                    if self.file_path_focused {
-                        if let Ok(mut clipboard) = Clipboard::new() {
-                            if let Ok(text) = clipboard.get_text() {
-                                let first_line = text.lines().next().unwrap_or("").to_string();
-                                self.set_file_path(first_line);
-                                let _ = self.load_worksheets();
-                            }
-                        }
+                    if self.file_path_focused
+                        && let Ok(mut clipboard) = Clipboard::new()
+                        && let Ok(text) = clipboard.get_text() {
+                        let first_line = text.lines().next().unwrap_or("").to_string();
+                        self.set_file_path(first_line);
+                        let _ = self.load_worksheets();
                     }
                     None
                 }

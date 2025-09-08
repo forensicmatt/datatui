@@ -266,6 +266,9 @@ impl DataSource {
                 let mut coerced = std::collections::BTreeSet::<String>::new();
                 let mut last_err: Option<String> = None;
                 let mut attempts: usize = 0;
+                // Precompile regexes used within the retry loop
+                let re_dtype = regex::Regex::new("as dtype `([^`]+)` at column '([^']+)' \\(column number \\d+\\)").ok();
+                let re_at = regex::Regex::new("at '([^']+)'").ok();
                 loop {
                     attempts += 1;
                     if attempts > 256 {
@@ -314,46 +317,44 @@ impl DataSource {
                                 last_err = Some(msg.clone());
                                 // Try a richer pattern: capture dtype, column name, and column number
                                 let mut extracted_col: Option<String> = None;
-                                if let Ok(re) = regex::Regex::new("as dtype `([^`]+)` at column '([^']+)' \\(column number \\d+\\)") {
-                                    if let Some(caps) = re.captures(&msg) {
-                                        let dtype = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                                        let col = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                                        let col_num = caps.get(3).map(|m| m.as_str()).unwrap_or("");
-                                        if !col.is_empty() {
-                                            extracted_col = Some(col.to_string());
-                                            if coerced.insert(col.to_string()) {
-                                                tracing::info!(
-                                                    "CSV dtype inference failed: cannot parse as dtype `{}` at column '{}' (#{}). Coercing to string and retrying.",
-                                                    dtype,
-                                                    col,
-                                                    col_num
-                                                );
-                                                continue;
-                                            }
+                                if let Some(re) = re_dtype.as_ref()
+                                    && let Some(caps) = re.captures(&msg)
+                                {
+                                    let dtype = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                                    let col = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                                    let col_num = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+                                    if !col.is_empty() {
+                                        extracted_col = Some(col.to_string());
+                                        if coerced.insert(col.to_string()) {
+                                            tracing::info!(
+                                                "CSV dtype inference failed: cannot parse as dtype `{}` at column '{}' (#{}). Coercing to string and retrying.",
+                                                dtype,
+                                                col,
+                                                col_num
+                                            );
+                                            continue;
                                         }
                                     }
                                 }
                                 // Fallback: extract just the column name
-                                if extracted_col.is_none() {
-                                    if let Ok(re) = regex::Regex::new("at '([^']+)'") {
-                                        if let Some(caps) = re.captures(&msg) {
-                                            if let Some(m) = caps.get(1) {
-                                                let col = m.as_str().to_string();
-                                                if coerced.insert(col.clone()) {
-                                                    tracing::info!(
-                                                        "CSV dtype inference failed for column '{}' with error: {}. Coercing to string and retrying.",
-                                                        col,
-                                                        msg
-                                                    );
-                                                    continue;
-                                                }
-                                            }
-                                        }
+                                if extracted_col.is_none()
+                                    && let Some(re) = re_at.as_ref()
+                                    && let Some(caps) = re.captures(&msg)
+                                    && let Some(m) = caps.get(1)
+                                {
+                                    let col = m.as_str().to_string();
+                                    if coerced.insert(col.clone()) {
+                                        tracing::info!(
+                                            "CSV dtype inference failed for column '{}' with error: {}. Coercing to string and retrying.",
+                                            col,
+                                            msg
+                                        );
+                                        continue;
                                     }
                                 }
                             }
                         },
-                        Err(e) => return Err(color_eyre::eyre::eyre!("Failed to parse CSV file: {}", e)),
+                        Err(e) => return Err(color_eyre::eyre::eyre!("Failed to parse CSV file: {e}")),
                     }
                 }
             }
@@ -379,7 +380,7 @@ impl DataSource {
                             calamine::Data::DateTime(d) => d.as_f64().to_string(),
                             calamine::Data::DateTimeIso(s) => s.clone(),
                             calamine::Data::DurationIso(s) => s.clone(),
-                            calamine::Data::Error(e) => format!("ERROR: {:?}", e),
+                            calamine::Data::Error(e) => format!("ERROR: {e:?}"),
                         };
                         out_row.push(s);
                     }
@@ -401,8 +402,8 @@ impl DataSource {
                         if name.is_empty() { name = format!("column_{}", idx + 1); }
                         if used_names.contains(&name) {
                             let mut suffix = 2usize; let base = name.clone();
-                            while used_names.contains(&format!("{}_{suffix}", base)) { suffix += 1; }
-                            name = format!("{}_{suffix}", base);
+                            while used_names.contains(&format!("{base}_{suffix}")) { suffix += 1; }
+                            name = format!("{base}_{suffix}");
                         }
                         used_names.insert(name.clone());
                         column_names.push(name);
@@ -427,7 +428,7 @@ impl DataSource {
             DataImportConfig::Parquet(parquet_config) => {
                 let df_pq = polars::prelude::ParquetReader::new(std::fs::File::open(&parquet_config.file_path)?)
                     .finish()
-                    .map_err(|e| color_eyre::eyre::eyre!("Failed to read Parquet file: {}", e))?;
+                    .map_err(|e| color_eyre::eyre::eyre!("Failed to read Parquet file: {e}"))?;
                 (df_pq, None)
             }
             DataImportConfig::Json(json_config) => {
@@ -442,13 +443,13 @@ impl DataSource {
                 let mut objects: Vec<serde_json::Map<String, JsonValue>> = Vec::new();
                 if json_config.options.ndjson {
                     let file = std::fs::File::open(path)
-                        .map_err(|e| color_eyre::eyre::eyre!("Failed to open NDJSON file: {}", e))?;
+                        .map_err(|e| color_eyre::eyre::eyre!("Failed to open NDJSON file: {e}"))?;
                     let reader = BufReader::new(file);
                     for line_res in reader.lines() {
-                        let line = line_res.map_err(|e| color_eyre::eyre::eyre!("Failed to read NDJSON line: {}", e))?;
+                        let line = line_res.map_err(|e| color_eyre::eyre::eyre!("Failed to read NDJSON line: {e}"))?;
                         if line.trim().is_empty() { continue; }
                         let val: JsonValue = serde_json::from_str(&line)
-                            .map_err(|e| color_eyre::eyre::eyre!("Failed to parse NDJSON line as JSON object: {}", e))?;
+                            .map_err(|e| color_eyre::eyre::eyre!("Failed to parse NDJSON line as JSON object: {e}"))?;
                         if let JsonValue::Object(map) = val {
                             objects.push(map);
                         } else {
@@ -457,12 +458,12 @@ impl DataSource {
                     }
                 } else {
                     let mut file = std::fs::File::open(path)
-                        .map_err(|e| color_eyre::eyre::eyre!("Failed to open JSON file: {}", e))?;
+                        .map_err(|e| color_eyre::eyre::eyre!("Failed to open JSON file: {e}"))?;
                     let mut buf = String::new();
                     file.read_to_string(&mut buf)
-                        .map_err(|e| color_eyre::eyre::eyre!("Failed to read JSON file: {}", e))?;
+                        .map_err(|e| color_eyre::eyre::eyre!("Failed to read JSON file: {e}"))?;
                     let val: JsonValue = serde_json::from_str(&buf)
-                        .map_err(|e| color_eyre::eyre::eyre!("Failed to parse JSON: {}", e))?;
+                        .map_err(|e| color_eyre::eyre::eyre!("Failed to parse JSON: {e}"))?;
                     match val {
                         JsonValue::Array(arr) => {
                             for v in arr {
@@ -508,7 +509,7 @@ impl DataSource {
                 }
 
                 let df_json = DataFrame::new(columns)
-                    .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame from JSON: {}", e))?;
+                    .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame from JSON: {e}"))?;
                 (df_json, None)
             }
         };
@@ -549,6 +550,10 @@ pub struct DataManagementDialog {
     pub alias_edit_dialog: Option<AliasEditDialog>,
     #[serde(skip)]
     pub message_dialog: Option<MessageDialog>,
+}
+
+impl Default for DataManagementDialog {
+    fn default() -> Self { Self::new() }
 }
 
 impl DataManagementDialog {
@@ -605,9 +610,7 @@ impl DataManagementDialog {
 
         // Clamp selection
         let total_datasets = self.get_all_datasets().len();
-        if total_datasets == 0 {
-            self.selected_dataset_index = 0;
-        } else if self.selected_dataset_index >= total_datasets {
+        if total_datasets == 0 || self.selected_dataset_index >= total_datasets {
             self.selected_dataset_index = 0;
         }
     }
@@ -938,18 +941,14 @@ impl Component for DataManagementDialog {
                             self.add_data_source(config);
                             self.data_import_dialog = None;
                             // Auto-load all pending datasets after adding data source
-                            if let Err(e) = self.load_all_pending_datasets() {
-                                return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {}", e))));
-                            }
+                            if let Err(e) = self.load_all_pending_datasets() { return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {e}")))); }
                             return Ok(None);
                         }
                         Action::ConfirmDataImport => {
                             // Handle the confirmation action and auto-load data
                             self.data_import_dialog = None;
                             // Auto-load all pending datasets after import
-                            if let Err(e) = self.load_all_pending_datasets() {
-                                return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {}", e))));
-                            }
+                            if let Err(e) = self.load_all_pending_datasets() { return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {e}")))); }
                             return Ok(Some(action));
                         }
                         _ => {
@@ -1011,12 +1010,12 @@ impl Component for DataManagementDialog {
                 }
                 KeyCode::Char('i') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
                     // If selected dataset is Failed, show its error message in a MessageDialog
-                    if let Some((_source_id, _source, dataset)) = self.selected_dataset() {
-                        if dataset.status == DatasetStatus::Failed {
-                            let msg = dataset.error_message.clone().unwrap_or_else(|| "No error message available".to_string());
-                            self.message_dialog = Some(MessageDialog::with_title(msg, format!("{}: Failed", dataset.name)));
-                            return Ok(None);
-                        }
+                    if let Some((_source_id, _source, dataset)) = self.selected_dataset()
+                        && dataset.status == DatasetStatus::Failed
+                    {
+                        let msg = dataset.error_message.clone().unwrap_or_else(|| "No error message available".to_string());
+                        self.message_dialog = Some(MessageDialog::with_title(msg, format!("{}: Failed", dataset.name)));
+                        return Ok(None);
                     }
                     // Otherwise, toggle instructions per global key binding
                     self.show_instructions = !self.show_instructions;
@@ -1071,7 +1070,7 @@ mod tests {
         // Verify the structure of LoadedDataset
         for (dataset_id, loaded_dataset) in dataframes {
             assert_eq!(loaded_dataset.dataset.id, dataset_id);
-            assert!(loaded_dataset.dataframe.get_column_names().len() > 0);
+            assert!(!loaded_dataset.dataframe.get_column_names().is_empty());
         }
     }
 

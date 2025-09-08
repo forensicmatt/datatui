@@ -32,7 +32,7 @@ fn anyvalue_to_display_string(value: &AnyValue) -> String {
     match value {
         AnyValue::Null => "".to_string(),
         AnyValue::String(s) => s.to_string(),
-        other => format!("{}", other),
+        other => format!("{other}"),
     }
 }
 
@@ -53,11 +53,11 @@ fn anyvalue_to_json(val: &AnyValue) -> Value {
         AnyValue::Int64(n) => Value::Number((*n).into()),
         AnyValue::Int128(n) => Value::String(n.to_string()),
         AnyValue::Float32(n) => Value::Number(Number::from_f64(*n as f64).unwrap()),
-        AnyValue::Float64(n) => Value::Number(Number::from_f64(*n as f64).unwrap()),
+        AnyValue::Float64(n) => Value::Number(Number::from_f64(*n).unwrap()),
         AnyValue::Date(d) => Value::String(d.to_string()),
-        AnyValue::Datetime(ts, unit, tz) => Value::String(format!("{:?} {:?} {:?}", ts, unit, tz)),
-        AnyValue::DatetimeOwned(ts, unit, tz) => Value::String(format!("{:?} {:?} {:?}", ts, unit, tz)),
-        AnyValue::Duration(d, unit) => Value::String(format!("{:?} {:?}", d, unit)),
+        AnyValue::Datetime(ts, unit, tz) => Value::String(format!("{ts:?} {unit:?} {tz:?}")),
+        AnyValue::DatetimeOwned(ts, unit, tz) => Value::String(format!("{ts:?} {unit:?} {tz:?}")),
+        AnyValue::Duration(d, unit) => Value::String(format!("{d:?} {unit:?}")),
         AnyValue::Time(t) => Value::String(t.to_string()),
         AnyValue::Categorical(id, mapping, _) => Value::String(mapping.get(*id).to_string()),
         AnyValue::CategoricalOwned(id, mapping, _) => Value::String(mapping.get(*id).to_string()),
@@ -68,12 +68,12 @@ fn anyvalue_to_json(val: &AnyValue) -> Value {
             let vals: Vec<Value> = s.iter().map(|v| anyvalue_to_json(&v)).collect();
             Value::Array(vals)
         },
-        AnyValue::Struct(_, arr, fields) => Value::String(format!("{:?} {:?}", arr, fields)),
-        AnyValue::StructOwned(data) => Value::String(format!("{:?}", data)),
+        AnyValue::Struct(_, arr, fields) => Value::String(format!("{arr:?} {fields:?}")),
+        AnyValue::StructOwned(data) => Value::String(format!("{data:?}")),
         AnyValue::StringOwned(s) => Value::String(s.to_string()),
-        AnyValue::Binary(b) => Value::String(format!("{:?}", b)),
-        AnyValue::BinaryOwned(b) => Value::String(format!("{:?}", b)),
-        AnyValue::Decimal(n, scale) => Value::String(format!("{} {}", n, scale)),
+        AnyValue::Binary(b) => Value::String(format!("{b:?}")),
+        AnyValue::BinaryOwned(b) => Value::String(format!("{b:?}")),
+        AnyValue::Decimal(n, scale) => Value::String(format!("{n} {scale}")),
     }
 }
 
@@ -169,11 +169,10 @@ impl DataTable {
 
         if row < df.height() && col < visible_columns.len() {
             let col_name = &visible_columns[col];
-            if let Ok(series) = df.column(col_name) {
-                if let Ok(val) = series.get(row) {
+            if let Ok(series) = df.column(col_name)
+                && let Ok(val) = series.get(row) {
                     return Ok(val.str_value().to_string());
                 }
-            }
         }
         Ok(String::new())
     }
@@ -190,12 +189,11 @@ impl DataTable {
         
         if row < df.height() && col < visible_columns.len() {
             let col_name = &visible_columns[col];
-            if let Ok(series) = df.column(col_name) {
-                if let Ok(val) = series.get(row) {
+            if let Ok(series) = df.column(col_name)
+                && let Ok(val) = series.get(row) {
                     let v = anyvalue_to_json(&val);
                     return Ok(v);
                 }
-            }
         }
         Ok(Value::Null)
     }
@@ -232,7 +230,7 @@ impl DataTable {
                             .ok()
                             .and_then(|s| s.get(i).ok())
                             .map(|v| v.to_string())
-                            .unwrap_or_else(|| "".to_string());
+                            .unwrap_or_default();
                         let cell_len = val.chars().count() + cell_padding;
                         if cell_len > max_len {
                             max_len = cell_len;
@@ -247,7 +245,7 @@ impl DataTable {
                             .ok()
                             .and_then(|s| s.get(i).ok())
                             .map(|v| v.to_string())
-                            .unwrap_or_else(|| "".to_string());
+                            .unwrap_or_default();
                         let cell_len = val.chars().count() + cell_padding;
                         if cell_len > max_len {
                             max_len = cell_len;
@@ -319,7 +317,7 @@ impl DataTable {
                 .ok()
                 .and_then(|s| s.get(i).ok())
                 .map(|v| v.to_string())
-                .unwrap_or_else(|| "".to_string());
+                .unwrap_or_default();
             let cell_len = val.chars().count();
             if cell_len > max_len {
                 max_len = cell_len;
@@ -462,12 +460,12 @@ impl DataTable {
                 let re = if options.match_case {
                     Regex::new(pattern)
                 } else {
-                    Regex::new(&format!("(?i){}", pattern))
+                    Regex::new(&format!("(?i){pattern}"))
                 }?;
                 let whole_word = options.whole_word;
                 Box::new(move |cell: &str| {
                     if whole_word {
-                        re.find(cell).map_or(false, |m| m.as_str() == cell)
+                        re.find(cell).is_some_and(|m| m.as_str() == cell)
                     } else {
                         re.is_match(cell)
                     }
@@ -477,14 +475,13 @@ impl DataTable {
         // Search
         for (row, col) in indices {
             let col_name = &visible_columns[col];
-            if let Ok(series) = df.column(col_name) {
-                if let Ok(val) = series.get(row) {
+            if let Ok(series) = df.column(col_name)
+                && let Ok(val) = series.get(row) {
                     let cell_str = val.str_value();
                     if matcher(&cell_str) {
                         return Ok(Some((row, col)));
                     }
                 }
-            }
         }
         Ok(None)
     }
@@ -517,12 +514,12 @@ impl DataTable {
                 let re = if options.match_case {
                     Regex::new(pattern)
                 } else {
-                    Regex::new(&format!("(?i){}", pattern))
+                    Regex::new(&format!("(?i){pattern}"))
                 }?;
                 let whole_word = options.whole_word;
                 Box::new(move |cell: &str| {
                     if whole_word {
-                        re.find(cell).map_or(false, |m| m.as_str() == cell)
+                        re.find(cell).is_some_and(|m| m.as_str() == cell)
                     } else {
                         re.is_match(cell)
                     }
@@ -531,16 +528,14 @@ impl DataTable {
         };
         let mut count = 0;
         for row in 0..nrows {
-            for col in 0..ncols {
-                let col_name = &visible_columns[col];
-                if let Ok(series) = df.column(col_name) {
-                    if let Ok(val) = series.get(row) {
+            for col_name in visible_columns.iter() {
+                if let Ok(series) = df.column(col_name)
+                    && let Ok(val) = series.get(row) {
                         let cell_str = val.str_value();
                         if matcher(&cell_str) {
                             count += 1;
                         }
                     }
-                }
             }
         }
         Ok(count)
@@ -630,12 +625,12 @@ impl DataTable {
                 let re = if options.match_case {
                     Regex::new(pattern)
                 } else {
-                    Regex::new(&format!("(?i){}", pattern))
+                    Regex::new(&format!("(?i){pattern}"))
                 }?;
                 let whole_word = options.whole_word;
                 Box::new(move |cell: &str| {
                     if whole_word {
-                        re.find(cell).map_or(false, |m| m.as_str() == cell)
+                        re.find(cell).is_some_and(|m| m.as_str() == cell)
                     } else {
                         re.is_match(cell)
                     }
@@ -645,10 +640,9 @@ impl DataTable {
         let mut results = Vec::new();
         // Search through all cells in the DataFrame
         for row in 0..nrows {
-            for col in 0..ncols {
-                let col_name = &visible_columns[col];
-                if let Ok(series) = df.column(col_name) {
-                    if let Ok(val) = series.get(row) {
+            for col_name in visible_columns.iter() {
+                if let Ok(series) = df.column(col_name)
+                    && let Ok(val) = series.get(row) {
                         let cell_str = val.str_value();
                         if matcher(&cell_str) {
                             // Generate context around the match
@@ -660,7 +654,6 @@ impl DataTable {
                             });
                         }
                     }
-                }
             }
         }
         Ok(results)
@@ -686,7 +679,7 @@ impl DataTable {
                 let re = if options.match_case {
                     Regex::new(pattern)
                 } else {
-                    Regex::new(&format!("(?i){}", pattern))
+                    Regex::new(&format!("(?i){pattern}"))
                 };
                 if let Ok(re) = re {
                     re.find(cell_str).map(|m| m.start())
@@ -1029,24 +1022,22 @@ impl Component for DataTable {
         let header = Row::new(
             visible_columns_slice
                 .iter()
-                .enumerate()
-                .map(|(_i, c)| {
+                .map(|c| {
                     let col_name = c;
                     let mut label = col_name.clone();
-                    if let Some(ref sort_cols) = self.dataframe.last_sort {
-                        if let Some((sort_idx, sort_col)) = sort_cols.iter()
+                    if let Some(ref sort_cols) = self.dataframe.last_sort
+                        && let Some((sort_idx, sort_col)) = sort_cols.iter()
                                 .enumerate()
                                 .find(|(_, sc)| sc.name == col_name.clone()) {
                             let arrow = if sort_col.ascending { "↑" } else { "↓" };
                             let prefix = if sort_cols.len() > 1 {
                                 format!("{}[{}] ", arrow, sort_idx+1)
                             } else {
-                                format!("{} ", arrow)
+                                format!("{arrow} ")
                             };
-                            label = format!("{}{}", prefix, label);
+                            label = format!("{prefix}{label}");
                         }
-                    }
-                    Cell::from(label).style(self.style.table_header.clone())
+                    Cell::from(label).style(self.style.table_header)
                 })
         );
         let selected_cell_style = Style::default()
@@ -1061,9 +1052,9 @@ impl Component for DataTable {
                 let value = &row[j];
                 let cell_str = anyvalue_to_display_string(value);
                 let mut cell = Cell::from(cell_str)
-                    .style(self.style.table_cell.clone());
+                    .style(self.style.table_cell);
                 if global_row == self.selection.row && col_idx == self.selection.col {
-                    cell = cell.style(selected_cell_style.clone());
+                    cell = cell.style(selected_cell_style);
                 }
                 cell
             });
@@ -1071,9 +1062,9 @@ impl Component for DataTable {
             if global_row == self.selection.row {
                 r = r.style(Style::default().add_modifier(Modifier::REVERSED));
             } else if global_row % 2 == 0 {
-                r = r.style(self.style.table_row_even.clone());
+                r = r.style(self.style.table_row_even);
             } else {
-                r = r.style(self.style.table_row_odd.clone());
+                r = r.style(self.style.table_row_odd);
             }
             r
         }).collect();
@@ -1092,7 +1083,7 @@ impl Component for DataTable {
             .header(header)
             .block(Block::default()
             .borders(Borders::ALL)
-            .style(self.style.table_border.clone()));
+            .style(self.style.table_border));
         frame.render_widget(table, table_area);
         Ok(())
     }
