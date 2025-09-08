@@ -7,6 +7,12 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [unreleased]
+### Fixed
+- FindAllResults scroll issues
+- Temporarily fixed highlights of text in Spans by stripping out new line chars.
+
+
 ## [0.1.0]
 ### Added
 - Initial Version
