@@ -1072,23 +1072,11 @@ impl Component for DataTableContainer {
             // Ignore all input while busy to prevent navigation/interaction
             return Ok(None);
         }
+
         // Route key events to FindAllResultsDialog if active (check this first)
         if self.find_all_results_dialog_active {
-            if let Some(dialog) = &mut self.find_all_results_dialog {
-                // Calculate max_rows for the dialog
-                let max_rows = if let Some(area) = self.last_find_all_results_dialog_area {
-                    let table_area = Rect {
-                        x: area.x + 1,
-                        y: area.y + 1,
-                        width: area.width.saturating_sub(2),
-                        height: area.height.saturating_sub(2),
-                    };
-                    table_area.height.saturating_sub(1) as usize // -1 for header
-                } else {
-                    20 // Default fallback
-                };
-                
-                if let Some(action) = dialog.handle_key_event(key, max_rows) {
+            if let Some(dialog) = &mut self.find_all_results_dialog
+                && let Some(action) = dialog.handle_key_event(key) {
                     match action {
                         Action::DialogClose => {
                             self.find_all_results_dialog_active = false;
@@ -1108,7 +1096,6 @@ impl Component for DataTableContainer {
                         _ => {}
                     }
                 }
-            }
             return Ok(None);
         }
         // Route key events to FindDialog if active
@@ -2238,7 +2225,7 @@ impl Component for DataTableContainer {
 				width: area.width - area.width / 4,
 				height: area.height - area.height / 4,
 			};
-            let _max_rows = self.find_all_results_dialog.as_mut().unwrap().render(popup_area, frame.buffer_mut());
+            self.find_all_results_dialog.as_mut().unwrap().render(popup_area, frame.buffer_mut());
             self.last_find_all_results_dialog_area = Some(popup_area);
         }
         // Render DataExportDialog as a popup overlay only if active

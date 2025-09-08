@@ -110,6 +110,7 @@ impl FindDialog {
             ActionsRow => Pattern,
         }
     }
+
     fn prev_field(&self) -> FindDialogField {
         use FindDialogField::*;
         match self.active_field {
@@ -507,8 +508,8 @@ impl Component for FindDialog {
     fn handle_events(&mut self, _event: Option<crate::tui::Event>) -> Result<Option<Action>> {
         Ok(None)
     }
-    fn handle_key_event(&mut self, _key: KeyEvent) -> Result<Option<Action>> {
-        Ok(None)
+    fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        Ok(self.handle_key_event(key))
     }
     fn handle_mouse_event(&mut self, _mouse: crossterm::event::MouseEvent) -> Result<Option<Action>> {
         Ok(None)
