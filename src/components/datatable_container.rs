@@ -82,7 +82,7 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use polars_lazy::frame::IntoLazy;
 use arboard::Clipboard;
-use tracing::{info, error};
+use tracing::{debug, info, error};
 use textwrap::wrap;
 use ratatui::style::Color;
 use ratatui::text::{Line, Span};
@@ -1962,7 +1962,7 @@ impl Component for DataTableContainer {
     ///
     /// This method is a no-op for DataTableContainer, as it does not use external actions for updates.
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
-        info!("update: {:?}", action);
+        debug!("update: {:?}", action);
         match action {
             Action::Tick => {
                 self.find_dialog.tick_search_progress();
