@@ -8,6 +8,9 @@ and this project adheres to
 
 
 ## [unreleased]
+### Added
+- added ctrl + a (select all) and ctrl + c (copy) to SqlDialog
+
 ### Fixed
 - FindAllResults scroll issues
 - Temporarily fixed highlights of text in Spans by stripping out new line chars.
