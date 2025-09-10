@@ -481,7 +481,11 @@ impl DataTabManagerDialog {
             Ok(())
         } else {
             // Render the main tab manager
-            let instructions = "Ctrl+M: Data Management  Alt+S: Project Settings  Ctrl+S: Manual Sync Tabs  Ctrl+F: Move Tab to Front  Ctrl+B: Move Tab to Back  Ctrl+L: Move Tab Left  Ctrl+R: Move Tab Right  Ctrl+D: Delete Tab  Left/Right or h/l: Navigate Tabs  Esc: Close dialog";
+            let instructions = 
+                "Ctrl+M: Data Management  Alt+S: Project Settings  Ctrl+S: Manual Sync Tabs  
+                Ctrl+F: Move Tab to Front  Ctrl+B: Move Tab to Back  Ctrl+L: Move Tab Left  
+                Ctrl+R: Move Tab Right  Ctrl+D: Delete Tab  Left/Right or h/l: Navigate Tabs  
+                Esc: Close dialog";
             let show_instructions = self.tabs.is_empty();
             let layout = split_dialog_area(
                 area, show_instructions, Some(instructions)
@@ -740,13 +744,17 @@ impl Component for DataTabManagerDialog {
                 return Ok(None);
             }
             if let Some(Event::Key(key_event)) = Some(Event::Key(key)) {
-                let result = self.data_management_dialog.handle_events(Some(Event::Key(key_event)))?;
+                let result = self.data_management_dialog.handle_events(
+                    Some(Event::Key(key_event))
+                )?;
                 
                 // Check if the dialog should be closed
                 if let Some(Action::CloseDataManagementDialog) = result {
                     self.show_data_management = false;
                     // Auto-sync tabs when DataManagementDialog is closed
-                    if let Err(e) = self.sync_tabs_from_data_management() { return Ok(Some(Action::Error(format!("Failed to auto-sync tabs: {e}")))); }
+                    if let Err(e) = self.sync_tabs_from_data_management() {
+                        return Ok(Some(Action::Error(format!("Failed to auto-sync tabs: {e}"))));
+                    }
 
                     // Update all containers with the latest available dataframes
                     let _ = self.update_all_containers_dataframes();

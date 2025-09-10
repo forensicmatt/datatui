@@ -518,7 +518,7 @@ impl DataTableContainer {
                 .collect()
         );
         let find_dialog = FindDialog::new();
-        let instructions = "Ctrl+f: Find  Ctrl+s: Sort  Shift+S: Add Sort Column  Ctrl+e: Filter  Shift+E: Quick Filter  Ctrl+t: SQL  Ctrl+j: JMES  Ctrl+w: Widths  Ctrl+d: Details  Shift+←/→: Move Column  Ctrl+c: Copy  Ctrl+i: Toggle Instructions  Ctrl+z: Quit".to_string();
+        let instructions = "Ctrl+f: Find  Ctrl+s: Sort  Shift+s: Quick Sort  Ctrl+e: Filter  Shift+e Quick Filter  Ctrl+t: SQL  Ctrl+j: JMES  Ctrl+w: Widths  Ctrl+d: Details  Shift+←/→: Move Column  Ctrl+c: Copy  Ctrl+i: Toggle Instructions  Ctrl+z: Quit".to_string();
         // Capture SQL registration name before moving `datatable`
         let sql_name = datatable.dataframe.metadata.name.clone();
         let dataframe_details_dialog = DataFrameDetailsDialog::new();
