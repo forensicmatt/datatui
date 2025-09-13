@@ -12,6 +12,7 @@ and this project adheres to
 - added ctrl + a (select all) and ctrl + c (copy) to SqlDialog
 
 ### Fixed
+- Instruction rendering issues
 - FindAllResults scroll issues
 - Temporarily fixed highlights of text in Spans by stripping out new line chars.
 
