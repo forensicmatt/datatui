@@ -60,7 +60,7 @@ impl SqlDialog {
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {
         Clear.render(area, buf);
-        let instructions = "Ctrl+Enter:Run  Ctrl+Shift+Enter:New Dataset  Ctrl+l:Clear  Ctrl+r:Restore  Ctrl+o:OpenFile  Ctrl+p:Paste  Esc:Cancel";
+        let instructions = "Ctrl+Enter:Run  Ctrl+Shift+Enter:New Dataset  Ctrl+a:SelectAll  Ctrl+c:Copy  Ctrl+l:Clear  Ctrl+r:Restore  Ctrl+o:OpenFile  Ctrl+p:Paste  Esc:Cancel";
         // Outer container with double border
         let outer_block = Block::default()
             .title("SQL")
@@ -165,6 +165,19 @@ impl SqlDialog {
                 }
                 if key.kind == KeyEventKind::Press {
                     match key.code {
+                        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            // Ctrl+a: select all text in the textarea
+                            self.textarea.select_all();
+                            return None;
+                        }
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            // Ctrl+c: copy full textarea to clipboard
+                            if let Ok(mut clipboard) = Clipboard::new() {
+                                let text = self.textarea.lines().join("\n");
+                                let _ = clipboard.set_text(text);
+                            }
+                            return None;
+                        }
                         KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) && key.modifiers.contains(KeyModifiers::SHIFT) => {
                             // Ctrl+Shift+Enter: create new dataset
                             self.mode = SqlDialogMode::NewDatasetInput;

@@ -121,6 +121,7 @@ pub struct DataTableContainer {
     pub datatable: DataTable,
     pub style: StyleConfig,
     pub instructions: String,
+    pub additional_instructions: Option<String>,
     pub show_instructions: bool,
     pub auto_expand_value_display: bool,
     #[allow(dead_code)]
@@ -458,6 +459,7 @@ impl DataTableContainer {
         self.datatable.dataframe.set_current_df(new_df);
         Ok(())
     }
+    
     /// Set the SQL statement for the SQL dialog
     pub fn set_sql_statement(&mut self, sql_statement: String) {
         self.sql_dialog.set_textarea_content(sql_statement);
@@ -518,7 +520,7 @@ impl DataTableContainer {
                 .collect()
         );
         let find_dialog = FindDialog::new();
-        let instructions = "Ctrl+f: Find  Ctrl+s: Sort  Shift+S: Add Sort Column  Ctrl+e: Filter  Shift+E: Quick Filter  Ctrl+t: SQL  Ctrl+j: JMES  Ctrl+w: Widths  Ctrl+d: Details  Shift+←/→: Move Column  Ctrl+c: Copy  Ctrl+i: Toggle Instructions  Ctrl+z: Quit".to_string();
+        let instructions = "Ctrl+f: Find  Ctrl+s: Sort  Shift+s: Quick Sort  Ctrl+e: Filter  Shift+e Quick Filter  Ctrl+t: SQL  Ctrl+j: JMES  Ctrl+w: Widths  Ctrl+d: Details  Shift+←/→: Move Column  Ctrl+c: Copy  Ctrl+i: Toggle Instructions  Ctrl+z: Quit".to_string();
         // Capture SQL registration name before moving `datatable`
         let sql_name = datatable.dataframe.metadata.name.clone();
         let dataframe_details_dialog = DataFrameDetailsDialog::new();
@@ -529,6 +531,7 @@ impl DataTableContainer {
             datatable,
             style,
             instructions,
+            additional_instructions: None,
             show_instructions: true,
             auto_expand_value_display: false,
             jmes_runtime,
@@ -1027,6 +1030,18 @@ impl DataTableContainer {
     /// Get the available DataFrames for SQL context.
     pub fn get_available_datasets(&self) -> &HashMap<String, LoadedDataset> {
         &self.available_datasets
+    }
+
+    fn get_instructions(&self) -> String {
+        if let Some(additional_instructions) = &self.additional_instructions {
+            format!("{}\n{}", additional_instructions, self.instructions)
+        } else {
+            self.instructions.clone()
+        }
+    }
+
+    pub fn set_additional_instructions(&mut self, instructions: String) {
+        self.additional_instructions = Some(instructions);
     }
 }
 
@@ -2023,6 +2038,7 @@ impl Component for DataTableContainer {
         }
         Ok(None)
     }
+    
     /// Draw the DataTableContainer and its child widgets to the frame.
     ///
     /// This method lays out the viewing box, data table, instruction area, and any active dialogs as popups.
@@ -2033,7 +2049,7 @@ impl Component for DataTableContainer {
         
         // Calculate instruction area height based on wrapped lines (only if showing instructions)
         let instructions_height = if self.show_instructions {
-            let instructions_text = self.instructions.clone();
+            let instructions_text = self.get_instructions();
             let instructions_wrap_width = area.width.saturating_sub(4).max(1) as usize; // 2 for borders each side
             let wrapped_lines = wrap(&instructions_text, instructions_wrap_width);
             wrapped_lines.len() as u16 + 2 // +2 for border/title
@@ -2104,11 +2120,12 @@ impl Component for DataTableContainer {
 
         // Instruction area (bottom, wrapped) - only if show_instructions is true
         if self.show_instructions {
-            let instructions_text = self.instructions.clone();
+            let instructions_text = self.get_instructions();
             let instructions = Paragraph::new(instructions_text)
                 .block(Block::default().title("Instructions").borders(Borders::ALL))
                 .wrap(Wrap { trim: true })
                 .style(ratatui::style::Style::default().fg(Color::Yellow));
+            Clear.render(chunks[2], frame.buffer_mut()   );
             frame.render_widget(instructions, chunks[2]);
         }
         let col_index = self.datatable.selection.col;

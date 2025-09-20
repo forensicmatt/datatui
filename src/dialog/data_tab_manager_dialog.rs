@@ -5,7 +5,7 @@
 //! data source loaded from the DataManagementDialog.
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap, Tabs};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs};
 use ratatui::text::Span;
 use crate::action::Action;
 use crate::config::Config;
@@ -481,13 +481,15 @@ impl DataTabManagerDialog {
             Ok(())
         } else {
             // Render the main tab manager
-            let instructions = "Ctrl+M: Data Management  Alt+S: Project Settings  Ctrl+S: Manual Sync Tabs  Ctrl+F: Move Tab to Front  Ctrl+B: Move Tab to Back  Ctrl+L: Move Tab Left  Ctrl+R: Move Tab Right  Ctrl+D: Delete Tab  Left/Right or h/l: Navigate Tabs  Esc: Close dialog";
+            let instructions = 
+                "Ctrl+m: Data Management  Alt+s: Project Settings  Ctrl+s: Manual Sync Tabs  
+                Ctrl+f: Move Tab to Front  Ctrl+b: Move Tab to Back  Ctrl+l: Move Tab Left  
+                Ctrl+r: Move Tab Right  Ctrl+d: Delete Tab  Left/Right or h/l: Navigate Tabs  ";
             let show_instructions = self.tabs.is_empty();
             let layout = split_dialog_area(
                 area, show_instructions, Some(instructions)
             );
             let content_area = layout.content_area;
-            let instructions_area = layout.instructions_area;
 
             let block = Block::default()
                     .title("📊 DataTUI ")
@@ -510,8 +512,8 @@ impl DataTabManagerDialog {
             // Render tabs
             self.render_tabs(tab_area, frame.buffer_mut());
             // Render content for active tab
-            self.render_active_tab_content(frame, content_area)?;
-            self.render_instructions(instructions, instructions_area, frame.buffer_mut());
+            self.render_active_tab_content(frame, content_area, instructions)?;
+            // self.render_instructions(instructions, instructions_area, frame.buffer_mut());
 
             // Render ProjectSettings overlay if active
             if self.show_project_settings {
@@ -645,7 +647,7 @@ impl DataTabManagerDialog {
     }
 
     /// Render the content for the active tab
-    fn render_active_tab_content(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
+    fn render_active_tab_content(&mut self, frame: &mut Frame, area: Rect, instructions: &str) -> Result<()> {
         if self.tabs.is_empty() {
             let message = "No tabs available. Use Ctrl+M to open Data Management, then close it to auto-sync tabs.";
             let paragraph = Paragraph::new(message)
@@ -657,6 +659,7 @@ impl DataTabManagerDialog {
 
         if let Some(active_tab) = self.tabs.get(self.active_tab_index)
             && let Some(container) = self.containers.get_mut(&active_tab.id()) {
+                container.additional_instructions = Some(instructions.to_string());
                 // Render the container in the content area
                 // Sync auto expand option from project settings to container before draw
                 container.auto_expand_value_display = self.project_settings_dialog
@@ -667,18 +670,6 @@ impl DataTabManagerDialog {
         }
 
         Ok(())
-    }
-
-    /// Render instructions
-    fn render_instructions(&self, instructions: &str, instructions_area: Option<Rect>, buf: &mut Buffer) {
-        if self.show_instructions
-            && let Some(instructions_area) = instructions_area {
-                let instructions_paragraph = Paragraph::new(instructions)
-                    .block(Block::default().borders(Borders::ALL).title("Instructions"))
-                    .style(Style::default().fg(Color::Yellow))
-                    .wrap(Wrap { trim: true });
-                instructions_paragraph.render(instructions_area, buf);
-        }
     }
 }
 
@@ -740,13 +731,17 @@ impl Component for DataTabManagerDialog {
                 return Ok(None);
             }
             if let Some(Event::Key(key_event)) = Some(Event::Key(key)) {
-                let result = self.data_management_dialog.handle_events(Some(Event::Key(key_event)))?;
+                let result = self.data_management_dialog.handle_events(
+                    Some(Event::Key(key_event))
+                )?;
                 
                 // Check if the dialog should be closed
                 if let Some(Action::CloseDataManagementDialog) = result {
                     self.show_data_management = false;
                     // Auto-sync tabs when DataManagementDialog is closed
-                    if let Err(e) = self.sync_tabs_from_data_management() { return Ok(Some(Action::Error(format!("Failed to auto-sync tabs: {e}")))); }
+                    if let Err(e) = self.sync_tabs_from_data_management() {
+                        return Ok(Some(Action::Error(format!("Failed to auto-sync tabs: {e}"))));
+                    }
 
                     // Update all containers with the latest available dataframes
                     let _ = self.update_all_containers_dataframes();
@@ -826,7 +821,7 @@ impl Component for DataTabManagerDialog {
                         Ok(None)
                     }
                     KeyCode::Left if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Navigate to previous tab
+                    // Navigate to previous tab
                         if !self.tabs.is_empty() {
                             let new_index = if self.active_tab_index == 0 {
                                 self.tabs.len() - 1
@@ -838,6 +833,18 @@ impl Component for DataTabManagerDialog {
                         Ok(None)
                     }
                     KeyCode::Right if key.modifiers.contains(KeyModifiers::ALT) => {
+                        // Navigate to next tab
+                        if !self.tabs.is_empty() {
+                            let new_index = if self.active_tab_index == self.tabs.len() - 1 {
+                                0
+                            } else {
+                                self.active_tab_index + 1
+                            };
+                            let _ = self.switch_tab(new_index);
+                        }
+                        Ok(None)
+                    }
+                    KeyCode::Tab => {
                         // Navigate to next tab
                         if !self.tabs.is_empty() {
                             let new_index = if self.active_tab_index == self.tabs.len() - 1 {
