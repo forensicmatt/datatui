@@ -1,0 +1,113 @@
+name: Publish to crates.io
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 0.1.2)'
+        required: false
+        type: string
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 0.1.2). If omitted, requires a vX.Y.Z or X.Y.Z tag.'
+        required: false
+
+jobs:
+  publish:
+    name: Publish crate
+    runs-on: ubuntu-latest
+    env:
+      CRATES_IO_CRATE: datatui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Determine expected version (from input or tag)
+        id: version
+        shell: bash
+        env:
+          WF_VERSION: ${{ inputs.version || github.event.inputs.version || '' }}
+        run: |
+          set -euo pipefail
+          INPUT_VERSION="${WF_VERSION:-}"
+          TAG_NAME="${GITHUB_REF_NAME:-}"
+
+          if [[ -n "$INPUT_VERSION" ]]; then
+            EXPECTED_VERSION="$INPUT_VERSION"
+          else
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              # Accept tags like v0.1.2 or 0.1.2
+              if [[ "$TAG_NAME" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+                EXPECTED_VERSION="${BASH_REMATCH[1]}"
+              else
+                echo "Tag format must be vX.Y.Z or X.Y.Z" >&2
+                exit 1
+              fi
+            else
+              echo "No version input provided and this is not a tag push. Aborting." >&2
+              exit 1
+            fi
+          fi
+
+          echo "expected=$EXPECTED_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Read crate version from Cargo.toml
+        id: manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Use cargo metadata to read the canonical version
+          CRATE_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r \
+            ".packages[] | select(.name==\"$CRATES_IO_CRATE\").version")
+          if [[ -z "$CRATE_VERSION" || "$CRATE_VERSION" == "null" ]]; then
+            echo "Failed to read crate version from metadata" >&2
+            exit 1
+          fi
+          echo "crate_version=$CRATE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag/input version matches Cargo.toml
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.version.outputs.expected }}" != "${{ steps.manifest.outputs.crate_version }}" ]]; then
+            echo "Version mismatch: expected ${{ steps.version.outputs.expected }} but Cargo.toml has ${{ steps.manifest.outputs.crate_version }}" >&2
+            exit 1
+          fi
+
+      - name: Check if version already exists on crates.io
+        id: exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSIONS=$(curl -sS https://crates.io/api/v1/crates/$CRATES_IO_CRATE | jq -r '.versions[].num')
+          if echo "$VERSIONS" | grep -Fx "${{ steps.manifest.outputs.crate_version }}" >/dev/null; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "Version already published on crates.io; skipping publish."
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cargo publish (dry run)
+        if: steps.exists.outputs.already == 'false'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          cargo publish --dry-run
+
+      - name: Cargo publish
+        if: steps.exists.outputs.already == 'false'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          cargo publish
+
+

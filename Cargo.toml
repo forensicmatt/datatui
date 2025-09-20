@@ -1,9 +1,11 @@
 [package]
 name = "datatui"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "DataTUI: A fast, keyboard-first terminal data viewer."
 authors = ["Matthew Seyer <matthew.seyer@gmail.com>"]
+license = "Apache-2.0"
+readme = "README.md"
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

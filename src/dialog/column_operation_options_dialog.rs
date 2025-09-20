@@ -610,12 +610,8 @@ impl ColumnOperationOptionsDialog {
 
     fn get_number_input_by_index(&self, index: usize) -> &TextArea<'static> {
         match self.operation {
-            ColumnOperationKind::GenerateEmbeddings => {
-                if index == 3 { &self.num_dimensions_input } else { &self.num_dimensions_input }
-            }
-            ColumnOperationKind::Pca => {
-                if index == 2 { &self.target_embedding_size_input } else { &self.target_embedding_size_input }
-            }
+            ColumnOperationKind::GenerateEmbeddings => &self.num_dimensions_input,
+            ColumnOperationKind::Pca => &self.target_embedding_size_input,
             ColumnOperationKind::Cluster => {
                 if matches!(self.cluster_algorithm, ClusterAlgorithm::Kmeans) {
                     match index {
@@ -637,12 +633,8 @@ impl ColumnOperationOptionsDialog {
 
     fn get_number_input_by_index_mut(&mut self, index: usize) -> &mut TextArea<'static> {
         match self.operation {
-            ColumnOperationKind::GenerateEmbeddings => {
-                if index == 3 { &mut self.num_dimensions_input } else { &mut self.num_dimensions_input }
-            }
-            ColumnOperationKind::Pca => {
-                if index == 2 { &mut self.target_embedding_size_input } else { &mut self.target_embedding_size_input }
-            }
+            ColumnOperationKind::GenerateEmbeddings => &mut self.num_dimensions_input,
+            ColumnOperationKind::Pca => &mut self.target_embedding_size_input,
             ColumnOperationKind::Cluster => {
                 if matches!(self.cluster_algorithm, ClusterAlgorithm::Kmeans) {
                     match index {
@@ -683,12 +675,11 @@ impl ColumnOperationOptionsDialog {
     fn paste_from_clipboard_into_text_field(&mut self) {
         if self.buttons_mode { return; }
         if !self.is_current_field_text() { return; }
-        if let Ok(mut clipboard) = Clipboard::new() {
-            if let Ok(text) = clipboard.get_text() {
-                let first_line = text.lines().next().unwrap_or("").to_string();
-                if self.selected_field_index == 0 { self.new_column_input.insert_str(&first_line); self.new_column_name = self.new_column_input.lines().join("\n"); }
-                if self.operation == ColumnOperationKind::GenerateEmbeddings && self.selected_field_index == 2 { self.model_name_input.insert_str(&first_line); self.model_name = self.model_name_input.lines().join("\n"); }
-            }
+        if let Ok(mut clipboard) = Clipboard::new()
+            && let Ok(text) = clipboard.get_text() {
+            let first_line = text.lines().next().unwrap_or("").to_string();
+            if self.selected_field_index == 0 { self.new_column_input.insert_str(&first_line); self.new_column_name = self.new_column_input.lines().join("\n"); }
+            if self.operation == ColumnOperationKind::GenerateEmbeddings && self.selected_field_index == 2 { self.model_name_input.insert_str(&first_line); self.model_name = self.model_name_input.lines().join("\n"); }
         }
     }
 

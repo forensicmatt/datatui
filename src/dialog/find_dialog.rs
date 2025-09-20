@@ -110,6 +110,7 @@ impl FindDialog {
             ActionsRow => Pattern,
         }
     }
+
     fn prev_field(&self) -> FindDialogField {
         use FindDialogField::*;
         match self.active_field {
@@ -167,7 +168,7 @@ impl FindDialog {
                 } else {
                     Style::default().fg(Color::Black).bg(Color::Cyan)
                 };
-                buf.set_string(x_pos, y, &c.to_string(), style);
+                buf.set_string(x_pos, y, c.to_string(), style);
                 x_pos += 1;
             }
             
@@ -221,7 +222,7 @@ impl FindDialog {
             ("Find All", FindActionSelected::FindAll),
         ];
         let mut x = start_x;
-        for (_i, (label, action)) in actions.iter().enumerate() {
+        for (label, action) in actions.iter() {
             let style = if self.active_field == FindDialogField::ActionsRow && self.action_selected == *action {
                 Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
             } else if self.action_selected == *action {
@@ -234,7 +235,7 @@ impl FindDialog {
         }
         // Overlay error block if in error mode
         if let FindDialogMode::Error(ref msg) = self.mode {
-            let block_width = inner_area.width.saturating_sub(10).min(40).max(20);
+            let block_width = inner_area.width.saturating_sub(10).clamp(20, 40);
             let block_height = 5;
             let block_x = inner_area.x + (inner_area.width.saturating_sub(block_width)) / 2;
             let block_y = inner_area.y + (inner_area.height.saturating_sub(block_height)) / 2;
@@ -266,7 +267,7 @@ impl FindDialog {
         }
         // Overlay count block if in count mode
         if let FindDialogMode::Count(ref msg) = self.mode {
-            let block_width = inner_area.width.saturating_sub(10).min(40).max(20);
+            let block_width = inner_area.width.saturating_sub(10).clamp(20, 40);
             let block_height = 5;
             let block_x = inner_area.x + (inner_area.width.saturating_sub(block_width)) / 2;
             let block_y = inner_area.y + (inner_area.height.saturating_sub(block_height)) / 2;
@@ -297,14 +298,13 @@ impl FindDialog {
             buf.set_string(msg_x, msg_y + 1, hint, hint_style);
         }
         // Instructions area
-        if self.show_instructions {
-            if let Some(instructions_area) = instructions_area {
-                let instructions_paragraph = Paragraph::new(instructions)
-                    .block(Block::default().borders(Borders::ALL).title("Instructions"))
-                    .style(Style::default().fg(Color::Yellow))
-                    .wrap(Wrap { trim: true });
-                instructions_paragraph.render(instructions_area, buf);
-            }
+        if self.show_instructions
+            && let Some(instructions_area) = instructions_area {
+            let instructions_paragraph = Paragraph::new(instructions)
+                .block(Block::default().borders(Borders::ALL).title("Instructions"))
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: true });
+            instructions_paragraph.render(instructions_area, buf);
         }
         1
     }
@@ -469,14 +469,13 @@ impl FindDialog {
                     }
                 }
                 KeyCode::Backspace => {
-                    if self.active_field == FindDialogField::Pattern {
-                        if self.search_pattern_cursor > 0 && !self.search_pattern.is_empty() {
-                            let cursor = self.search_pattern_cursor;
-                            let mut chars: Vec<char> = self.search_pattern.chars().collect();
-                            chars.remove(cursor - 1);
-                            self.search_pattern = chars.into_iter().collect();
-                            self.search_pattern_cursor -= 1;
-                        }
+                    if self.active_field == FindDialogField::Pattern
+                        && self.search_pattern_cursor > 0 && !self.search_pattern.is_empty() {
+                        let cursor = self.search_pattern_cursor;
+                        let mut chars: Vec<char> = self.search_pattern.chars().collect();
+                        chars.remove(cursor - 1);
+                        self.search_pattern = chars.into_iter().collect();
+                        self.search_pattern_cursor -= 1;
                     }
                 }
                 KeyCode::Delete => {
@@ -509,8 +508,8 @@ impl Component for FindDialog {
     fn handle_events(&mut self, _event: Option<crate::tui::Event>) -> Result<Option<Action>> {
         Ok(None)
     }
-    fn handle_key_event(&mut self, _key: KeyEvent) -> Result<Option<Action>> {
-        Ok(None)
+    fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        Ok(self.handle_key_event(key))
     }
     fn handle_mouse_event(&mut self, _mouse: crossterm::event::MouseEvent) -> Result<Option<Action>> {
         Ok(None)

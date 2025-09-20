@@ -249,12 +249,11 @@ impl TableExportDialog {
                         None
                     }
                     KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if self.file_path_focused && let Ok(mut clipboard) = Clipboard::new() {
-                            if let Ok(text) = clipboard.get_text() {
+                        if self.file_path_focused && let Ok(mut clipboard) = Clipboard::new()
+                            && let Ok(text) = clipboard.get_text() {
                                 let first_line = text.lines().next().unwrap_or("").to_string();
                                 self.set_file_path(first_line);
                             }
-                        }
                         None
                     }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {

@@ -81,7 +81,7 @@ impl ExcelOperations {
                         Data::DateTime(d) => d.as_f64().to_string(),
                         Data::DateTimeIso(s) => s.clone(),
                         Data::DurationIso(s) => s.clone(),
-                        Data::Error(e) => format!("ERROR: {:?}", e),
+                        Data::Error(e) => format!("ERROR: {e:?}"),
                     };
                     preview_row.push(cell_value);
                 }

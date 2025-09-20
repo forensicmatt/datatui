@@ -31,6 +31,10 @@ pub struct SqlDialog {
     pub dataset_name_input: String, // input for new dataset name
 }
 
+impl Default for SqlDialog {
+    fn default() -> Self { Self::new() }
+}
+
 impl SqlDialog {
     pub fn new() -> Self {
         let mut textarea = TextArea::default();
@@ -56,7 +60,7 @@ impl SqlDialog {
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {
         Clear.render(area, buf);
-        let instructions = "Ctrl+Enter:Run  Ctrl+Shift+Enter:New Dataset  Ctrl+l:Clear  Ctrl+r:Restore  Ctrl+o:OpenFile  Ctrl+p:Paste  Esc:Cancel";
+        let instructions = "Ctrl+Enter:Run  Ctrl+Shift+Enter:New Dataset  Ctrl+a:SelectAll  Ctrl+c:Copy  Ctrl+l:Clear  Ctrl+r:Restore  Ctrl+o:OpenFile  Ctrl+p:Paste  Esc:Cancel";
         // Outer container with double border
         let outer_block = Block::default()
             .title("SQL")
@@ -78,8 +82,8 @@ impl SqlDialog {
                 );
                 self.textarea.set_line_number_style(Style::default().bg(Color::DarkGray));
                 ratatui::widgets::Widget::render(&self.textarea, content_area, buf);
-                if self.error_active {
-                    if let SqlDialogMode::Error(msg) = &self.mode {
+                if self.error_active
+                    && let SqlDialogMode::Error(msg) = &self.mode {
                         let error_lines = wrap(msg, wrap_width);
                         let error_y = content_area.y + self.textarea.lines().len() as u16 + 1;
                         buf.set_string(content_area.x, error_y, "Error:", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD));
@@ -88,10 +92,9 @@ impl SqlDialog {
                         }
                         buf.set_string(content_area.x, error_y + 1 + error_lines.len() as u16, "Press Esc or Enter to close error", Style::default().fg(Color::Yellow));
                     }
-                }
             }
             SqlDialogMode::Error(msg) => {
-                let y = content_area.y + 0;
+                let y = content_area.y;
                 buf.set_string(content_area.x, y, "Error:", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD));
                 let error_lines = wrap(msg, wrap_width);
                 for (i, line) in error_lines.iter().enumerate() {
@@ -122,14 +125,13 @@ impl SqlDialog {
                 buf.set_string(input_area.x, input_area.y + 3, "Enter: Create Dataset  Esc: Cancel", Style::default().fg(Color::Gray));
             }
         }
-        if self.show_instructions {
-            if let Some(instructions_area) = instructions_area {
+        if self.show_instructions
+            && let Some(instructions_area) = instructions_area {
                 let instructions_paragraph = Paragraph::new(instructions)
                     .block(Block::default().borders(Borders::ALL).title("Instructions"))
                     .style(Style::default().fg(Color::Yellow))
                     .wrap(Wrap { trim: true });
                 instructions_paragraph.render(instructions_area, buf);
-            }
         }
         1
     }
@@ -140,11 +142,10 @@ impl SqlDialog {
         use tui_textarea::{Input as TuiInput};
         
         // Handle Ctrl+I to toggle instructions
-        if key.kind == KeyEventKind::Press {
-            if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                self.show_instructions = !self.show_instructions;
-                return None;
-            }
+        if key.kind == KeyEventKind::Press
+            && key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.show_instructions = !self.show_instructions;
+            return None;
         }
         
         match &mut self.mode {
@@ -164,6 +165,19 @@ impl SqlDialog {
                 }
                 if key.kind == KeyEventKind::Press {
                     match key.code {
+                        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            // Ctrl+a: select all text in the textarea
+                            self.textarea.select_all();
+                            return None;
+                        }
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            // Ctrl+c: copy full textarea to clipboard
+                            if let Ok(mut clipboard) = Clipboard::new() {
+                                let text = self.textarea.lines().join("\n");
+                                let _ = clipboard.set_text(text);
+                            }
+                            return None;
+                        }
                         KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) && key.modifiers.contains(KeyModifiers::SHIFT) => {
                             // Ctrl+Shift+Enter: create new dataset
                             self.mode = SqlDialogMode::NewDatasetInput;
@@ -196,10 +210,9 @@ impl SqlDialog {
                             return None;
                         }
                         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            if let Ok(mut clipboard) = Clipboard::new() {
-                                if let Ok(text) = clipboard.get_text() {
-                                    self.textarea.insert_str(&text);
-                                }
+                            if let Ok(mut clipboard) = Clipboard::new()
+                                && let Ok(text) = clipboard.get_text() {
+                                self.textarea.insert_str(&text);
                             }
                             return None;
                         }
@@ -212,8 +225,8 @@ impl SqlDialog {
                 }
             }
             SqlDialogMode::FileBrowser => {
-                if let Some(browser) = &mut self.file_browser {
-                    if let Some(action) = browser.handle_key_event(key) {
+                if let Some(browser) = &mut self.file_browser
+                    && let Some(action) = browser.handle_key_event(key) {
                         match action {
                             FileBrowserAction::Selected(path) => {
                                 match std::fs::read_to_string(&path) {
@@ -238,7 +251,6 @@ impl SqlDialog {
                             }
                         }
                     }
-                }
             }
             SqlDialogMode::NewDatasetInput => {
                 if key.kind == KeyEventKind::Press {
@@ -251,7 +263,7 @@ impl SqlDialog {
                                 // Reset state
                                 self.dataset_name_input.clear();
                                 self.mode = SqlDialogMode::Input;
-                                return Some(Action::SqlDialogApplied(format!("NEW_DATASET:{}:{}", dataset_name, query)));
+                                return Some(Action::SqlDialogApplied(format!("NEW_DATASET:{dataset_name}:{query}")));
                             }
                         }
                         KeyCode::Esc => {

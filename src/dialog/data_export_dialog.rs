@@ -152,14 +152,13 @@ impl DataExportDialog {
             }
         }
 
-        if self.show_instructions {
-            if let Some(inst_area) = instructions_area {
-                let p = Paragraph::new(instructions)
-                    .block(Block::default().borders(Borders::ALL).title("Instructions"))
-                    .style(Style::default().fg(Color::Yellow))
-                    .wrap(Wrap { trim: true });
-                p.render(inst_area, buf);
-            }
+        if self.show_instructions
+            && let Some(inst_area) = instructions_area {
+            let p = Paragraph::new(instructions)
+                .block(Block::default().borders(Borders::ALL).title("Instructions"))
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: true });
+            p.render(inst_area, buf);
         }
     }
 
@@ -242,12 +241,12 @@ impl DataExportDialog {
                         self.format_index = (self.format_index + 1) % 4; None
                     }
                     KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if self.file_path_focused && let Ok(mut clipboard) = Clipboard::new() { if let Ok(text) = clipboard.get_text() { let first_line = text.lines().next().unwrap_or("").to_string(); self.set_file_path(first_line); } }
+                        if self.file_path_focused && let Ok(mut clipboard) = Clipboard::new() && let Ok(text) = clipboard.get_text() { let first_line = text.lines().next().unwrap_or("").to_string(); self.set_file_path(first_line); }
                         None
                     }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => { if let Ok(mut clipboard) = Clipboard::new() { let _ = clipboard.set_text(self.file_path.clone()); } None }
                     KeyCode::Backspace => { if self.file_path_focused { use tui_textarea::Input as TuiInput; let input: TuiInput = key.into(); self.file_path_input.input(input); self.sync_file_path_from_input(); } None }
-                    KeyCode::Char(_c) => { if self.file_path_focused { use tui_textarea::Input as TuiInput; let input: TuiInput = key.into(); self.file_path_input.input(input); self.sync_file_path_from_input(); } return None; }
+                    KeyCode::Char(_c) => { if self.file_path_focused { use tui_textarea::Input as TuiInput; let input: TuiInput = key.into(); self.file_path_input.input(input); self.sync_file_path_from_input(); } None }
                     KeyCode::Esc => { Some(Action::DialogClose) }
                     _ => None,
                 }
@@ -274,11 +273,11 @@ impl DataExportDialog {
         }
     }
 
-    fn ensure_parent(&self, path: &PathBuf) -> color_eyre::Result<()> { if let Some(parent) = path.parent() && !parent.as_os_str().is_empty() { let _ = create_dir_all(parent); } Ok(()) }
+    fn ensure_parent(&self, path: &std::path::Path) -> color_eyre::Result<()> { if let Some(parent) = path.parent() && !parent.as_os_str().is_empty() { let _ = create_dir_all(parent); } Ok(()) }
 
     fn export_text(&self) -> color_eyre::Result<String> {
         let path = PathBuf::from(&self.file_path);
-        self.ensure_parent(&path)?;
+        self.ensure_parent(path.as_path())?;
         let mut file = BufWriter::new(File::create(&path)?);
         // write header
         writeln!(file, "{}", self.headers.join(","))?;
@@ -289,7 +288,7 @@ impl DataExportDialog {
     fn export_jsonl(&self) -> color_eyre::Result<String> {
         use serde_json::json;
         let path = PathBuf::from(&self.file_path);
-        self.ensure_parent(&path)?;
+        self.ensure_parent(path.as_path())?;
         let mut file = BufWriter::new(File::create(&path)?);
         for row in &self.rows {
             let mut obj = serde_json::Map::new();
@@ -310,7 +309,7 @@ impl DataExportDialog {
         }
         let df = polars::prelude::DataFrame::new(cols)?;
         let path = PathBuf::from(&self.file_path);
-        self.ensure_parent(&path)?;
+        self.ensure_parent(path.as_path())?;
         let file = File::create(&path)?;
         let writer = polars::prelude::ParquetWriter::new(file);
         let mut df_copy = df;

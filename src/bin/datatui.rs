@@ -38,7 +38,7 @@ fn main() -> Result<()> {
         Some(LogLevel::Info)  => Some(tracing::Level::INFO),
         Some(LogLevel::Debug) => Some(tracing::Level::DEBUG),
         Some(LogLevel::Trace) => Some(tracing::Level::TRACE),
-        None => None,
+        None => Some(tracing::Level::WARN),
     };
     datatui::logging::init_with(Some(log_path), level)?;
     

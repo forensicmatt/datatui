@@ -7,6 +7,16 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.1.1]
+### Added
+- added ctrl + a (select all) and ctrl + c (copy) to SqlDialog
+
+### Fixed
+- Instruction rendering issues
+- FindAllResults scroll issues
+- Temporarily fixed highlights of text in Spans by stripping out new line chars.
+
+
 ## [0.1.0]
 ### Added
 - Initial Version

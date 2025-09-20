@@ -8,6 +8,9 @@ use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use crate::providers::openai::Client as OpenAIClient;
 
+// Reduce type complexity with a clear alias for the embeddings provider closure type
+type EmbeddingsProvider = Arc<dyn Fn(&[String]) -> PolarsResult<Vec<Vec<f32>>> + Send + Sync>;
+
 fn upper_impl(columns: &mut [Column]) -> PolarsResult<Option<Column>> {
 	if columns.len() != 1 {
 		return Err(PolarsError::ComputeError(
@@ -69,11 +72,11 @@ pub fn new_sql_context() -> SQLContext {
 // Embeddings provider configuration
 // The provider takes a slice of unique strings and returns an embedding vector per input, in order.
 lazy_static! {
-	static ref EMBEDDINGS_PROVIDER: RwLock<Option<Arc<dyn Fn(&[String]) -> PolarsResult<Vec<Vec<f32>>> + Send + Sync>>> = RwLock::new(None);
+	static ref EMBEDDINGS_PROVIDER: RwLock<Option<EmbeddingsProvider>> = RwLock::new(None);
 }
 
 /// Set the embeddings provider used by the `embed` SQL function.
-pub fn set_embeddings_provider(provider: Arc<dyn Fn(&[String]) -> PolarsResult<Vec<Vec<f32>>> + Send + Sync>) {
+pub fn set_embeddings_provider(provider: EmbeddingsProvider) {
 	*EMBEDDINGS_PROVIDER.write().expect("EMBEDDINGS_PROVIDER poisoned") = Some(provider);
 }
 

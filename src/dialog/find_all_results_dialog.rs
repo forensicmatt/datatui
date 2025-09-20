@@ -17,8 +17,9 @@ pub struct FindAllResultsDialog {
     pub selected: usize,
     pub show_instructions: bool,
     pub instructions: String,
-    pub scroll_offset: usize, // Changed from scroll to scroll_offset for consistency
-    pub search_pattern: String, // Store the search pattern for highlighting
+    pub scroll_offset: usize,
+    pub search_pattern: String, // Store the search pattern for 
+    pub visable_rows: usize,
 }
 
 impl FindAllResultsDialog {
@@ -30,11 +31,12 @@ impl FindAllResultsDialog {
             instructions,
             scroll_offset: 0,
             search_pattern,
+            visable_rows: 5,
         }
     }
 
     /// Render the dialog with a scrollable table of results
-    pub fn render(&self, area: Rect, buf: &mut Buffer) -> usize {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
         // Clear the entire area
         Clear.render(area, buf);
 
@@ -51,28 +53,20 @@ impl FindAllResultsDialog {
         let instructions_area = layout.instructions_area;
 
         // Render main content block
-        let block = Block::default().title("All Results").borders(Borders::ALL);
+        let block = Block::default()
+            .title("All Results")
+            .borders(Borders::ALL);
+        let all_results_area = block.inner(content_area);
         block.render(content_area, buf);
-        
-        // Calculate table area (inside the block)
-        let table_area = Rect {
-            x: content_area.x + 1,
-            y: content_area.y + 1,
-            width: content_area.width.saturating_sub(2),
-            height: content_area.height.saturating_sub(2),
-        };
-        
-        // Calculate maximum number of rows that can be displayed
-        let max_rows = table_area.height.saturating_sub(1) as usize; // -1 for header
         
         if self.results.is_empty() {
             // Show "No results found" message
             let no_results = Paragraph::new("No matches found")
                 .style(Style::default().fg(Color::Yellow));
-            no_results.render(table_area, buf);
+            no_results.render(all_results_area, buf);
         } else {
             // Render the results table with scroll bar
-            self.render_results_table(table_area, buf, max_rows);
+            self.render_results_table(all_results_area, buf);
         }
         
         // Render instructions area if available
@@ -83,18 +77,32 @@ impl FindAllResultsDialog {
                 .wrap(Wrap { trim: true });
             instructions_paragraph.render(instructions_area, buf);
         }
-        
-        max_rows
+    }
+
+    /// Ensure the selected row is within the visible viewport by adjusting the scroll offset
+    fn update_scroll_offset(&mut self, visible_rows: usize) {
+        let selected = self.selected;
+        let total_items = self.results.len();
+
+        if selected < self.scroll_offset {
+            self.scroll_offset = selected;
+        } else if total_items > visible_rows && selected >= self.scroll_offset + visible_rows {
+            // Scroll so that the selected item becomes the last visible row
+            self.scroll_offset = selected + 1 - visible_rows;
+        }
     }
 
     /// Render the scrollable results table with vertical scroll bar
-    fn render_results_table(&self, area: Rect, buf: &mut Buffer, max_rows: usize) {
+    fn render_results_table(&mut self, area: Rect, buf: &mut Buffer) {
         // Define column widths (adjust as needed)
         let col_widths = [
             Constraint::Length(8),  // Row
             Constraint::Length(15), // Column
             Constraint::Min(20),    // Context (flexible)
         ];
+
+        let max_rows = area.height.saturating_sub(1) as usize;
+        self.visable_rows = max_rows;
         
         // Calculate visible range
         let start_idx = self.scroll_offset;
@@ -145,9 +153,14 @@ impl FindAllResultsDialog {
                 let row_idx = start_idx + i;
                 let is_selected = row_idx == self.selected;
                 let is_zebra = row_idx % 2 == 0; // Zebra striping
-                
-                // Create highlighted context with search hit highlighted
-                let highlighted_context = self.highlight_search_hit(&result.context);
+
+                // Remove newlines and carriage returns from the context
+                // because in a Span they are treated as separate lines and it causes issues
+                // with rendering the context in the dialog.
+                let context_str = result.context
+                    .replace("\n", "")
+                    .replace("\r", "");
+                let highlighted_context = self.highlight_search_hit(&context_str);
                 
                 let mut style = Style::default();
                 if is_selected {
@@ -209,12 +222,13 @@ impl FindAllResultsDialog {
             }
             
             // Add highlighted match
+            let matched_style = Style::default()
+                .bg(Color::Yellow)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD);
             spans.push(Span::styled(
                 context[actual_start..actual_end].to_string(),
-                Style::default()
-                    .bg(Color::Yellow)
-                    .fg(Color::Black)
-                    .add_modifier(Modifier::BOLD)
+                matched_style
             ));
             
             last_end = actual_end;
@@ -235,7 +249,9 @@ impl FindAllResultsDialog {
     }
 
     /// Handle keyboard events for navigation and actions
-    pub fn handle_key_event(&mut self, key: KeyEvent, max_rows: usize) -> Option<Action> {
+    pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
+        let max_rows = self.visable_rows;
+        
         if key.kind != KeyEventKind::Press {
             return None;
         }
@@ -253,9 +269,7 @@ impl FindAllResultsDialog {
                     let page_size = max_rows.saturating_sub(1);
                     if self.selected >= page_size {
                         self.selected -= page_size;
-                        if self.selected < self.scroll_offset {
-                            self.scroll_offset = self.selected;
-                        }
+                        self.update_scroll_offset(max_rows);
                     } else {
                         self.selected = 0;
                         self.scroll_offset = 0;
@@ -265,9 +279,7 @@ impl FindAllResultsDialog {
                     if self.selected > 0 {
                         self.selected -= 1;
                         // Adjust scroll if needed
-                        if self.selected < self.scroll_offset {
-                            self.scroll_offset = self.selected;
-                        }
+                        self.update_scroll_offset(max_rows);
                     }
                 }
                 None
@@ -283,19 +295,13 @@ impl FindAllResultsDialog {
                         self.selected = max_idx;
                     }
                     // Adjust scroll if needed
-                    let visible_end = self.scroll_offset + (max_rows - 4);
-                    if self.selected >= visible_end {
-                        self.scroll_offset = self.selected.saturating_sub(max_rows - 4);
-                    }
+                    self.update_scroll_offset(max_rows);
                 } else {
                     // Move selection down
                     if self.selected < self.results.len().saturating_sub(1) {
                         self.selected += 1;
                         // Adjust scroll if needed
-                        let visible_end = self.scroll_offset + (max_rows - 4);
-                        if self.selected > visible_end {
-                            self.scroll_offset = self.selected.saturating_sub(max_rows - 4);
-                        }
+                        self.update_scroll_offset(max_rows);
                     }
                 }
                 None
@@ -310,21 +316,15 @@ impl FindAllResultsDialog {
                 // Go to last result
                 self.selected = self.results.len().saturating_sub(1);
                 // Adjust scroll to show the last result
-                if self.selected >= max_rows {
-                    self.scroll_offset = self.selected.saturating_sub(max_rows - 4);
-                }
+                self.update_scroll_offset(max_rows);
                 None
             }
             KeyCode::Enter => {
                 // Go to the selected result in the main DataTable
-                if let Some(result) = self.results.get(self.selected) {
-                    Some(Action::GoToResult {
-                        row: result.row,
-                        column: result.column.clone(),
-                    })
-                } else {
-                    None
-                }
+                self.results.get(self.selected).map(|result| Action::GoToResult {
+                    row: result.row,
+                    column: result.column.clone(),
+                })
             }
             KeyCode::Esc => {
                 // Close the dialog

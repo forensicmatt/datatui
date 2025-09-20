@@ -82,7 +82,7 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use polars_lazy::frame::IntoLazy;
 use arboard::Clipboard;
-use tracing::{info, error};
+use tracing::{debug, info, error};
 use textwrap::wrap;
 use ratatui::style::Color;
 use ratatui::text::{Line, Span};
@@ -121,6 +121,7 @@ pub struct DataTableContainer {
     pub datatable: DataTable,
     pub style: StyleConfig,
     pub instructions: String,
+    pub additional_instructions: Option<String>,
     pub show_instructions: bool,
     pub auto_expand_value_display: bool,
     #[allow(dead_code)]
@@ -279,7 +280,7 @@ impl DataTableContainer {
         let mut lc: ListChunked = row_embeddings_iter.collect();
         // Determine column name
         let mut new_name = if new_column_name.trim().is_empty() {
-            format!("{}_emb", source_column)
+            format!("{source_column}_emb")
         } else {
             new_column_name.to_string()
         };
@@ -287,7 +288,7 @@ impl DataTableContainer {
             .into_iter()
             .any(|n| n.as_str() == new_name)
         {
-            new_name = format!("{}__emb", new_name);
+            new_name = format!("{new_name}__emb");
         }
         lc.rename(PlSmallStr::from_str(&new_name));
         let list_series = lc.into_series();
@@ -360,8 +361,8 @@ impl DataTableContainer {
             Some(Series::new(PlSmallStr::EMPTY, row_vals))
         });
         let mut lc: ListChunked = row_iter.collect();
-        let mut new_name = if new_column_name.trim().is_empty() { format!("{}_pca", source_column) } else { new_column_name.to_string() };
-        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{}__pca", new_name); }
+        let mut new_name = if new_column_name.trim().is_empty() { format!("{source_column}_pca") } else { new_column_name.to_string() };
+        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{new_name}__pca"); }
         lc.rename(PlSmallStr::from_str(&new_name));
         let list_series = lc.into_series();
         let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(df_ref.width() + 1);
@@ -444,8 +445,8 @@ impl DataTableContainer {
         // Append labels as a new Int32 column
         let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(df_ref.width() + 1);
         for c in df_ref.get_columns() { cols.push(c.clone()); }
-        let mut new_name = if new_column_name.trim().is_empty() { format!("{}_cluster", source_column) } else { new_column_name.to_string() };
-        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{}__cluster", new_name); }
+        let mut new_name = if new_column_name.trim().is_empty() { format!("{source_column}_cluster") } else { new_column_name.to_string() };
+        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{new_name}__cluster"); }
         // Convert labels to i32; for DBSCAN we used usize::MAX to denote noise -> -1
         let labels_i32: Vec<i32> = labels
             .into_iter()
@@ -458,6 +459,7 @@ impl DataTableContainer {
         self.datatable.dataframe.set_current_df(new_df);
         Ok(())
     }
+    
     /// Set the SQL statement for the SQL dialog
     pub fn set_sql_statement(&mut self, sql_statement: String) {
         self.sql_dialog.set_textarea_content(sql_statement);
@@ -518,7 +520,7 @@ impl DataTableContainer {
                 .collect()
         );
         let find_dialog = FindDialog::new();
-        let instructions = "Ctrl+f: Find  Ctrl+s: Sort  Shift+S: Add Sort Column  Ctrl+e: Filter  Shift+E: Quick Filter  Ctrl+t: SQL  Ctrl+j: JMES  Ctrl+w: Widths  Ctrl+d: Details  Shift+←/→: Move Column  Ctrl+c: Copy  Ctrl+i: Toggle Instructions  Ctrl+z: Quit".to_string();
+        let instructions = "Ctrl+f: Find  Ctrl+s: Sort  Shift+s: Quick Sort  Ctrl+e: Filter  Shift+e Quick Filter  Ctrl+t: SQL  Ctrl+j: JMES  Ctrl+w: Widths  Ctrl+d: Details  Shift+←/→: Move Column  Ctrl+c: Copy  Ctrl+i: Toggle Instructions  Ctrl+z: Quit".to_string();
         // Capture SQL registration name before moving `datatable`
         let sql_name = datatable.dataframe.metadata.name.clone();
         let dataframe_details_dialog = DataFrameDetailsDialog::new();
@@ -529,6 +531,7 @@ impl DataTableContainer {
             datatable,
             style,
             instructions,
+            additional_instructions: None,
             show_instructions: true,
             auto_expand_value_display: false,
             jmes_runtime,
@@ -607,7 +610,7 @@ impl DataTableContainer {
             Some(polars::prelude::AnyValue::Int8(x)) => serde_json::Value::Number((x as i64).into()),
             Some(polars::prelude::AnyValue::Int16(x)) => serde_json::Value::Number((x as i64).into()),
             Some(polars::prelude::AnyValue::Int32(x)) => serde_json::Value::Number((x as i64).into()),
-            Some(polars::prelude::AnyValue::Int64(x)) => serde_json::Value::Number((x as i64).into()),
+            Some(polars::prelude::AnyValue::Int64(x)) => serde_json::Value::Number(x.into()),
             Some(polars::prelude::AnyValue::UInt8(x)) => serde_json::Value::Number((x as u64).into()),
             Some(polars::prelude::AnyValue::UInt16(x)) => serde_json::Value::Number((x as u64).into()),
             Some(polars::prelude::AnyValue::UInt32(x)) => serde_json::Value::Number((x as u64).into()),
@@ -641,8 +644,7 @@ impl DataTableContainer {
         for col in col_names {
             let v = df.column(col)
                 .ok()
-                .and_then(|s| s.get(row_idx).ok())
-                .map(|v| v.into());
+                .and_then(|s| s.get(row_idx).ok());
             let json_v = Self::anyvalue_opt_to_json(v);
             row_obj.insert(col.clone(), json_v);
         }
@@ -696,7 +698,7 @@ impl DataTableContainer {
             let mut col_vals: Vec<String> = Vec::with_capacity(objs.len());
             for obj in objs {
                 let s = obj.get(&key)
-                    .map(|v| Self::json_to_string(v))
+                    .map(Self::json_to_string)
                     .unwrap_or_default();
                 col_vals.push(s);
             }
@@ -833,11 +835,10 @@ impl DataTableContainer {
 
         // Per-row final field map (string values), initialized from original row string values
         let mut row_maps: Vec<std::collections::BTreeMap<String, String>> = Vec::with_capacity(nrows);
-        row_maps.resize_with(nrows, || std::collections::BTreeMap::new());
+        row_maps.resize_with(nrows, std::collections::BTreeMap::new);
 
         // Initialize with existing columns as strings
-        for row_idx in 0..nrows {
-            let map = &mut row_maps[row_idx];
+        for (row_idx, map) in row_maps.iter_mut().enumerate().take(nrows) {
             for col in &col_names {
                 let v = source_df.column(col).ok().and_then(|s| s.get(row_idx).ok());
                 map.insert(col.clone(), Self::anyvalue_opt_to_string(v));
@@ -845,7 +846,7 @@ impl DataTableContainer {
         }
 
         // Apply expressions row-wise
-        for row_idx in 0..nrows {
+        for (row_idx, row_map) in row_maps.iter_mut().enumerate().take(nrows) {
             // Build JSON input for this row
             let row_obj: JsonMap<String, JsonValue> = Self::build_row_object_json(&source_df, &col_names, row_idx);
             let var = jmespath::Variable::try_from(JsonValue::Object(row_obj))
@@ -863,7 +864,7 @@ impl DataTableContainer {
                     } else {
                         result.to_string()
                     };
-                    row_maps[row_idx].insert(name.clone(), s);
+                    row_map.insert(name.clone(), s);
                 } else {
                     // Merge object or accept null
                     if result.is_null() {
@@ -873,7 +874,7 @@ impl DataTableContainer {
                     let obj = Self::jmes_result_to_object_map(&result, row_idx)?;
                     for (k, v) in obj {
                         let s = Self::json_to_string(&v);
-                        row_maps[row_idx].insert(k.clone(), s);
+                        row_map.insert(k.clone(), s);
                     }
                 }
             }
@@ -902,8 +903,9 @@ impl DataTableContainer {
             v => v.to_string(),
         };
         if let (Some(pattern), Some(search_mode), Some(options)) = 
-            (&self.current_search_pattern, &self.current_search_mode, &self.current_search_options) {
-            if !pattern.is_empty() {
+            (&self.current_search_pattern, &self.current_search_mode, &self.current_search_options)
+            && !pattern.is_empty() {
+                let cell_value_safe = cell_value.replace("\n", "").replace("\r", "");
                 match search_mode {
                     SearchMode::Normal => {
                         // Normal text search
@@ -913,9 +915,9 @@ impl DataTableContainer {
                             pattern.to_lowercase() 
                         };
                         let cell_text = if options.match_case { 
-                            cell_value.clone() 
+                            cell_value_safe.clone() 
                         } else { 
-                            cell_value.to_lowercase() 
+                            cell_value_safe.to_lowercase() 
                         };
                         
                         if options.whole_word {
@@ -927,17 +929,17 @@ impl DataTableContainer {
                                 if let Some(pos) = cell_value.to_lowercase().find(search_word) {
                                     let mut spans = Vec::new();
                                     if pos > 0 {
-                                        spans.push(Span::raw(cell_value[..pos].to_string()));
+                                        spans.push(Span::raw(cell_value_safe[..pos].to_string()));
                                     }
                                     spans.push(Span::styled(
-                                        cell_value[pos..pos + search_word.len()].to_string(),
+                                        cell_value_safe[pos..pos + search_word.len()].to_string(),
                                         ratatui::style::Style::default()
                                             .fg(ratatui::style::Color::Black)
                                             .bg(ratatui::style::Color::Yellow)
                                             .add_modifier(ratatui::style::Modifier::BOLD)
                                     ));
                                     if pos + search_word.len() < cell_value.len() {
-                                        spans.push(Span::raw(cell_value[pos + search_word.len()..].to_string()));
+                                        spans.push(Span::raw(cell_value_safe[pos + search_word.len()..].to_string()));
                                     }
                                     return Ok(Line::from(spans));
                                 }
@@ -947,17 +949,17 @@ impl DataTableContainer {
                             if let Some(pos) = cell_text.find(&search_text) {
                                 let mut spans = Vec::new();
                                 if pos > 0 {
-                                    spans.push(Span::raw(cell_value[..pos].to_string()));
+                                    spans.push(Span::raw(cell_value_safe[..pos].to_string()));
                                 }
                                 spans.push(Span::styled(
-                                    cell_value[pos..pos + search_text.len()].to_string(),
+                                    cell_value_safe[pos..pos + search_text.len()].to_string(),
                                     ratatui::style::Style::default()
                                         .fg(ratatui::style::Color::Black)
                                         .bg(ratatui::style::Color::Yellow)
                                         .add_modifier(ratatui::style::Modifier::BOLD)
                                 ));
-                                if pos + search_text.len() < cell_value.len() {
-                                    spans.push(Span::raw(cell_value[pos + search_text.len()..].to_string()));
+                                if pos + search_text.len() < cell_value_safe.len() {
+                                    spans.push(Span::raw(cell_value_safe[pos + search_text.len()..].to_string()));
                                 }
                                 return Ok(Line::from(spans));
                             }
@@ -968,20 +970,20 @@ impl DataTableContainer {
                         let re = if options.match_case {
                             Regex::new(pattern)
                         } else {
-                            Regex::new(&format!("(?i){}", pattern))
+                            Regex::new(&format!("(?i){pattern}"))
                         };
                         if let Ok(re) = re {
                             let mut spans = Vec::new();
                             let mut last_end = 0;
-                            
-                            for mat in re.find_iter(&cell_value) {
+                            let cell_value_safe = cell_value.replace("\n", "").replace("\r", "");
+                            for mat in re.find_iter(&cell_value_safe) {
                                 // Add text before match
                                 if mat.start() > last_end {
-                                    spans.push(Span::raw(cell_value[last_end..mat.start()].to_string()));
+                                    spans.push(Span::raw(cell_value_safe[last_end..mat.start()].to_string()));
                                 }
                                 // Add highlighted match
                                 spans.push(Span::styled(
-                                    cell_value[mat.start()..mat.end()].to_string(),
+                                    cell_value_safe[mat.start()..mat.end()].to_string(),
                                     ratatui::style::Style::default()
                                         .fg(ratatui::style::Color::Black)
                                         .bg(ratatui::style::Color::Yellow)
@@ -991,14 +993,13 @@ impl DataTableContainer {
                             }
                             // Add remaining text
                             if last_end < cell_value.len() {
-                                spans.push(Span::raw(cell_value[last_end..].to_string()));
+                                spans.push(Span::raw(cell_value_safe[last_end..].to_string()));
                             }
                             return Ok(Line::from(spans));
                         }
                     }
                 }
             }
-        }
         // No highlighting needed
         Ok(Line::from(cell_value))
     }
@@ -1029,6 +1030,18 @@ impl DataTableContainer {
     /// Get the available DataFrames for SQL context.
     pub fn get_available_datasets(&self) -> &HashMap<String, LoadedDataset> {
         &self.available_datasets
+    }
+
+    fn get_instructions(&self) -> String {
+        if let Some(additional_instructions) = &self.additional_instructions {
+            format!("{}\n{}", additional_instructions, self.instructions)
+        } else {
+            self.instructions.clone()
+        }
+    }
+
+    pub fn set_additional_instructions(&mut self, instructions: String) {
+        self.additional_instructions = Some(instructions);
     }
 }
 
@@ -1075,23 +1088,11 @@ impl Component for DataTableContainer {
             // Ignore all input while busy to prevent navigation/interaction
             return Ok(None);
         }
+
         // Route key events to FindAllResultsDialog if active (check this first)
         if self.find_all_results_dialog_active {
-            if let Some(dialog) = &mut self.find_all_results_dialog {
-                // Calculate max_rows for the dialog
-                let max_rows = if let Some(area) = self.last_find_all_results_dialog_area {
-                    let table_area = Rect {
-                        x: area.x + 1,
-                        y: area.y + 1,
-                        width: area.width.saturating_sub(2),
-                        height: area.height.saturating_sub(2),
-                    };
-                    table_area.height.saturating_sub(1) as usize // -1 for header
-                } else {
-                    20 // Default fallback
-                };
-                
-                if let Some(action) = dialog.handle_key_event(key, max_rows) {
+            if let Some(dialog) = &mut self.find_all_results_dialog
+                && let Some(action) = dialog.handle_key_event(key) {
                     match action {
                         Action::DialogClose => {
                             self.find_all_results_dialog_active = false;
@@ -1111,7 +1112,6 @@ impl Component for DataTableContainer {
                         _ => {}
                     }
                 }
-            }
             return Ok(None);
         }
         // Route key events to FindDialog if active
@@ -1248,7 +1248,7 @@ impl Component for DataTableContainer {
                                                     for c in df.get_columns() {
                                                         if c.name().as_str() == column {
                                                             casted.rename(polars::prelude::PlSmallStr::from_str(&column));
-                                                            cols.push(polars::prelude::Column::from(casted.clone()));
+                                                            cols.push(casted.clone());
                                                         } else {
                                                             cols.push(c.clone());
                                                         }
@@ -1264,27 +1264,27 @@ impl Component for DataTableContainer {
                                                             }
                                                         }
                                                         Err(e) => {
-                                                            self.dataframe_details_dialog.set_cast_error(format!("{}", e));
+                                                            self.dataframe_details_dialog.set_cast_error(format!("{e}"));
                                                         }
                                                     }
                                                 }
                                                 Err(e) => {
-                                                    self.dataframe_details_dialog.set_cast_error(format!("{}", e));
+                                                    self.dataframe_details_dialog.set_cast_error(format!("{e}"));
                                                 }
                                             },
                                             Err(e) => {
-                                                self.dataframe_details_dialog.set_cast_error(format!("{}", e));
+                                                self.dataframe_details_dialog.set_cast_error(format!("{e}"));
                                             }
                                         }
                                     }
                                     Err(e) => {
-                                        self.dataframe_details_dialog.set_cast_error(format!("{}", e));
+                                        self.dataframe_details_dialog.set_cast_error(format!("{e}"));
                                     }
                                 }
                             }
                             None => {
                                 // Invalid/unsupported dtype mapping
-                                self.dataframe_details_dialog.set_cast_error(format!("Unsupported dtype: {}", dtype));
+                                self.dataframe_details_dialog.set_cast_error(format!("Unsupported dtype: {dtype}"));
                             }
                         }
                     }
@@ -1324,18 +1324,13 @@ impl Component for DataTableContainer {
         }
         // Route key events to DataExportDialog if active
         if self.data_export_dialog_active {
-            if let Some(dialog) = &mut self.data_export_dialog {
-                if let Some(action) = dialog.handle_key_event(key) {
-                    match action {
-                        Action::DialogClose => {
-                            self.data_export_dialog_active = false;
-                            self.data_export_dialog = None;
-                            return Ok(None);
-                        }
-                        _ => {}
-                    }
+            if let Some(dialog) = &mut self.data_export_dialog
+                && let Some(action) = dialog.handle_key_event(key)
+                    && action == Action::DialogClose {
+                    self.data_export_dialog_active = false;
+                    self.data_export_dialog = None;
+                    return Ok(None);
                 }
-            }
             return Ok(None);
         }
         // Route key events to JmesPathDialog if active
@@ -1352,7 +1347,7 @@ impl Component for DataTableContainer {
                                 return Ok(Some(Action::SaveWorkspaceState));
                             }
                             Err(e) => {
-                                self.jmes_dialog.set_error(format!("{}", e));
+                                self.jmes_dialog.set_error(format!("{e}"));
                             }
                         }
                     }
@@ -1365,7 +1360,7 @@ impl Component for DataTableContainer {
                                 return Ok(Some(Action::SaveWorkspaceState));
                             }
                             Err(e) => {
-                                self.jmes_dialog.set_error(format!("{}", e));
+                                self.jmes_dialog.set_error(format!("{e}"));
                             }
                         }
                     }
@@ -1452,8 +1447,8 @@ impl Component for DataTableContainer {
         }
         // Route key events to ColumnOperationOptionsDialog if active
         if self.column_operation_options_dialog_active {
-            if let Some(dialog) = &mut self.column_operation_options_dialog {
-                if let Some(action) = dialog.handle_key_event(key)? {
+            if let Some(dialog) = &mut self.column_operation_options_dialog
+                && let Some(action) = dialog.handle_key_event(key)? {
                     match action {
                         Action::DialogClose => {
                             // Go back to operation selection instead of exiting
@@ -1480,17 +1475,23 @@ impl Component for DataTableContainer {
                                     }
                                     ColumnOperationKind::Pca | ColumnOperationKind::Cluster => {
                                         // Must be a vector of numbers: List(Numeric)
-                                        let is_vec_num = match dtype {
-                                            DataType::List(inner) => {
-                                                match *inner {
-                                                    DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 |
-                                                    DataType::Int128 | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 |
-                                                    DataType::UInt64 | DataType::Float32 | DataType::Float64 => true,
-                                                    _ => false,
-                                                }
-                                            }
-                                            _ => false,
-                                        };
+                                        let is_vec_num = matches!(
+                                            dtype,
+                                            DataType::List(inner)
+                                                if matches!(*inner,
+                                                    DataType::Int8
+                                                        | DataType::Int16
+                                                        | DataType::Int32
+                                                        | DataType::Int64
+                                                        | DataType::Int128
+                                                        | DataType::UInt8
+                                                        | DataType::UInt16
+                                                        | DataType::UInt32
+                                                        | DataType::UInt64
+                                                        | DataType::Float32
+                                                        | DataType::Float64
+                                                )
+                                        );
                                         is_ok = is_vec_num;
                                         if !is_ok { err_msg = format!("Source column '{}' must be a vector of numbers", cfg.source_column); }
                                     }
@@ -1572,7 +1573,6 @@ impl Component for DataTableContainer {
                         _ => {}
                     }
                 }
-            }
             return Ok(None);
         }
         if self.sort_dialog_active {
@@ -1628,19 +1628,16 @@ impl Component for DataTableContainer {
             };
 
             if let Some(action) = self.filter_dialog.handle_key_event(key, max_rows) {
-                match action {
-                    Action::FilterDialogApplied(filter) => {
-                        info!("FilterDialogApplied: {:?}", filter);
-                        // Persist the filter expression on the dataframe for workspace capture
-                        self.datatable.dataframe.filter = Some(filter.clone());
-                        let base_df = self.datatable.dataframe.collect_base_df()?;
-                        let mask = filter.create_mask(&base_df)?;
-                        let filtered_df = base_df.filter(&mask)?;
-                        self.datatable.dataframe.current_df = Some(Arc::new(filtered_df));
-                        // Signal to persist workspace state
-                        return Ok(Some(Action::SaveWorkspaceState));
-                    }
-                    _ => {}
+                if let Action::FilterDialogApplied(filter) = action {
+                    info!("FilterDialogApplied: {:?}", filter);
+                    // Persist the filter expression on the dataframe for workspace capture
+                    self.datatable.dataframe.filter = Some(filter.clone());
+                    let base_df = self.datatable.dataframe.collect_base_df()?;
+                    let mask = filter.create_mask(&base_df)?;
+                    let filtered_df = base_df.filter(&mask)?;
+                    self.datatable.dataframe.current_df = Some(Arc::new(filtered_df));
+                    // Signal to persist workspace state
+                    return Ok(Some(Action::SaveWorkspaceState));
                 }
                 self.filter_dialog_active = false;
             }
@@ -1669,7 +1666,7 @@ impl Component for DataTableContainer {
                                 let mut ctx = new_sql_context();
                                 register_all(&mut ctx)?;
                                 // Register all available DataFrames
-                                for (_uuid, data_context) in &self.available_datasets {
+                                for data_context in self.available_datasets.values() {
                                     let name = &data_context.dataset.alias.clone().unwrap_or(data_context.dataset.name.clone());
                                     ctx.register(name, (*data_context.dataframe).clone().lazy());
                                 }
@@ -1702,7 +1699,7 @@ impl Component for DataTableContainer {
                                 return Ok(None);
                             };
                             // Register all available DataFrames
-                            for (_uuid, data_context) in &self.available_datasets {
+                            for data_context in self.available_datasets.values() {
                                 let name = &data_context.dataset.alias.clone().unwrap_or(data_context.dataset.name.clone());
                                 ctx.register(name, (*data_context.dataframe).clone().lazy());
                             }
@@ -1968,7 +1965,7 @@ impl Component for DataTableContainer {
     ///
     /// This method is a no-op for DataTableContainer, as it does not use external actions for updates.
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
-        info!("update: {:?}", action);
+        debug!("update: {:?}", action);
         match action {
             Action::Tick => {
                 self.find_dialog.tick_search_progress();
@@ -1994,7 +1991,7 @@ impl Component for DataTableContainer {
                         Ok(_) => return Ok(Some(Action::SaveWorkspaceState)),
                         Err(e) => {
                             if let Some(dialog) = &mut self.column_operation_options_dialog {
-                                dialog.mode = ColumnOperationOptionsMode::Error(format!("{}", e));
+                                dialog.mode = ColumnOperationOptionsMode::Error(format!("{e}"));
                             }
                             return Ok(None);
                         }
@@ -2009,7 +2006,7 @@ impl Component for DataTableContainer {
                         Ok(_) => return Ok(Some(Action::SaveWorkspaceState)),
                         Err(e) => {
                             if let Some(dialog) = &mut self.column_operation_options_dialog {
-                                dialog.mode = ColumnOperationOptionsMode::Error(format!("{}", e));
+                                dialog.mode = ColumnOperationOptionsMode::Error(format!("{e}"));
                             }
                             return Ok(None);
                         }
@@ -2030,7 +2027,7 @@ impl Component for DataTableContainer {
                         Ok(_) => return Ok(Some(Action::SaveWorkspaceState)),
                         Err(e) => {
                             if let Some(dialog) = &mut self.column_operation_options_dialog {
-                                dialog.mode = ColumnOperationOptionsMode::Error(format!("{}", e));
+                                dialog.mode = ColumnOperationOptionsMode::Error(format!("{e}"));
                             }
                             return Ok(None);
                         }
@@ -2041,6 +2038,7 @@ impl Component for DataTableContainer {
         }
         Ok(None)
     }
+    
     /// Draw the DataTableContainer and its child widgets to the frame.
     ///
     /// This method lays out the viewing box, data table, instruction area, and any active dialogs as popups.
@@ -2051,7 +2049,7 @@ impl Component for DataTableContainer {
         
         // Calculate instruction area height based on wrapped lines (only if showing instructions)
         let instructions_height = if self.show_instructions {
-            let instructions_text = self.instructions.clone();
+            let instructions_text = self.get_instructions();
             let instructions_wrap_width = area.width.saturating_sub(4).max(1) as usize; // 2 for borders each side
             let wrapped_lines = wrap(&instructions_text, instructions_wrap_width);
             wrapped_lines.len() as u16 + 2 // +2 for border/title
@@ -2122,11 +2120,12 @@ impl Component for DataTableContainer {
 
         // Instruction area (bottom, wrapped) - only if show_instructions is true
         if self.show_instructions {
-            let instructions_text = self.instructions.clone();
+            let instructions_text = self.get_instructions();
             let instructions = Paragraph::new(instructions_text)
                 .block(Block::default().title("Instructions").borders(Borders::ALL))
                 .wrap(Wrap { trim: true })
                 .style(ratatui::style::Style::default().fg(Color::Yellow));
+            Clear.render(chunks[2], frame.buffer_mut()   );
             frame.render_widget(instructions, chunks[2]);
         }
         let col_index = self.datatable.selection.col;
@@ -2203,8 +2202,8 @@ impl Component for DataTableContainer {
         }
 
         // Render ColumnOperationOptionsDialog as a popup overlay only if active
-        if self.column_operation_options_dialog_active {
-            if let Some(dialog) = &mut self.column_operation_options_dialog {
+        if self.column_operation_options_dialog_active
+            && let Some(dialog) = &mut self.column_operation_options_dialog {
                 let popup_area = ratatui::layout::Rect {
                     x: area.x + area.width / 8,
                     y: area.y + area.height / 8,
@@ -2213,7 +2212,6 @@ impl Component for DataTableContainer {
                 };
                 dialog.render(popup_area, frame.buffer_mut());
             }
-        }
 
         // Render ColumnWidthDialog as a popup overlay only if active
         if self.column_width_dialog_active {
@@ -2245,12 +2243,12 @@ impl Component for DataTableContainer {
 				width: area.width - area.width / 4,
 				height: area.height - area.height / 4,
 			};
-            let _max_rows = self.find_all_results_dialog.as_mut().unwrap().render(popup_area, frame.buffer_mut());
+            self.find_all_results_dialog.as_mut().unwrap().render(popup_area, frame.buffer_mut());
             self.last_find_all_results_dialog_area = Some(popup_area);
         }
         // Render DataExportDialog as a popup overlay only if active
-        if self.data_export_dialog_active {
-            if let Some(dialog) = &mut self.data_export_dialog {
+        if self.data_export_dialog_active
+            && let Some(dialog) = &mut self.data_export_dialog {
                 let popup_area = ratatui::layout::Rect {
                     x: area.x + area.width / 8,
                     y: area.y + area.height / 8,
@@ -2259,7 +2257,6 @@ impl Component for DataTableContainer {
                 };
                 dialog.render(popup_area, frame.buffer_mut());
             }
-        }
         // Render DataFrameDetailsDialog as a popup overlay only if active
         if self.dataframe_details_dialog_active {
 			let popup_area = ratatui::layout::Rect {
