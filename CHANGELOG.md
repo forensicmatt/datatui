@@ -7,7 +7,7 @@ and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [unreleased]
+## [0.1.1]
 ### Added
 - added ctrl + a (select all) and ctrl + c (copy) to SqlDialog
 
