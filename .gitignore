@@ -31,5 +31,4 @@ target
 *.sln
 *.sw?
 .DS_Store
-Cargo.lock
 *.log
