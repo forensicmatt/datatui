@@ -6,7 +6,6 @@ pub mod config;
 pub mod tui;
 pub mod dialog;
 pub mod tabview;
-pub mod app;
 pub mod data_import_types;
 pub mod excel_operations; 
 pub mod jmes;

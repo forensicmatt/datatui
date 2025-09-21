@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
 use std::io;
-use crossterm::event::{self, Event as CEvent, KeyCode, KeyModifiers, EnableMouseCapture, DisableMouseCapture};
+use crossterm::event::{self, Event as CEvent, EnableMouseCapture, DisableMouseCapture};
 use crossterm::terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
@@ -8,6 +8,7 @@ use ratatui::Terminal;
 use std::time::Duration;
 use datatui::dialog::DataTabManagerDialog;
 use datatui::style::StyleConfig;
+use datatui::config::Config;
 use datatui::components::Component;
 use datatui::tui::Event as TuiEvent;
 use datatui::action::Action;
@@ -42,9 +43,12 @@ fn main() -> Result<()> {
     };
     datatui::logging::init_with(Some(log_path), level)?;
     
-    // Create DataTabManagerDialog
+    // Load Config and create DataTabManagerDialog
     let style = StyleConfig::default();
     let mut tab_manager = DataTabManagerDialog::new(style);
+    if let Ok(cfg) = Config::new() {
+        let _ = tab_manager.register_config_handler(cfg);
+    }
     
     // Set up terminal
     enable_raw_mode()?;
@@ -88,8 +92,14 @@ fn run_app<B: ratatui::backend::Backend>(
                 let tui_event = TuiEvent::Key(key_event);
                 match tab_manager.handle_events(Some(tui_event)) {
                     Ok(Some(action)) => {
-                        if let Err(e) = tab_manager.update(action) {
-                            error!("Error updating after action: {e}");
+                        // Handle global quit/suspend
+                        match action {
+                            Action::Quit | Action::Suspend => break,
+                            other => {
+                                if let Err(e) = tab_manager.update(other) {
+                                    error!("Error updating after action: {e}");
+                                }
+                            }
                         }
                     }
                     Ok(None) => {}
@@ -97,7 +107,9 @@ fn run_app<B: ratatui::backend::Backend>(
                 }
         }
         // Tick update (animate progress, etc.)
-        let _ = tab_manager.update(Action::Tick);
+        if let Ok(Some(a)) = tab_manager.update(Action::Tick) {
+            if matches!(a, Action::Quit | Action::Suspend) { break; }
+        }
     }
     // On exit, attempt to save workspace state if path is valid
     if tab_manager.project_settings_dialog.config.workspace_path.as_ref().is_some_and(|p| p.is_dir()) {

@@ -5,13 +5,18 @@ use std::{collections::HashMap, env, path::PathBuf};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use derive_deref::{Deref, DerefMut};
-use directories::ProjectDirs;
 use lazy_static::lazy_static;
 use ratatui::style::{Color, Modifier, Style};
-use serde::{Deserialize, de::Deserializer};
+use serde::{Deserialize, Serialize, de::Deserializer};
 use tracing::error;
 
-use crate::{action::Action, app::Mode};
+use crate::action::Action;
+
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Mode {
+    #[default]
+    Home,
+}
 
 const CONFIG: &str = include_str!("../.config/config.json5");
 
@@ -94,13 +99,22 @@ impl Config {
 
         Ok(cfg)
     }
+
+    /// Resolve an action for a full key sequence for a given mode.
+    pub fn action_for_keys(&self, mode: Mode, keys: &[KeyEvent]) -> Option<Action> {
+        let map = self.keybindings.0.get(&mode)?;
+        map.get(&keys.to_vec()).cloned()
+    }
+
+    /// Resolve an action for a single key event for a given mode.
+    pub fn action_for_key(&self, mode: Mode, key: KeyEvent) -> Option<Action> {
+        self.action_for_keys(mode, &[key])
+    }
 }
 
 pub fn get_data_dir() -> PathBuf {
     if let Some(s) = DATA_FOLDER.clone() {
         s
-    } else if let Some(proj_dirs) = project_directory() {
-        proj_dirs.data_local_dir().to_path_buf()
     } else {
         PathBuf::from(".").join(".data")
     }
@@ -109,15 +123,9 @@ pub fn get_data_dir() -> PathBuf {
 pub fn get_config_dir() -> PathBuf {
     if let Some(s) = CONFIG_FOLDER.clone() {
         s
-    } else if let Some(proj_dirs) = project_directory() {
-        proj_dirs.config_local_dir().to_path_buf()
     } else {
         PathBuf::from(".").join(".config")
     }
-}
-
-fn project_directory() -> Option<ProjectDirs> {
-    ProjectDirs::from("com", "kdheepak", env!("CARGO_PKG_NAME"))
 }
 
 #[derive(Clone, Debug, Default, Deref, DerefMut)]
@@ -130,12 +138,12 @@ impl<'de> Deserialize<'de> for KeyBindings {
     {
         let parsed_map = HashMap::<Mode, HashMap<String, Action>>::deserialize(deserializer)?;
 
-        let keybindings = parsed_map
+        let keybindings: HashMap<Mode, HashMap<Vec<KeyEvent>, Action>> = parsed_map
             .into_iter()
             .map(|(mode, inner_map)| {
-                let converted_inner_map = inner_map
+                let converted_inner_map: HashMap<Vec<KeyEvent>, Action> = inner_map
                     .into_iter()
-                    .map(|(key_str, cmd)| (parse_key_sequence(&key_str).unwrap(), cmd))
+                    .map(|(key_string, action)| (parse_key_sequence(&key_string).unwrap(), action))
                     .collect();
                 (mode, converted_inner_map)
             })
@@ -326,12 +334,12 @@ impl<'de> Deserialize<'de> for Styles {
     {
         let parsed_map = HashMap::<Mode, HashMap<String, String>>::deserialize(deserializer)?;
 
-        let styles = parsed_map
+        let styles: HashMap<Mode, HashMap<String, Style>> = parsed_map
             .into_iter()
             .map(|(mode, inner_map)| {
-                let converted_inner_map = inner_map
+                let converted_inner_map: HashMap<String, Style> = inner_map
                     .into_iter()
-                    .map(|(str, style)| (str, parse_style(&style)))
+                    .map(|(key, style_string)| (key, parse_style(&style_string)))
                     .collect();
                 (mode, converted_inner_map)
             })

@@ -20,6 +20,58 @@ pub enum Action {
     ClearScreen,
     Error(String),
     Help,
+    /// Open the Project Settings dialog
+    OpenProjectSettingsDialog,
+    /// Close the Project Settings dialog
+    CloseProjectSettingsDialog,
+    /// Open the Sort dialog in the current context
+    OpenSortDialog,
+    /// Quick sort: add/select current column in Sort dialog
+    QuickSortCurrentColumn,
+    /// Open the Filter dialog
+    OpenFilterDialog,
+    /// Quick filter: equals on current cell value
+    QuickFilterEqualsCurrentValue,
+    /// Move selected column left within the table
+    MoveSelectedColumnLeft,
+    /// Move selected column right within the table
+    MoveSelectedColumnRight,
+    /// Open SQL dialog
+    OpenSqlDialog,
+    /// Open JMESPath dialog
+    OpenJmesDialog,
+    /// Open Column Operations dialog
+    OpenColumnOperationsDialog,
+    /// Open Find dialog
+    OpenFindDialog,
+    /// Open DataFrame Details dialog
+    OpenDataframeDetailsDialog,
+    /// Open Column Width dialog
+    OpenColumnWidthDialog,
+    /// Open Data Export dialog
+    OpenDataExportDialog,
+    /// Copy currently selected cell
+    CopySelectedCell,
+    /// Toggle instructions panel
+    ToggleInstructions,
+    /// Open the Data Management dialog
+    OpenDataManagementDialog,
+    /// Close the Data Management dialog
+    CloseDataManagementDialog,
+    /// Move current tab to front
+    MoveTabToFront,
+    /// Move current tab to back
+    MoveTabToBack,
+    /// Move current tab one position left
+    MoveTabLeft,
+    /// Move current tab one position right
+    MoveTabRight,
+    /// Switch to previous tab
+    PrevTab,
+    /// Switch to next tab
+    NextTab,
+    /// Manually synchronize tabs from Data Management
+    SyncTabs,
     /// Close any active dialog
     DialogClose,
     /// User applied a sort dialog with columns and directions
@@ -104,12 +156,7 @@ pub enum Action {
     OpenJsonOptionsDialog,
     /// User requested to close JSON options dialog
     CloseJsonOptionsDialog,
-    /// User requested to open data management dialog
-    OpenDataManagementDialog,
-    /// User requested to close data management dialog
-    CloseDataManagementDialog,
-    /// User requested to open data export dialog
-    OpenDataExportDialog,
+    // (OpenDataExportDialog moved earlier in the enum)
     /// User requested to close data export dialog
     CloseDataExportDialog,
     /// User requested to remove a data source
