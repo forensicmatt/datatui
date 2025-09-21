@@ -6,5 +6,22 @@
       "<Ctrl-c>": "Quit", // Yet another way to quit
       "<Ctrl-z>": "Suspend" // Suspend the application
     },
+    "DataTabManager": {
+      "<Alt-s>": "OpenProjectSettingsDialog",
+      "<Alt-m>": "OpenDataManagementDialog",
+      "<Alt-f>": "MoveTabToFront",
+      "<Alt-b>": "MoveTabToBack",
+      "<Alt-l>": "MoveTabLeft",
+      "<Alt-r>": "MoveTabRight",
+      "<Alt-left>": "PrevTab",
+      "<Alt-right>": "NextTab",
+      "<Ctrl-s>": "SyncTabs"
+    },
+    "Navigation": {
+      "<up>": "Up",
+      "<down>": "Down",
+      "<left>": "Left",
+      "<right>": "Right"
+    }
   }
 }

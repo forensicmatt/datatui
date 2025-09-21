@@ -16,6 +16,8 @@ use crate::action::Action;
 pub enum Mode {
     #[default]
     Home,
+    DataTabManager,
+    Navigation,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");

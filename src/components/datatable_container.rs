@@ -120,6 +120,7 @@ use linfa::DatasetBase;
 pub struct DataTableContainer {
     pub datatable: DataTable,
     pub style: StyleConfig,
+    pub config: Config,
     pub instructions: String,
     pub additional_instructions: Option<String>,
     pub show_instructions: bool,
@@ -530,6 +531,7 @@ impl DataTableContainer {
         Self {
             datatable,
             style,
+            config: Config::default(),
             instructions,
             additional_instructions: None,
             show_instructions: true,
@@ -1055,9 +1057,18 @@ impl Component for DataTableContainer {
     }
     /// Register a configuration handler for the component.
     ///
-    /// This method is a no-op for DataTableContainer, as it does not use external config handlers.
     fn register_config_handler(&mut self, config: Config) -> Result<()> {
-        let _ = config;
+        self.config = config.clone();
+        // Propagate to subcomponents that implement config registration
+        let _ = self.datatable.register_config_handler(config.clone());
+        let _ = self.sort_dialog.register_config_handler(config.clone());
+        let _ = self.filter_dialog.register_config_handler(config.clone());
+        let _ = self.sql_dialog.register_config_handler(config.clone());
+        let _ = self.column_width_dialog.register_config_handler(config.clone());
+        let _ = self.find_dialog.register_config_handler(config.clone());
+        let _ = self.dataframe_details_dialog.register_config_handler(config.clone());
+        let _ = self.jmes_dialog.register_config_handler(config.clone());
+        let _ = self.column_operations_dialog.register_config_handler(config.clone());
         Ok(())
     }
     /// Initialize the component with the given area size.

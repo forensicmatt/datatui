@@ -16,6 +16,7 @@ use ratatui::Frame;
 use ratatui::layout::Size;
 use tokio::sync::mpsc::UnboundedSender;
 use polars::prelude::DataFrame;
+use tracing::info;
 use crate::components::Component;
 use crate::components::datatable_container::DataTableContainer;
 use crate::components::datatable::DataTable;
@@ -72,6 +73,7 @@ pub struct DataTabManagerDialog {
     pub containers: HashMap<String, DataTableContainer>,
     pub show_instructions: bool,
     pub style: StyleConfig,
+	pub config: Config,
     pub data_management_dialog: DataManagementDialog,
     pub show_data_management: bool,
     pub project_settings_dialog: ProjectSettingsDialog,
@@ -88,6 +90,7 @@ impl DataTabManagerDialog {
             containers: HashMap::new(),
             show_instructions: true,
             style,
+			config: Config::default(),
             data_management_dialog: DataManagementDialog::new(),
             show_data_management: false,
             project_settings_dialog: ProjectSettingsDialog::new(ProjectSettingsConfig::default()),
@@ -227,6 +230,8 @@ impl DataTabManagerDialog {
                 let mut container = DataTableContainer::new_with_dataframes(
                     datatable, self.style.clone(), available_datasets.clone()
                 );
+                // Register config with the new container
+                let _ = container.register_config_handler(self.config.clone());
                 // If we had an existing container for this dataset, carry over transient UI state
                 if let Some(prev) = old_containers.get(&loaded_dataset.dataset.id) {
                     // Preserve SQL textarea content if present
@@ -678,8 +683,9 @@ impl Component for DataTabManagerDialog {
         Ok(())
     }
 
-    fn register_config_handler(&mut self, _config: Config) -> Result<()> {
-        Ok(())
+    fn register_config_handler(&mut self, config: Config) -> Result<()> {
+		self.config = config;
+		Ok(())
     }
 
     fn init(&mut self, _area: Size) -> Result<()> {
@@ -697,6 +703,7 @@ impl Component for DataTabManagerDialog {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         // Handle ProjectSettingsDialog first if active (overlay)
         if self.show_project_settings {
+            info!("DataTabManagerDialog handle_key_event<show_project_settings>: {:?}", key);
             if let Some(Event::Key(key_event)) = Some(Event::Key(key)) {
                 let result = self.project_settings_dialog.handle_events(Some(Event::Key(key_event)))?;
                 if let Some(action) = result.clone() {
@@ -721,8 +728,8 @@ impl Component for DataTabManagerDialog {
                 }
                 return Ok(None);
             }
-            Ok(None)
         } else if self.show_data_management {
+            info!("DataTabManagerDialog handle_key_event<show_data_management>: {:?}", key);
             // Handle events for DataManagementDialog
             // Allow opening ProjectSettings with Alt+S even while Data Management is open
             if key.kind == crossterm::event::KeyEventKind::Press
@@ -770,135 +777,268 @@ impl Component for DataTabManagerDialog {
                 
                 return Ok(result);
             }
-            Ok(None)
         } else {
-            // Handle events for main tab manager
-            if key.kind == crossterm::event::KeyEventKind::Press {
-                match key.code {
-                    KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Open ProjectSettingsDialog
-                        self.show_project_settings = true;
-                        Ok(None)
-                    }
-                    KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Open DataManagementDialog
-                        self.show_data_management = true;
-                        Ok(None)
-                    }
-                    KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Move current tab to front
-                        if !self.tabs.is_empty()
-                            && let Err(e) = self.move_tab_to_front(self.active_tab_index) {
+            info!("DataTabManagerDialog handle_key_event<main>: {:?}", key);
+			// Handle events for main tab manager
+            // First, try to resolve an action from config for DataTabManager mode
+            if let Some(action) = self.config.action_for_key(crate::config::Mode::DataTabManager, key) {
+                info!("DataTabManagerDialog action_for_key<main>: {:?}", action);
+                match action {
+                    Action::OpenProjectSettingsDialog => { self.show_project_settings = true; return Ok(None); }
+                    Action::OpenDataManagementDialog => { self.show_data_management = true; return Ok(None); }
+                    Action::MoveTabToFront => {
+                        if !self.tabs.is_empty() && let Err(e) = self.move_tab_to_front(self.active_tab_index) {
                             return Ok(Some(Action::Error(format!("Failed to move tab to front: {e}"))));
                         }
-                        Ok(None)
+                        return Ok(None);
                     }
-                    KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Move current tab to back
+                    Action::MoveTabToBack => {
                         if !self.tabs.is_empty() && let Err(e) = self.move_tab_to_back(self.active_tab_index) {
                             return Ok(Some(Action::Error(format!("Failed to move tab to back: {e}"))));
                         }
-                        Ok(None)
+                        return Ok(None);
                     }
-                    KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Move current tab left (swap with previous)
+                    Action::MoveTabLeft => {
                         if !self.tabs.is_empty() && self.active_tab_index > 0 {
                             let new_index = self.active_tab_index - 1;
                             if let Err(e) = self.reorder_tab(self.active_tab_index, new_index) {
                                 return Ok(Some(Action::Error(format!("Failed to move tab left: {e}"))));
                             }
                         }
-                        Ok(None)
+                        return Ok(None);
                     }
-                    KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Move current tab right (swap with next)
+                    Action::MoveTabRight => {
                         if !self.tabs.is_empty() && self.active_tab_index < self.tabs.len() - 1 {
                             let new_index = self.active_tab_index + 1;
                             if let Err(e) = self.reorder_tab(self.active_tab_index, new_index) {
                                 return Ok(Some(Action::Error(format!("Failed to move tab right: {e}"))));
                             }
                         }
-                        Ok(None)
+                        return Ok(None);
                     }
-                    KeyCode::Left if key.modifiers.contains(KeyModifiers::ALT) => {
-                    // Navigate to previous tab
+                    Action::PrevTab => {
                         if !self.tabs.is_empty() {
-                            let new_index = if self.active_tab_index == 0 {
-                                self.tabs.len() - 1
-                            } else {
-                                self.active_tab_index - 1
-                            };
+                            let new_index = if self.active_tab_index == 0 { self.tabs.len() - 1 } else { self.active_tab_index - 1 };
                             let _ = self.switch_tab(new_index);
                         }
-                        Ok(None)
+                        return Ok(None);
                     }
-                    KeyCode::Right if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Navigate to next tab
+                    Action::NextTab => {
                         if !self.tabs.is_empty() {
-                            let new_index = if self.active_tab_index == self.tabs.len() - 1 {
-                                0
-                            } else {
-                                self.active_tab_index + 1
-                            };
+                            let new_index = if self.active_tab_index == self.tabs.len() - 1 { 0 } else { self.active_tab_index + 1 };
                             let _ = self.switch_tab(new_index);
                         }
-                        Ok(None)
+                        return Ok(None);
                     }
-                    KeyCode::Tab => {
-                        // Navigate to next tab
-                        if !self.tabs.is_empty() {
-                            let new_index = if self.active_tab_index == self.tabs.len() - 1 {
-                                0
-                            } else {
-                                self.active_tab_index + 1
-                            };
-                            let _ = self.switch_tab(new_index);
+                    Action::SyncTabs => {
+                        if let Err(e) = self.sync_tabs_from_data_management() {
+                            return Ok(Some(Action::Error(format!("Failed to sync tabs: {e}"))));
                         }
-                        Ok(None)
+                        let _ = self.update_all_containers_dataframes();
+                        return Ok(None);
                     }
                     _ => {
                         // Forward to active container if available
-                        let latest = self.get_available_datasets()?;
-                        if let Some(container) = self.get_active_container() {
-                            // Ensure container has the latest available DataFrames
-                            container.set_available_datasets(latest);
-                            // Forward the key event to the active container
-                            if let Some(action) = container.handle_key_event(key)? {
-                                match action {
-                                    Action::SqlDialogAppliedNewDataset { dataset_name, dataframe } => {
-                                        // Handle new dataset creation
-                                        return self.handle_new_dataset_creation(dataset_name, dataframe);
-                                    }
-                                    Action::SaveWorkspaceState => {
-                                        // Ensure last SQL text is stored on the dataframe for capture
-                                        if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
-                                            let tab_id = active_tab.id();
-                                            if let Some(container) = self.containers.get_mut(&tab_id) {
-                                                let sql_text = container.sql_dialog.textarea.lines().join("\n");
-                                                container.datatable.dataframe.last_sql_query = Some(sql_text);
-                                            }
-                                        }
-                                        if self.project_settings_dialog.config.workspace_path.as_ref().is_some_and(|p| p.is_dir()) {
-                                            let _ = self.save_workspace_state();
-                                        }
-                                        return Ok(None);
-                                    }
-                                    _ => {
-                                        // Forward other actions up
-                                        return Ok(Some(action));
-                                    }
-                                }
-                            }
-                            Ok(None)
-                        } else {
-                            Ok(None)
-                        }
+                    //     let latest = self.get_available_datasets()?;
+                    //     if let Some(container) = self.get_active_container() {
+                    //         // Ensure container has the latest available DataFrames
+                    //         container.set_available_datasets(latest);
+                    //         // Forward the key event to the active container
+                    //         if let Some(action) = container.handle_key_event(key)? {
+                    //             match action {
+                    //                 Action::SqlDialogAppliedNewDataset { dataset_name, dataframe } => {
+                    //                     // Handle new dataset creation
+                    //                     return self.handle_new_dataset_creation(dataset_name, dataframe);
+                    //                 }
+                    //                 Action::SaveWorkspaceState => {
+                    //                     // Ensure last SQL text is stored on the dataframe for capture
+                    //                     if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
+                    //                         let tab_id = active_tab.id();
+                    //                         if let Some(container) = self.containers.get_mut(&tab_id) {
+                    //                             let sql_text = container.sql_dialog.textarea.lines().join("\n");
+                    //                             container.datatable.dataframe.last_sql_query = Some(sql_text);
+                    //                         }
+                    //                     }
+                    //                     if self.project_settings_dialog.config.workspace_path.as_ref().is_some_and(|p| p.is_dir()) {
+                    //                         let _ = self.save_workspace_state();
+                    //                     }
+                    //                     return Ok(None);
+                    //                 }
+                    //                 _ => {
+                    //                     // Forward other actions up
+                    //                     return Ok(Some(action));
+                    //                 }
+                    //             }
+                    //         };
+
+                    //         return Ok(None);
+                    //     } else {
+                    //         return Ok(None);
+                    //     }
                     }
                 }
             } else {
-                Ok(None)
+                info!("DataTabManagerDialog no action for key: {:?}", key);
             }
+
+            // Forward to active container if available
+            let latest = self.get_available_datasets()?;
+            if let Some(container) = self.get_active_container() {
+                // Ensure container has the latest available DataFrames
+                container.set_available_datasets(latest);
+                // Forward the key event to the active container
+                if let Some(action) = container.handle_key_event(key)? {
+                    match action {
+                        Action::SqlDialogAppliedNewDataset { dataset_name, dataframe } => {
+                            // Handle new dataset creation
+                            return self.handle_new_dataset_creation(dataset_name, dataframe);
+                        }
+                        Action::SaveWorkspaceState => {
+                            // Ensure last SQL text is stored on the dataframe for capture
+                            if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
+                                let tab_id = active_tab.id();
+                                if let Some(container) = self.containers.get_mut(&tab_id) {
+                                    let sql_text = container.sql_dialog.textarea.lines().join("\n");
+                                    container.datatable.dataframe.last_sql_query = Some(sql_text);
+                                }
+                            }
+                            if self.project_settings_dialog.config.workspace_path.as_ref().is_some_and(|p| p.is_dir()) {
+                                let _ = self.save_workspace_state();
+                            }
+                            return Ok(None);
+                        }
+                        _ => {
+                            // Forward other actions up
+                            return Ok(Some(action));
+                        }
+                    }
+                }
+            }
+            return Ok(None);
+				// match key.code {
+                //     KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
+                //         // Open ProjectSettingsDialog
+                //         self.show_project_settings = true;
+				// 		return Ok(None);
+                //     }
+                //     KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::ALT) => {
+                //         // Open DataManagementDialog
+                //         self.show_data_management = true;
+				// 		return Ok(None);
+                //     }
+                //     KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
+                //         // Move current tab to front
+                //         if !self.tabs.is_empty()
+                //             && let Err(e) = self.move_tab_to_front(self.active_tab_index) {
+                //             return Ok(Some(Action::Error(format!("Failed to move tab to front: {e}"))));
+                //         }
+				// 		return Ok(None);
+                //     }
+                //     KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
+                //         // Move current tab to back
+                //         if !self.tabs.is_empty() && let Err(e) = self.move_tab_to_back(self.active_tab_index) {
+                //             return Ok(Some(Action::Error(format!("Failed to move tab to back: {e}"))));
+                //         }
+				// 		return Ok(None);
+                //     }
+                //     KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => {
+                //         // Move current tab left (swap with previous)
+                //         if !self.tabs.is_empty() && self.active_tab_index > 0 {
+                //             let new_index = self.active_tab_index - 1;
+                //             if let Err(e) = self.reorder_tab(self.active_tab_index, new_index) {
+                //                 return Ok(Some(Action::Error(format!("Failed to move tab left: {e}"))));
+                //             }
+                //         }
+				// 		return Ok(None);
+                //     }
+                //     KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::ALT) => {
+                //         // Move current tab right (swap with next)
+                //         if !self.tabs.is_empty() && self.active_tab_index < self.tabs.len() - 1 {
+                //             let new_index = self.active_tab_index + 1;
+                //             if let Err(e) = self.reorder_tab(self.active_tab_index, new_index) {
+                //                 return Ok(Some(Action::Error(format!("Failed to move tab right: {e}"))));
+                //             }
+                //         }
+				// 		return Ok(None);
+                //     }
+                //     KeyCode::Left if key.modifiers.contains(KeyModifiers::ALT) => {
+                //     // Navigate to previous tab
+                //         if !self.tabs.is_empty() {
+                //             let new_index = if self.active_tab_index == 0 {
+                //                 self.tabs.len() - 1
+                //             } else {
+                //                 self.active_tab_index - 1
+                //             };
+                //             let _ = self.switch_tab(new_index);
+                //         }
+				// 		return Ok(None);
+                //     }
+                //     KeyCode::Right if key.modifiers.contains(KeyModifiers::ALT) => {
+                //         // Navigate to next tab
+                //         if !self.tabs.is_empty() {
+                //             let new_index = if self.active_tab_index == self.tabs.len() - 1 {
+                //                 0
+                //             } else {
+                //                 self.active_tab_index + 1
+                //             };
+                //             let _ = self.switch_tab(new_index);
+                //         }
+				// 		return Ok(None);
+                //     }
+                //     KeyCode::Tab => {
+                //         // Navigate to next tab
+                //         if !self.tabs.is_empty() {
+                //             let new_index = if self.active_tab_index == self.tabs.len() - 1 {
+                //                 0
+                //             } else {
+                //                 self.active_tab_index + 1
+                //             };
+                //             let _ = self.switch_tab(new_index);
+                //         }
+                //         return Ok(None);
+                //     }
+                //     _ => {
+                //         // Forward to active container if available
+                //         let latest = self.get_available_datasets()?;
+                //         if let Some(container) = self.get_active_container() {
+                //             // Ensure container has the latest available DataFrames
+                //             container.set_available_datasets(latest);
+                //             // Forward the key event to the active container
+                //             if let Some(action) = container.handle_key_event(key)? {
+                //                 match action {
+                //                     Action::SqlDialogAppliedNewDataset { dataset_name, dataframe } => {
+                //                         // Handle new dataset creation
+                //                         return self.handle_new_dataset_creation(dataset_name, dataframe);
+                //                     }
+                //                     Action::SaveWorkspaceState => {
+                //                         // Ensure last SQL text is stored on the dataframe for capture
+                //                         if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
+                //                             let tab_id = active_tab.id();
+                //                             if let Some(container) = self.containers.get_mut(&tab_id) {
+                //                                 let sql_text = container.sql_dialog.textarea.lines().join("\n");
+                //                                 container.datatable.dataframe.last_sql_query = Some(sql_text);
+                //                             }
+                //                         }
+                //                         if self.project_settings_dialog.config.workspace_path.as_ref().is_some_and(|p| p.is_dir()) {
+                //                             let _ = self.save_workspace_state();
+                //                         }
+                //                         return Ok(None);
+                //                     }
+                //                     _ => {
+                //                         // Forward other actions up
+                //                         return Ok(Some(action));
+				// 	}
+				// };
+                //             }
+                //             return Ok(None);
+                //         } else {
+                //             return Ok(None);
+                //         }
+                //     }
+                // }
         }
+
+        Ok(None)
     }
 
     fn handle_mouse_event(&mut self, _mouse: MouseEvent) -> Result<Option<Action>> {

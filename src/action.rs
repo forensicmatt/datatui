@@ -20,6 +20,11 @@ pub enum Action {
     ClearScreen,
     Error(String),
     Help,
+    /// Navigation actions (configurable)
+    Up,
+    Down,
+    Left,
+    Right,
     /// Open the Project Settings dialog
     OpenProjectSettingsDialog,
     /// Close the Project Settings dialog

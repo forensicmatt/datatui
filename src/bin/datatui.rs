@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
 use std::io;
-use crossterm::event::{self, Event as CEvent, EnableMouseCapture, DisableMouseCapture};
+use crossterm::event::{self, Event as CEvent, EnableMouseCapture, DisableMouseCapture, KeyCode, KeyModifiers};
 use crossterm::terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
