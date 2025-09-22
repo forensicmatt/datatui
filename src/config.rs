@@ -19,6 +19,7 @@ pub enum Mode {
     DataTabManager,
     Navigation,
     DataTableContainer,
+    DataManagement,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");
@@ -111,6 +112,9 @@ impl Config {
 
     /// Resolve an action for a single key event for a given mode.
     pub fn action_for_key(&self, mode: Mode, key: KeyEvent) -> Option<Action> {
+        if key.kind != crossterm::event::KeyEventKind::Press {
+            return None;
+        }
         self.action_for_keys(mode, &[key])
     }
 }

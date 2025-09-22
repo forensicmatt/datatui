@@ -684,8 +684,10 @@ impl Component for DataTabManagerDialog {
     }
 
     fn register_config_handler(&mut self, config: Config) -> Result<()> {
-		self.config = config;
-		Ok(())
+        self.project_settings_dialog.register_config_handler(config.clone())?;
+        self.data_management_dialog.register_config_handler(config.clone())?;
+        self.config = config;
+        Ok(())
     }
 
     fn init(&mut self, _area: Size) -> Result<()> {
@@ -701,6 +703,16 @@ impl Component for DataTabManagerDialog {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        info!("DataTabManagerDialog handle_key_event: {:?}", key);
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::DataTabManager, key) {
+            info!("DataTabManagerDialog 1st action_for_key<DataTabManager>: {:?}", action);
+            match action {
+                Action::OpenProjectSettingsDialog => { self.show_project_settings = true; return Ok(None); }
+                Action::OpenDataManagementDialog => { self.show_data_management = true; return Ok(None); }
+                _ => {}
+            }
+        }
+        
         // Handle ProjectSettingsDialog first if active (overlay)
         if self.show_project_settings {
             info!("DataTabManagerDialog handle_key_event<show_project_settings>: {:?}", key);
@@ -730,62 +742,15 @@ impl Component for DataTabManagerDialog {
             }
         } else if self.show_data_management {
             info!("DataTabManagerDialog handle_key_event<show_data_management>: {:?}", key);
-            // Handle events for DataManagementDialog
-            // Allow opening ProjectSettings with Alt+S even while Data Management is open
-            if key.kind == crossterm::event::KeyEventKind::Press
-                && key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::ALT) {
-                self.show_project_settings = true;
-                return Ok(None);
-            }
-            if let Some(Event::Key(key_event)) = Some(Event::Key(key)) {
-                let result = self.data_management_dialog.handle_events(
-                    Some(Event::Key(key_event))
-                )?;
-                
-                // Check if the dialog should be closed
-                if let Some(Action::CloseDataManagementDialog) = result {
-                    self.show_data_management = false;
-                    // Auto-sync tabs when DataManagementDialog is closed
-                    if let Err(e) = self.sync_tabs_from_data_management() {
-                        return Ok(Some(Action::Error(format!("Failed to auto-sync tabs: {e}"))));
-                    }
 
-                    // Update all containers with the latest available dataframes
-                    let _ = self.update_all_containers_dataframes();
-
-                    // Forward to active container if available
-                    let latest = self.get_available_datasets()?;
-                    if let Some(container) = self.get_active_container() {
-                        // Ensure container has the latest available DataFrames
-                        container.set_available_datasets(latest);
-                        // Forward the key event to the active container
-                        if let Some(action) = container.handle_key_event(key)? {
-                            match action {
-                                Action::SqlDialogAppliedNewDataset { dataset_name, dataframe } => {
-                                    // Handle new dataset creation
-                                    return self.handle_new_dataset_creation(dataset_name, dataframe);
-                                }
-                                _ => {
-                                    // Forward other actions up
-                                    return Ok(Some(action));
-                                }
-                            }
-                        }
-                    }
-                    return Ok(None);
-                }
-                
-                return Ok(result);
-            }
+            return self.data_management_dialog.handle_key_event(key);
         } else {
             info!("DataTabManagerDialog handle_key_event<main>: {:?}", key);
 			// Handle events for main tab manager
             // First, try to resolve an action from config for DataTabManager mode
             if let Some(action) = self.config.action_for_key(crate::config::Mode::DataTabManager, key) {
-                info!("DataTabManagerDialog action_for_key<main>: {:?}", action);
+                info!("DataTabManagerDialog 2nd action_for_key<DataTabManager>: {:?}", action);
                 match action {
-                    Action::OpenProjectSettingsDialog => { self.show_project_settings = true; return Ok(None); }
-                    Action::OpenDataManagementDialog => { self.show_data_management = true; return Ok(None); }
                     Action::MoveTabToFront => {
                         if !self.tabs.is_empty() && let Err(e) = self.move_tab_to_front(self.active_tab_index) {
                             return Ok(Some(Action::Error(format!("Failed to move tab to front: {e}"))));
@@ -838,43 +803,7 @@ impl Component for DataTabManagerDialog {
                         return Ok(None);
                     }
                     _ => {
-                        // Forward to active container if available
-                    //     let latest = self.get_available_datasets()?;
-                    //     if let Some(container) = self.get_active_container() {
-                    //         // Ensure container has the latest available DataFrames
-                    //         container.set_available_datasets(latest);
-                    //         // Forward the key event to the active container
-                    //         if let Some(action) = container.handle_key_event(key)? {
-                    //             match action {
-                    //                 Action::SqlDialogAppliedNewDataset { dataset_name, dataframe } => {
-                    //                     // Handle new dataset creation
-                    //                     return self.handle_new_dataset_creation(dataset_name, dataframe);
-                    //                 }
-                    //                 Action::SaveWorkspaceState => {
-                    //                     // Ensure last SQL text is stored on the dataframe for capture
-                    //                     if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
-                    //                         let tab_id = active_tab.id();
-                    //                         if let Some(container) = self.containers.get_mut(&tab_id) {
-                    //                             let sql_text = container.sql_dialog.textarea.lines().join("\n");
-                    //                             container.datatable.dataframe.last_sql_query = Some(sql_text);
-                    //                         }
-                    //                     }
-                    //                     if self.project_settings_dialog.config.workspace_path.as_ref().is_some_and(|p| p.is_dir()) {
-                    //                         let _ = self.save_workspace_state();
-                    //                     }
-                    //                     return Ok(None);
-                    //                 }
-                    //                 _ => {
-                    //                     // Forward other actions up
-                    //                     return Ok(Some(action));
-                    //                 }
-                    //             }
-                    //         };
-
-                    //         return Ok(None);
-                    //     } else {
-                    //         return Ok(None);
-                    //     }
+                        info!("DataTabManagerDialog unhandled DataTabManager action: {:?} for key: {:?}", action, key);
                     }
                 }
             } else {

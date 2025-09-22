@@ -12,9 +12,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 use polars::prelude::*;
 use color_eyre::Result;
-use crossterm::event::{KeyEvent, MouseEvent, KeyCode};
+use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::Frame;
 use ratatui::layout::Size;
+use tracing::info;
 use tokio::sync::mpsc::UnboundedSender;
 use crate::components::Component;
 use crate::data_import_types::DataImportConfig;
@@ -550,6 +551,8 @@ pub struct DataManagementDialog {
     pub alias_edit_dialog: Option<AliasEditDialog>,
     #[serde(skip)]
     pub message_dialog: Option<MessageDialog>,
+    #[serde(skip)]
+    pub config: Config,
 }
 
 impl Default for DataManagementDialog {
@@ -567,6 +570,7 @@ impl DataManagementDialog {
             data_import_dialog: None,
             alias_edit_dialog: None,
             message_dialog: None,
+            config: Config::default(),
         }
     }
 
@@ -876,6 +880,11 @@ impl Component for DataManagementDialog {
     }
 
     fn register_config_handler(&mut self, _config: Config) -> Result<()> {
+        self.config = _config;
+        // Propagate to child dialogs if they exist
+        if let Some(ref mut d) = self.data_import_dialog { let _ = d.register_config_handler(self.config.clone()); }
+        if let Some(ref mut d) = self.alias_edit_dialog { let _ = d.register_config_handler(self.config.clone()); }
+        if let Some(ref mut d) = self.message_dialog { let _ = d.register_config_handler(self.config.clone()); }
         Ok(())
     }
 
@@ -892,112 +901,51 @@ impl Component for DataManagementDialog {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        let result = if key.kind == crossterm::event::KeyEventKind::Press {
-            // Handle message dialog if it's open
-            if let Some(ref mut msg) = self.message_dialog {
-                if let Some(action) = msg.handle_key_event(key)? {
-                    match action {
-                        Action::DialogClose => {
-                            self.message_dialog = None;
-                            return Ok(None);
-                        }
-                        _ => return Ok(Some(action)),
-                    }
-                }
-                return Ok(None);
-            }
-            // Handle alias edit dialog if it's open
-            if let Some(ref mut alias_dialog) = self.alias_edit_dialog {
-                if let Some(action) = alias_dialog.handle_key_event(key)? {
-                    match action {
-                        Action::DialogClose => {
-                            self.alias_edit_dialog = None;
-                            return Ok(None);
-                        }
-                        Action::EditDatasetAlias { source_id, dataset_id, alias } => {
-                            // Update the dataset alias
-                            self.update_dataset_alias(source_id, &dataset_id, alias);
-                            self.alias_edit_dialog = None;
-                            return Ok(None);
-                        }
-                        _ => {
-                            return Ok(Some(action));
-                        }
-                    }
-                }
-                return Ok(None);
-            }
+        info!("DataManagementDialog handle_key_event: {:?}", key);
 
-            // Handle data import dialog if it's open
-            if let Some(ref mut import_dialog) = self.data_import_dialog {
-                if let Some(action) = import_dialog.handle_key_event(key)? {
-                    match action {
-                        Action::CloseDataImportDialog => {
-                            self.data_import_dialog = None;
-                            return Ok(None);
-                        }
-                        Action::AddDataImportConfig { config } => {
-                            // Add the data source from the import config
-                            self.add_data_source(config);
-                            self.data_import_dialog = None;
-                            // Auto-load all pending datasets after adding data source
-                            if let Err(e) = self.load_all_pending_datasets() { return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {e}")))); }
-                            return Ok(None);
-                        }
-                        Action::ConfirmDataImport => {
-                            // Handle the confirmation action and auto-load data
-                            self.data_import_dialog = None;
-                            // Auto-load all pending datasets after import
-                            if let Err(e) = self.load_all_pending_datasets() { return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {e}")))); }
-                            return Ok(Some(action));
-                        }
-                        _ => {
-                            return Ok(Some(action));
-                        }
-                    }
-                }
-                return Ok(None);
-            }
-
-            // Handle main dialog events when data import dialog is not open
-            match key.code {
-                KeyCode::Up => {
+        if let Some(nav_action) = self.config.action_for_key(crate::config::Mode::Navigation, key) {
+            info!("DataManagementDialog action_for_key<Navigation>: {:?}", nav_action);
+            match nav_action {
+                Action::Up => {
                     if self.selected_dataset_index > 0 {
                         self.selected_dataset_index = self.selected_dataset_index.saturating_sub(1);
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Down => {
+                Action::Down => {
                     let total_datasets = self.get_all_datasets().len();
                     if self.selected_dataset_index < total_datasets.saturating_sub(1) {
                         self.selected_dataset_index = self.selected_dataset_index.saturating_add(1);
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Esc => {
-                    Some(Action::CloseDataManagementDialog)
+                _ => {
+                    info!("DataManagementDialog unhandled Navigation action: {:?} for key: {:?}", nav_action, key);
                 }
-                KeyCode::Char('d') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Delete selected dataset's source
+            }
+        }
+        if let Some(dm_action) = self.config.action_for_key(crate::config::Mode::DataManagement, key) {
+            info!("DataManagementDialog action_for_key<DataManagement>: {:?}", dm_action);
+            match dm_action {
+                Action::CloseDataManagementDialog => {
+                    return Ok(Some(Action::CloseDataManagementDialog))
+                }
+                Action::DeleteSelectedSource => {
                     if let Some((source_id, _source, _dataset)) = self.selected_dataset() {
                         self.remove_data_source(source_id);
-                        Some(Action::RemoveDataSource { source_id })
-                    } else {
-                        None
+                        return Ok(Some(Action::RemoveDataSource { source_id }));
                     }
+                    return Ok(None);
                 }
-                KeyCode::Char('a') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Open data import dialog
+                Action::OpenDataImportDialog => {
                     self.data_import_dialog = Some(DataImportDialog::new());
                     return Ok(None);
                 }
-                KeyCode::Char('l') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Load all pending datasets
+                Action::LoadAllPendingDatasets => {
                     self.load_all_pending_datasets()?;
                     return Ok(None);
                 }
-                KeyCode::Char('e') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Edit alias for selected dataset
+                Action::EditSelectedAlias => {
                     if let Some((source_id, _source, dataset)) = self.selected_dataset() {
                         self.alias_edit_dialog = Some(AliasEditDialog::new(
                             source_id,
@@ -1008,25 +956,82 @@ impl Component for DataManagementDialog {
                     }
                     return Ok(None);
                 }
-                KeyCode::Char('i') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // If selected dataset is Failed, show its error message in a MessageDialog
-                    if let Some((_source_id, _source, dataset)) = self.selected_dataset()
-                        && dataset.status == DatasetStatus::Failed
-                    {
-                        let msg = dataset.error_message.clone().unwrap_or_else(|| "No error message available".to_string());
-                        self.message_dialog = Some(MessageDialog::with_title(msg, format!("{}: Failed", dataset.name)));
+                _ => {
+                    info!("DataManagementDialog unhandled DataManagement action: {:?} for key: {:?}", dm_action, key);
+                }
+            }
+        }
+
+        info!("BLAH: {:?}", key);
+
+        // Handle message dialog if it's open
+        if let Some(ref mut msg) = self.message_dialog {
+            if let Some(action) = msg.handle_key_event(key)? {
+                match action {
+                    Action::DialogClose => {
+                        self.message_dialog = None;
                         return Ok(None);
                     }
-                    // Otherwise, toggle instructions per global key binding
-                    self.show_instructions = !self.show_instructions;
-                    return Ok(None);
+                    _ => return Ok(Some(action)),
                 }
-                _ => None,
             }
-        } else {
-            None
-        };
-        Ok(result)
+            return Ok(None);
+        }
+
+        // Handle alias edit dialog if it's open
+        if let Some(ref mut alias_dialog) = self.alias_edit_dialog {
+            if let Some(action) = alias_dialog.handle_key_event(key)? {
+                match action {
+                    Action::DialogClose => {
+                        self.alias_edit_dialog = None;
+                        return Ok(None);
+                    }
+                    Action::EditDatasetAlias { source_id, dataset_id, alias } => {
+                        // Update the dataset alias
+                        self.update_dataset_alias(source_id, &dataset_id, alias);
+                        self.alias_edit_dialog = None;
+                        return Ok(None);
+                    }
+                    _ => {
+                        return Ok(Some(action));
+                    }
+                }
+            }
+            return Ok(None);
+        }
+
+        // Handle data import dialog if it's open
+        if let Some(ref mut import_dialog) = self.data_import_dialog {
+            if let Some(action) = import_dialog.handle_key_event(key)? {
+                match action {
+                    Action::CloseDataImportDialog => {
+                        self.data_import_dialog = None;
+                        return Ok(None);
+                    }
+                    Action::AddDataImportConfig { config } => {
+                        // Add the data source from the import config
+                        self.add_data_source(config);
+                        self.data_import_dialog = None;
+                        // Auto-load all pending datasets after adding data source
+                        if let Err(e) = self.load_all_pending_datasets() { return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {e}")))); }
+                        return Ok(None);
+                    }
+                    Action::ConfirmDataImport => {
+                        // Handle the confirmation action and auto-load data
+                        self.data_import_dialog = None;
+                        // Auto-load all pending datasets after import
+                        if let Err(e) = self.load_all_pending_datasets() { return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {e}")))); }
+                        return Ok(Some(action));
+                    }
+                    _ => {
+                        return Ok(Some(action));
+                    }
+                }
+            }
+            return Ok(None);
+        }
+
+        Ok(None)
     }
 
     fn handle_mouse_event(&mut self, _mouse: MouseEvent) -> Result<Option<Action>> {

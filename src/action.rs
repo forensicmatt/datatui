@@ -25,6 +25,10 @@ pub enum Action {
     Down,
     Left,
     Right,
+    /// DataManagementDialog actions (configurable)
+    DeleteSelectedSource,
+    LoadAllPendingDatasets,
+    EditSelectedAlias,
     /// Open the Project Settings dialog
     OpenProjectSettingsDialog,
     /// Close the Project Settings dialog

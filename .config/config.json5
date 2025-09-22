@@ -39,6 +39,13 @@
       "<Ctrl-w>": "OpenColumnWidthDialog",
       "<Ctrl-c>": "CopySelectedCell",
       "<Ctrl-i>": "ToggleInstructions"
+    },
+    "DataManagement": {
+      "<esc>": "CloseDataManagementDialog",
+      "<Ctrl-d>": "DeleteSelectedSource",
+      "<Ctrl-a>": "OpenDataImportDialog",
+      "<Ctrl-l>": "LoadAllPendingDatasets",
+      "<Ctrl-e>": "EditSelectedAlias"
     }
   }
 }
