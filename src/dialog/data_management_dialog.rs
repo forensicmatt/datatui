@@ -903,67 +903,6 @@ impl Component for DataManagementDialog {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         info!("DataManagementDialog handle_key_event: {:?}", key);
 
-        if let Some(nav_action) = self.config.action_for_key(crate::config::Mode::Navigation, key) {
-            info!("DataManagementDialog action_for_key<Navigation>: {:?}", nav_action);
-            match nav_action {
-                Action::Up => {
-                    if self.selected_dataset_index > 0 {
-                        self.selected_dataset_index = self.selected_dataset_index.saturating_sub(1);
-                    }
-                    return Ok(None);
-                }
-                Action::Down => {
-                    let total_datasets = self.get_all_datasets().len();
-                    if self.selected_dataset_index < total_datasets.saturating_sub(1) {
-                        self.selected_dataset_index = self.selected_dataset_index.saturating_add(1);
-                    }
-                    return Ok(None);
-                }
-                _ => {
-                    info!("DataManagementDialog unhandled Navigation action: {:?} for key: {:?}", nav_action, key);
-                }
-            }
-        }
-        if let Some(dm_action) = self.config.action_for_key(crate::config::Mode::DataManagement, key) {
-            info!("DataManagementDialog action_for_key<DataManagement>: {:?}", dm_action);
-            match dm_action {
-                Action::CloseDataManagementDialog => {
-                    return Ok(Some(Action::CloseDataManagementDialog))
-                }
-                Action::DeleteSelectedSource => {
-                    if let Some((source_id, _source, _dataset)) = self.selected_dataset() {
-                        self.remove_data_source(source_id);
-                        return Ok(Some(Action::RemoveDataSource { source_id }));
-                    }
-                    return Ok(None);
-                }
-                Action::OpenDataImportDialog => {
-                    self.data_import_dialog = Some(DataImportDialog::new());
-                    return Ok(None);
-                }
-                Action::LoadAllPendingDatasets => {
-                    self.load_all_pending_datasets()?;
-                    return Ok(None);
-                }
-                Action::EditSelectedAlias => {
-                    if let Some((source_id, _source, dataset)) = self.selected_dataset() {
-                        self.alias_edit_dialog = Some(AliasEditDialog::new(
-                            source_id,
-                            dataset.id.clone(),
-                            dataset.name.clone(),
-                            dataset.alias.clone(),
-                        ));
-                    }
-                    return Ok(None);
-                }
-                _ => {
-                    info!("DataManagementDialog unhandled DataManagement action: {:?} for key: {:?}", dm_action, key);
-                }
-            }
-        }
-
-        info!("BLAH: {:?}", key);
-
         // Handle message dialog if it's open
         if let Some(ref mut msg) = self.message_dialog {
             if let Some(action) = msg.handle_key_event(key)? {
@@ -1029,6 +968,70 @@ impl Component for DataManagementDialog {
                 }
             }
             return Ok(None);
+        }
+        
+        if let Some(nav_action) = self.config.action_for_key(crate::config::Mode::Navigation, key) {
+            info!("DataManagementDialog action_for_key<Navigation>: {:?}", nav_action);
+            match nav_action {
+                Action::Up => {
+                    if self.selected_dataset_index > 0 {
+                        self.selected_dataset_index = self.selected_dataset_index.saturating_sub(1);
+                    }
+                    return Ok(None);
+                }
+                Action::Down => {
+                    let total_datasets = self.get_all_datasets().len();
+                    if self.selected_dataset_index < total_datasets.saturating_sub(1) {
+                        self.selected_dataset_index = self.selected_dataset_index.saturating_add(1);
+                    }
+                    return Ok(None);
+                }
+                _ => {
+                    info!("DataManagementDialog unhandled Navigation action: {:?} for key: {:?}", nav_action, key);
+                }
+            }
+        }
+
+        if let Some(dm_action) = self.config.action_for_key(crate::config::Mode::DataManagement, key) {
+            info!("DataManagementDialog action_for_key<DataManagement>: {:?}", dm_action);
+            match dm_action {
+                Action::CloseDataManagementDialog => {
+                    return Ok(Some(Action::CloseDataManagementDialog))
+                }
+                Action::DeleteSelectedSource => {
+                    if let Some((source_id, _source, _dataset)) = self.selected_dataset() {
+                        self.remove_data_source(source_id);
+                        return Ok(Some(Action::RemoveDataSource { source_id }));
+                    }
+                    return Ok(None);
+                }
+                Action::OpenDataImportDialog => {
+                    let mut _dialog = DataImportDialog::new();
+                    _dialog.register_config_handler(self.config.clone())?;
+                    self.data_import_dialog = Some(_dialog);
+                    return Ok(None);
+                }
+                Action::LoadAllPendingDatasets => {
+                    self.load_all_pending_datasets()?;
+                    return Ok(None);
+                }
+                Action::EditSelectedAlias => {
+                    if let Some((source_id, _source, dataset)) = self.selected_dataset() {
+                        let mut _dialog = AliasEditDialog::new(
+                            source_id,
+                            dataset.id.clone(),
+                            dataset.name.clone(),
+                            dataset.alias.clone(),
+                        );
+                        _dialog.register_config_handler(self.config.clone())?;
+                        self.alias_edit_dialog = Some(_dialog);
+                    }
+                    return Ok(None);
+                }
+                _ => {
+                    info!("DataManagementDialog unhandled DataManagement action: {:?} for key: {:?}", dm_action, key);
+                }
+            }
         }
 
         Ok(None)

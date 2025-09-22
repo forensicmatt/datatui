@@ -743,7 +743,18 @@ impl Component for DataTabManagerDialog {
         } else if self.show_data_management {
             info!("DataTabManagerDialog handle_key_event<show_data_management>: {:?}", key);
 
-            return self.data_management_dialog.handle_key_event(key);
+            if let Some(action) = self.data_management_dialog.handle_key_event(key)? {
+                match action {
+                    Action::CloseDataManagementDialog => {
+                        self.show_data_management = false;
+                        return Ok(None);
+                    }
+                    _ => {
+                        return Ok(Some(action));
+                    }
+                }
+            }
+            return Ok(None);
         } else {
             info!("DataTabManagerDialog handle_key_event<main>: {:?}", key);
 			// Handle events for main tab manager
