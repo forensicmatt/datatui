@@ -18,6 +18,7 @@ pub enum Mode {
     Home,
     DataTabManager,
     Navigation,
+    DataTableContainer,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");

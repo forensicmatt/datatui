@@ -15,13 +15,30 @@
       "<Alt-r>": "MoveTabRight",
       "<Alt-left>": "PrevTab",
       "<Alt-right>": "NextTab",
-      "<Ctrl-s>": "SyncTabs"
+      "<Alt-k>": "SyncTabs"
     },
     "Navigation": {
       "<up>": "Up",
       "<down>": "Down",
       "<left>": "Left",
       "<right>": "Right"
+    },
+    "DataTableContainer": {
+      "<Ctrl-s>": "OpenSortDialog",
+      "<Shift-S>": "QuickSortCurrentColumn",
+      "<Ctrl-e>": "OpenFilterDialog",
+      "<Shift-E>": "QuickFilterEqualsCurrentValue",
+      "<Shift-Left>": "MoveSelectedColumnLeft",
+      "<Shift-Right>": "MoveSelectedColumnRight",
+      "<Alt-e>": "OpenDataExportDialog",
+      "<Ctrl-t>": "OpenSqlDialog",
+      "<Ctrl-j>": "OpenJmesDialog",
+      "<Ctrl-o>": "OpenColumnOperationsDialog",
+      "<Ctrl-f>": "OpenFindDialog",
+      "<Ctrl-d>": "OpenDataframeDetailsDialog",
+      "<Ctrl-w>": "OpenColumnWidthDialog",
+      "<Ctrl-c>": "CopySelectedCell",
+      "<Ctrl-i>": "ToggleInstructions"
     }
   }
 }
