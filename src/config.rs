@@ -17,7 +17,7 @@ pub enum Mode {
     #[default]
     Home,
     DataTabManager,
-    Navigation,
+    Global,
     DataTableContainer,
     DataManagement,
 }

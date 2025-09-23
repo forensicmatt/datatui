@@ -20,7 +20,8 @@ pub enum Action {
     ClearScreen,
     Error(String),
     Help,
-    /// Navigation actions (configurable)
+    /// Global actions (configurable)
+    Escape,
     Up,
     Down,
     Left,

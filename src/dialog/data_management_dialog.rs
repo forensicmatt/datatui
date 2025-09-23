@@ -952,7 +952,9 @@ impl Component for DataManagementDialog {
                         self.add_data_source(config);
                         self.data_import_dialog = None;
                         // Auto-load all pending datasets after adding data source
-                        if let Err(e) = self.load_all_pending_datasets() { return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {e}")))); }
+                        if let Err(e) = self.load_all_pending_datasets() {
+                            return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {e}"))));
+                        }
                         return Ok(None);
                     }
                     Action::ConfirmDataImport => {
@@ -970,9 +972,12 @@ impl Component for DataManagementDialog {
             return Ok(None);
         }
         
-        if let Some(nav_action) = self.config.action_for_key(crate::config::Mode::Navigation, key) {
-            info!("DataManagementDialog action_for_key<Navigation>: {:?}", nav_action);
+        if let Some(nav_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            info!("DataManagementDialog action_for_key<Global>: {:?}", nav_action);
             match nav_action {
+                Action::Escape => {
+                    return Ok(Some(Action::CloseDataManagementDialog));
+                }
                 Action::Up => {
                     if self.selected_dataset_index > 0 {
                         self.selected_dataset_index = self.selected_dataset_index.saturating_sub(1);
@@ -987,7 +992,7 @@ impl Component for DataManagementDialog {
                     return Ok(None);
                 }
                 _ => {
-                    info!("DataManagementDialog unhandled Navigation action: {:?} for key: {:?}", nav_action, key);
+                    info!("DataManagementDialog unhandled Global action: {:?} for key: {:?}", nav_action, key);
                 }
             }
         }
@@ -995,9 +1000,6 @@ impl Component for DataManagementDialog {
         if let Some(dm_action) = self.config.action_for_key(crate::config::Mode::DataManagement, key) {
             info!("DataManagementDialog action_for_key<DataManagement>: {:?}", dm_action);
             match dm_action {
-                Action::CloseDataManagementDialog => {
-                    return Ok(Some(Action::CloseDataManagementDialog))
-                }
                 Action::DeleteSelectedSource => {
                     if let Some((source_id, _source, _dataset)) = self.selected_dataset() {
                         self.remove_data_source(source_id);

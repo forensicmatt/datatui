@@ -11,7 +11,7 @@ use crate::action::Action;
 use crate::config::Config;
 use crate::tui::Event;
 use color_eyre::Result;
-use crossterm::event::{KeyEvent, MouseEvent, KeyCode, KeyModifiers};
+use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::Frame;
 use ratatui::layout::Size;
 use tokio::sync::mpsc::UnboundedSender;
@@ -744,9 +744,14 @@ impl Component for DataTabManagerDialog {
             info!("DataTabManagerDialog handle_key_event<show_data_management>: {:?}", key);
 
             if let Some(action) = self.data_management_dialog.handle_key_event(key)? {
+                info!("DataTabManagerDialog handle_key_event<data_management_dialog>: {:?} for key: {:?}", action, key);
                 match action {
                     Action::CloseDataManagementDialog => {
                         self.show_data_management = false;
+                        if let Err(e) = self.sync_tabs_from_data_management() {
+                            return Ok(Some(Action::Error(format!("Failed to sync tabs: {e}"))));
+                        }
+                        self.update_all_containers_dataframes()?;
                         return Ok(None);
                     }
                     _ => {

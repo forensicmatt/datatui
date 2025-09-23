@@ -107,9 +107,8 @@ fn run_app<B: ratatui::backend::Backend>(
                 }
         }
         // Tick update (animate progress, etc.)
-        if let Ok(Some(a)) = tab_manager.update(Action::Tick) {
-            if matches!(a, Action::Quit | Action::Suspend) { break; }
-        }
+        if let Ok(Some(a)) = tab_manager.update(Action::Tick)
+            && matches!(a, Action::Quit | Action::Suspend) { break; }
     }
     // On exit, attempt to save workspace state if path is valid
     if tab_manager.project_settings_dialog.config.workspace_path.as_ref().is_some_and(|p| p.is_dir()) {

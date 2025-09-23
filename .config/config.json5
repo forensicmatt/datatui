@@ -17,11 +17,12 @@
       "<Alt-right>": "NextTab",
       "<Alt-k>": "SyncTabs"
     },
-    "Navigation": {
+    "Global": {
       "<up>": "Up",
       "<down>": "Down",
       "<left>": "Left",
-      "<right>": "Right"
+      "<right>": "Right",
+      "esc": "Escape"
     },
     "DataTableContainer": {
       "<Ctrl-s>": "OpenSortDialog",
