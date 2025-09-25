@@ -8,7 +8,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs};
 use ratatui::text::Span;
 use crate::action::Action;
-use crate::config::Config;
+use crate::config::{Config, Mode};
 use crate::tui::Event;
 use color_eyre::Result;
 use crossterm::event::{KeyEvent, MouseEvent};
@@ -97,6 +97,84 @@ impl DataTabManagerDialog {
             show_project_settings: false,
             tab_order: Vec::new(),
         }
+    }
+    
+    /// Build instructions string from configured keybindings for DataTabManager mode
+    fn build_instructions_from_config(&self) -> String {
+        use std::fmt::Write as _;
+        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
+            use crossterm::event::{KeyCode, KeyModifiers};
+            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
+            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
+            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
+            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
+            let key_part = match key.code {
+                KeyCode::Char(' ') => "Space".to_string(),
+                KeyCode::Char(c) => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
+                }
+                KeyCode::Left => "Left".to_string(),
+                KeyCode::Right => "Right".to_string(),
+                KeyCode::Up => "Up".to_string(),
+                KeyCode::Down => "Down".to_string(),
+                KeyCode::Enter => "Enter".to_string(),
+                KeyCode::Esc => "Esc".to_string(),
+                KeyCode::Tab => "Tab".to_string(),
+                KeyCode::BackTab => "BackTab".to_string(),
+                KeyCode::Delete => "Delete".to_string(),
+                KeyCode::Insert => "Insert".to_string(),
+                KeyCode::Home => "Home".to_string(),
+                KeyCode::End => "End".to_string(),
+                KeyCode::PageUp => "PageUp".to_string(),
+                KeyCode::PageDown => "PageDown".to_string(),
+                KeyCode::F(n) => format!("F{n}"),
+                _ => "?".to_string(),
+            };
+            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
+        }
+
+        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
+            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
+            parts.join(", ")
+        }
+
+        let mut segments: Vec<String> = Vec::new();
+        let Some(bindings) = self.config.keybindings.0.get(&Mode::DataTabManager) else { return String::new(); };
+
+        // Preferred display order and friendly labels
+        let ordered: &[(Action, &str)] = &[
+            (Action::OpenDataManagementDialog, "Data Management"),
+            (Action::OpenProjectSettingsDialog, "Project Settings"),
+            (Action::SyncTabs, "Manual Sync Tabs"),
+            (Action::MoveTabToFront, "Move Tab to Front"),
+            (Action::MoveTabToBack, "Move Tab to Back"),
+            (Action::MoveTabLeft, "Move Tab Left"),
+            (Action::MoveTabRight, "Move Tab Right"),
+            (Action::PrevTab, "Previous Tab"),
+            (Action::NextTab, "Next Tab"),
+        ];
+
+        for (action, label) in ordered {
+            // Collect all sequences bound to this action
+            let mut keys_for_action: Vec<&Vec<crossterm::event::KeyEvent>> = bindings
+                .iter()
+                .filter_map(|(seq, a)| if a == action { Some(seq) } else { None })
+                .collect();
+            // Provide stable output
+            keys_for_action.sort_by_key(|seq| seq.len());
+            if let Some(first) = keys_for_action.first() {
+                let key_text = fmt_sequence(first);
+                segments.push(format!("{}: {}", key_text, label));
+            }
+        }
+
+        // Join with double space for readability
+        let mut out = String::new();
+        for (i, seg) in segments.iter().enumerate() {
+            if i > 0 { let _ = write!(out, "  "); }
+            let _ = write!(out, "{}", seg);
+        }
+        out
     }
 
     /// Save the current workspace state (data sources and dialog states) to the workspace folder
@@ -486,13 +564,13 @@ impl DataTabManagerDialog {
             Ok(())
         } else {
             // Render the main tab manager
-            let instructions = 
-                "Ctrl+m: Data Management  Alt+s: Project Settings  Ctrl+s: Manual Sync Tabs  
-                Ctrl+f: Move Tab to Front  Ctrl+b: Move Tab to Back  Ctrl+l: Move Tab Left  
-                Ctrl+r: Move Tab Right  Ctrl+d: Delete Tab  Left/Right or h/l: Navigate Tabs  ";
+            let instructions = if self.show_instructions {
+                self.build_instructions_from_config()
+            } else { String::new() };
+
             let show_instructions = self.tabs.is_empty();
             let layout = split_dialog_area(
-                area, show_instructions, Some(instructions)
+                area, show_instructions, if instructions.is_empty() { None } else { Some(instructions.as_str()) }
             );
             let content_area = layout.content_area;
 
@@ -517,7 +595,7 @@ impl DataTabManagerDialog {
             // Render tabs
             self.render_tabs(tab_area, frame.buffer_mut());
             // Render content for active tab
-            self.render_active_tab_content(frame, content_area, instructions)?;
+            self.render_active_tab_content(frame, content_area, &instructions)?;
             // self.render_instructions(instructions, instructions_area, frame.buffer_mut());
 
             // Render ProjectSettings overlay if active
