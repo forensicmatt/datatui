@@ -47,6 +47,12 @@
       "<Ctrl-a>": "OpenDataImportDialog",
       "<Ctrl-l>": "LoadAllPendingDatasets",
       "<Ctrl-e>": "EditSelectedAlias"
+    },
+    "DataImport": {
+      "<enter>": "DataImportSelect",
+      "<y>": "ConfirmDataImport",
+      "<n>": "DataImportBack",
+      "<esc>": "CloseDataImportDialog"
     }
   }
 }

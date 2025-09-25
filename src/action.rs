@@ -138,6 +138,10 @@ pub enum Action {
     CloseDataImportDialog,
     /// User requested to confirm data import
     ConfirmDataImport,
+    /// User selected an item in DataImport dialog (e.g., proceed/open options)
+    DataImportSelect,
+    /// User requested to go back within the DataImport dialog
+    DataImportBack,
     /// User requested to add a data import configuration
     AddDataImportConfig {
         config: crate::data_import_types::DataImportConfig,
