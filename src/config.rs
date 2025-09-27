@@ -21,6 +21,7 @@ pub enum Mode {
     DataTableContainer,
     DataManagement,
     DataImport,
+    CsvOptions,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");

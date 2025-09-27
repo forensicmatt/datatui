@@ -22,10 +22,14 @@ pub enum Action {
     Help,
     /// Global actions (configurable)
     Escape,
+    Enter,
+    Backspace,
     Up,
     Down,
     Left,
     Right,
+    Tab,
+    Paste,
     /// DataManagementDialog actions (configurable)
     DeleteSelectedSource,
     LoadAllPendingDatasets,

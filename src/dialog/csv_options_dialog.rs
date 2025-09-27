@@ -55,6 +55,8 @@ pub struct CsvOptionsDialog {
     pub file_path_input: TextArea<'static>,
     #[serde(skip)]
     pub file_browser: Option<FileBrowserDialog>,
+    #[serde(skip)]
+    pub config: Config,
 }
 
 impl CsvOptionsDialog {
@@ -80,6 +82,7 @@ impl CsvOptionsDialog {
             file_browser_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             file_path_input,
             file_browser: None,
+            config: Config::default(),
         }
     }
 
@@ -263,9 +266,7 @@ impl Component for CsvOptionsDialog {
         Ok(())
     }
 
-    fn register_config_handler(&mut self, _config: Config) -> Result<()> {
-        Ok(())
-    }
+    fn register_config_handler(&mut self, _config: Config) -> Result<()> { self.config = _config; Ok(()) }
 
     fn init(&mut self, _area: Size) -> Result<()> {
         Ok(())
@@ -311,22 +312,100 @@ impl Component for CsvOptionsDialog {
             return Ok(None);
         }
 
-        let result = if key.kind == crossterm::event::KeyEventKind::Press {
-            match key.code {
-                KeyCode::Tab => {
-                    // Tab only moves between file path and browse button
-                    if self.file_path_focused {
-                        self.file_path_focused = false; // Move to browse button
+        // First, honor config-driven actions (Global + CsvOptions)
+        if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            match global_action {
+                Action::Escape => {
+                    return Ok(Some(Action::CloseCsvOptionsDialog));
+                }
+                Action::Enter => {
+                    // Enter key: if browse button is focused, open file browser
+                    if self.browse_button_selected {
+                        self.file_browser = Some(FileBrowserDialog::new(
+                            Some(self.file_browser_path.clone()),
+                            Some(vec!["csv", "tsv"]),
+                            false,
+                            FileBrowserMode::Load
+                        ));
+                        self.file_browser_mode = true;
+                        return Ok(None);
+                    } else if self.finish_button_selected {
+                        // Finish button pressed - create import config and return it
+                        let config = self.create_import_config();
+                        return Ok(Some(Action::AddDataImportConfig { config }));
+                    } else {
+                        return Ok(None);
+                    }
+                }
+                Action::Up => {
+                    if self.finish_button_selected {
+                        // If finish button is selected, up arrow goes to browse button
+                        self.finish_button_selected = false;
                         self.browse_button_selected = true;
+                        self.file_path_focused = false;
+                    } else if self.browse_button_selected {
+                        // If browse button is selected, up arrow goes back to file path
+                        self.file_path_focused = true;
+                        self.browse_button_selected = false;
+                    } else if self.file_path_focused {
+                        // When file path is focused, up arrow moves to the last CSV option
+                        self.file_path_focused = false;
+                        self.browse_button_selected = false;
+                        self.option_selected = 3; // Start at last CSV option (Escape Char)
+                    } else if self.option_selected == 0 {
+                        // If we're at the first CSV option, up arrow goes back to file path
+                        self.file_path_focused = true;
+                        self.browse_button_selected = false;
+                    } else {
+                        // Navigate CSV options when not focused on file path
+                        if self.option_selected > 0 {
+                            self.option_selected = self.option_selected.saturating_sub(1);
+                        }
+                    }
+                    return Ok(None);
+                }
+                Action::Down => {
+                    if self.file_path_focused {
+                        // When file path is focused, down arrow moves to CSV options
+                        self.file_path_focused = false;
+                        self.browse_button_selected = false;
+                        self.option_selected = 0; // Start at first CSV option
+                    } else if self.browse_button_selected {
+                        // If browse button is selected, down arrow moves to finish button
+                        self.browse_button_selected = false;
+                        self.finish_button_selected = true;
+                        self.option_selected = 0; // Reset CSV option selection
+                    } else if self.option_selected == 3 {
+                        // If we're at the last CSV option, down arrow moves to finish button
+                        self.finish_button_selected = true;
                         self.option_selected = 0; // Reset CSV option selection
                     } else {
-                        self.file_path_focused = true; // Move back to file path
+                        // Navigate CSV options when not focused on file path
+                        if self.option_selected < 3 { // 4 options: 0-3
+                            self.option_selected = self.option_selected.saturating_add(1);
+                        }
+                    }
+                    return Ok(None);
+                }
+                Action::Left => {
+                    if self.finish_button_selected {
+                        // Move from finish button back to CSV options
+                        self.finish_button_selected = false;
+                    } else if self.browse_button_selected {
+                        // Move from browse button to file path
+                        self.file_path_focused = true;
                         self.browse_button_selected = false;
                         self.option_selected = 0; // Reset CSV option selection
+                    } else if self.file_path_focused {
+                        // Let the TextArea handle the left arrow normally
+                        use tui_textarea::Input as TuiInput;
+                        let input: TuiInput = key.into();
+                        self.file_path_input.input(input);
+                        self.update_file_path(self.file_path_input.lines().join("\n"));
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Right => {
+                Action::Right => {
                     if self.file_path_focused {
                         // Check if cursor is at the end of the text
                         let lines = self.file_path_input.lines();
@@ -352,96 +431,37 @@ impl Component for CsvOptionsDialog {
                         self.file_path_focused = false;
                         self.browse_button_selected = false;
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Left => {
-                    if self.finish_button_selected {
-                        // Move from finish button back to CSV options
-                        self.finish_button_selected = false;
-                    } else if self.browse_button_selected {
-                        // Move from browse button to file path
-                        self.file_path_focused = true;
-                        self.browse_button_selected = false;
-                        self.option_selected = 0; // Reset CSV option selection
-                    } else if self.file_path_focused {
-                        // Let the TextArea handle the left arrow normally
+                Action::Backspace => {
+                    if self.file_path_focused {
                         use tui_textarea::Input as TuiInput;
                         let input: TuiInput = key.into();
                         self.file_path_input.input(input);
                         self.update_file_path(self.file_path_input.lines().join("\n"));
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Up => {
-                    if self.finish_button_selected {
-                        // If finish button is selected, up arrow goes to browse button
-                        self.finish_button_selected = false;
-                        self.browse_button_selected = true;
-                        self.file_path_focused = false;
-                    } else if self.browse_button_selected {
-                        // If browse button is selected, up arrow goes back to file path
-                        self.file_path_focused = true;
-                        self.browse_button_selected = false;
-                    } else if self.file_path_focused {
-                        // When file path is focused, up arrow moves to the last CSV option
-                        self.file_path_focused = false;
-                        self.browse_button_selected = false;
-                        self.option_selected = 3; // Start at last CSV option (Escape Char)
-                    } else if self.option_selected == 0 {
-                        // If we're at the first CSV option, up arrow goes back to file path
-                        self.file_path_focused = true;
-                        self.browse_button_selected = false;
-                    } else {
-                        // Navigate CSV options when not focused on file path
-                        if self.option_selected > 0 {
-                            self.option_selected = self.option_selected.saturating_sub(1);
-                        }
-                    }
-                    None
-                }
-                KeyCode::Down => {
+                _ => {}
+            }
+        }
+
+        if let Some(csv_action) = self.config.action_for_key(crate::config::Mode::CsvOptions, key) {
+            match csv_action {
+                Action::Tab => {
+                    // Tab only moves between file path and browse button
                     if self.file_path_focused {
-                        // When file path is focused, down arrow moves to CSV options
-                        self.file_path_focused = false;
-                        self.browse_button_selected = false;
-                        self.option_selected = 0; // Start at first CSV option
-                    } else if self.browse_button_selected {
-                        // If browse button is selected, down arrow moves to finish button
-                        self.browse_button_selected = false;
-                        self.finish_button_selected = true;
-                        self.option_selected = 0; // Reset CSV option selection
-                    } else if self.option_selected == 3 {
-                        // If we're at the last CSV option, down arrow moves to finish button
-                        self.finish_button_selected = true;
+                        self.file_path_focused = false; // Move to browse button
+                        self.browse_button_selected = true;
                         self.option_selected = 0; // Reset CSV option selection
                     } else {
-                        // Navigate CSV options when not focused on file path
-                        if self.option_selected < 3 { // 4 options: 0-3
-                            self.option_selected = self.option_selected.saturating_add(1);
-                        }
+                        self.file_path_focused = true; // Move back to file path
+                        self.browse_button_selected = false;
+                        self.option_selected = 0; // Reset CSV option selection
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Enter => {
-                    // Enter key: if browse button is focused, open file browser
-                    if self.browse_button_selected {
-                        self.file_browser = Some(FileBrowserDialog::new(
-                            Some(self.file_browser_path.clone()),
-                            Some(vec!["csv", "tsv"]),
-                            false,
-                            FileBrowserMode::Load
-                        ));
-                        self.file_browser_mode = true;
-                        None
-                    } else if self.finish_button_selected {
-                        // Finish button pressed - create import config and return it
-                        let config = self.create_import_config();
-                        Some(Action::AddDataImportConfig { config })
-                    } else {
-                        None
-                    }
-                }
-                KeyCode::Char('b') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                Action::OpenFileBrowser => {
                     // Ctrl+B: Open file browser
                     self.file_browser = Some(FileBrowserDialog::new(
                         Some(self.file_browser_path.clone()),
@@ -450,9 +470,9 @@ impl Component for CsvOptionsDialog {
                         FileBrowserMode::Load
                     ));
                     self.file_browser_mode = true;
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Char('p') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                Action::Paste => {
                     // Ctrl+P: Paste clipboard text into the File Path when focused
                     if self.file_path_focused
                         && let Ok(mut clipboard) = Clipboard::new()
@@ -460,18 +480,15 @@ impl Component for CsvOptionsDialog {
                         let first_line = text.lines().next().unwrap_or("").to_string();
                         self.set_file_path(first_line);
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Backspace => {
-                    if self.file_path_focused {
-                        // Handle backspace to delete characters in file path
-                        use tui_textarea::Input as TuiInput;
-                        let input: TuiInput = key.into();
-                        self.file_path_input.input(input);
-                        self.update_file_path(self.file_path_input.lines().join("\n"));
-                    }
-                    None
-                }
+                Action::CloseCsvOptionsDialog => { return Ok(Some(Action::CloseCsvOptionsDialog)); }
+                _ => { /* ignore others for now */ }
+            }
+        }
+
+        let result = if key.kind == crossterm::event::KeyEventKind::Press {
+            match key.code {
                 KeyCode::Char(c) => {
                     if self.file_path_focused {
                         // Handle text input for file path
@@ -488,14 +505,12 @@ impl Component for CsvOptionsDialog {
                         None
                     }
                 }
-                KeyCode::Esc => {
-                    Some(Action::CloseCsvOptionsDialog)
-                }
                 _ => None,
             }
         } else {
             None
         };
+
         Ok(result)
     }
 

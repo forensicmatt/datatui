@@ -22,7 +22,9 @@
       "<down>": "Down",
       "<left>": "Left",
       "<right>": "Right",
-      "esc": "Escape"
+      "<esc>": "Escape",
+      "<enter>": "Enter",
+      "<backspace>": "Backspace"
     },
     "DataTableContainer": {
       "<Ctrl-s>": "OpenSortDialog",
@@ -53,6 +55,12 @@
       "<y>": "ConfirmDataImport",
       "<n>": "DataImportBack",
       "<esc>": "CloseDataImportDialog"
+    },
+    "CsvOptions": {
+      "<tab>": "Tab",
+      "<Ctrl-b>": "OpenFileBrowser",
+      "<Ctrl-p>": "Paste",
+      "<esc>": "CloseCsvOptionsDialog"
     }
   }
 }
