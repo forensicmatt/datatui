@@ -89,6 +89,16 @@
       "<Ctrl-up>": "PageUp",
       "<Ctrl-down>": "PageDown"
     },
+    "SqlDialog": {
+      "<Ctrl-a>": "SelectAllText",
+      "<Ctrl-c>": "CopyText",
+      "<Ctrl-enter>": "RunQuery",
+      "<Ctrl-shift-enter>": "CreateNewDataset",
+      "<Ctrl-r>": "RestoreDataFrame",
+      "<Ctrl-o>": "OpenSqlFileBrowser",
+      "<Ctrl-l>": "ClearText",
+      "<Ctrl-p>": "PasteText"
+    },
     "JmesPath": {
       "<Ctrl-a>": "AddColumn",
       "<Ctrl-e>": "EditColumn",
