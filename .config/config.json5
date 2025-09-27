@@ -83,6 +83,12 @@
       "<space>": "ToggleSpace",
       "<delete>": "Delete"
     },
+    "FindAllResults": {
+      "<home>": "GoToFirst",
+      "<end>": "GoToLast",
+      "<Ctrl-up>": "PageUp",
+      "<Ctrl-down>": "PageDown"
+    },
     "JmesPath": {
       "<Ctrl-a>": "AddColumn",
       "<Ctrl-e>": "EditColumn",

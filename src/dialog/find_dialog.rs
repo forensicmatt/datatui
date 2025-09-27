@@ -437,6 +437,10 @@ impl FindDialog {
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
         use SearchMode::*;
         use crossterm::event::{KeyCode, KeyModifiers};
+        if key.kind != KeyEventKind::Press {
+            return None;
+        }
+
         if let FindDialogMode::Error(_) = self.mode {
             // Only allow Esc or Enter to clear error
             if key.kind == KeyEventKind::Press {

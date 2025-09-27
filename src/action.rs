@@ -233,6 +233,11 @@ pub enum Action {
     EditColumn,
     DeleteColumn,
     ApplyTransform,
+    /// FindAllResults dialog specific actions
+    GoToFirst,
+    GoToLast,
+    PageUp,
+    PageDown,
 }
 
 #[cfg(test)]

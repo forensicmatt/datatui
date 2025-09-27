@@ -25,6 +25,7 @@ pub enum Mode {
     Sort,
     Filter,
     Find,
+    FindAllResults,
     JmesPath,
 }
 

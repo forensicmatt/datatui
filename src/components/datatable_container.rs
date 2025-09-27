@@ -1178,7 +1178,9 @@ impl Component for DataTableContainer {
                         match results {
                             Ok(results) => {
                                 let instructions = "Up/Down: Navigate  Enter: Go to result  Esc: Close".to_string();
-                                self.find_all_results_dialog = Some(FindAllResultsDialog::new(results, instructions, pattern.clone()));
+                                let mut find_all_results_dialog = FindAllResultsDialog::new(results, instructions, pattern.clone());
+                                find_all_results_dialog.register_config_handler(self.config.clone())?;
+                                self.find_all_results_dialog = Some(find_all_results_dialog);
                             }
                             Err(e) => {
                                 self.find_dialog.mode = crate::dialog::find_dialog::FindDialogMode::Error(format!("Find All error: {e}"));
