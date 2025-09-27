@@ -238,6 +238,15 @@ pub enum Action {
     GoToLast,
     PageUp,
     PageDown,
+    /// SqlDialog specific actions
+    SelectAllText,
+    CopyText,
+    RunQuery,
+    CreateNewDataset,
+    RestoreDataFrame,
+    OpenSqlFileBrowser,
+    ClearText,
+    PasteText,
 }
 
 #[cfg(test)]

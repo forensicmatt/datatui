@@ -27,6 +27,7 @@ pub enum Mode {
     Find,
     FindAllResults,
     JmesPath,
+    SqlDialog,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");
