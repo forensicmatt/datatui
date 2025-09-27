@@ -1094,159 +1094,6 @@ impl Component for DataTableContainer {
     /// This method manages dialog activation, dialog event handling, and forwards navigation events to the DataTable.
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         info!("DataTableContainer handle_key_event: {:?}", key);
-        // First, try config-driven actions for DataTableContainer mode
-        if let Some(action) = self.config.action_for_key(crate::config::Mode::DataTableContainer, key) {
-            match action {
-                Action::OpenSortDialog => {
-                    self.sort_dialog_active = true;
-                    return Ok(None);
-                }
-                Action::QuickSortCurrentColumn => {
-                    let visible_columns = self.datatable.get_visible_columns()?;
-                    let col_idx = self.datatable.selection.col.min(visible_columns.len().saturating_sub(1));
-                    if let Some(col_name) = visible_columns.get(col_idx) {
-                        if let Some(existing_idx) = self
-                            .sort_dialog
-                            .sort_columns
-                            .iter()
-                            .position(|sc| sc.name == *col_name)
-                        {
-                            self.sort_dialog.active_index = existing_idx;
-                        } else {
-                            self.sort_dialog.sort_columns.push(crate::dialog::sort_dialog::SortColumn {
-                                name: col_name.clone(),
-                                ascending: true,
-                            });
-                            self.sort_dialog.active_index = self.sort_dialog.sort_columns.len().saturating_sub(1);
-                        }
-                        self.sort_dialog.mode = SortDialogMode::List;
-                        self.sort_dialog_active = true;
-                    }
-                    return Ok(None);
-                }
-                Action::OpenFilterDialog => {
-                    let df_arc = self.datatable.get_dataframe()?;
-                    let df = df_arc.as_ref();
-                    let columns: Vec<String> = df
-                        .get_column_names_owned()
-                        .into_iter()
-                        .map(|s| s.to_string())
-                        .collect();
-                    let col_index = self.datatable.selection.col.min(columns.len().saturating_sub(1));
-                    self.filter_dialog.set_columns(columns, col_index);
-                    self.filter_dialog_active = true;
-                    return Ok(None);
-                }
-                Action::QuickFilterEqualsCurrentValue => {
-                    let col_index = self.datatable.selection.col;
-                    let df = self.datatable.get_dataframe()?;
-                    let df = df.as_ref();
-                    let columns: Vec<String> = df
-                        .get_column_names_owned()
-                        .into_iter()
-                        .map(|s| s.to_string())
-                        .collect();
-                    self.filter_dialog.set_columns(columns, col_index);
-                    let selected_value = self.datatable.selected_cell_value()?;
-                    self.filter_dialog.add_value = selected_value.clone();
-                    self.filter_dialog.add_condition = Some(FilterCondition::Equals { value: selected_value, case_sensitive: false });
-                    let root_children = self.filter_dialog.get_root_expr().child_count();
-                    self.filter_dialog.add_insertion_path = Some(vec![root_children]);
-                    self.filter_dialog.mode = FilterDialogMode::Add;
-                    self.filter_dialog_active = true;
-                    return Ok(None);
-                }
-                Action::MoveSelectedColumnLeft | Action::MoveSelectedColumnRight => {
-                    let df_arc = self.datatable.get_dataframe()?;
-                    let df = df_arc.as_ref();
-                    let mut columns: Vec<String> = df
-                        .get_column_names_owned()
-                        .into_iter()
-                        .map(|s| s.to_string())
-                        .collect();
-                    let col_idx = self.datatable.selection.col.min(columns.len().saturating_sub(1));
-                    if matches!(action, Action::MoveSelectedColumnLeft) && col_idx > 0 {
-                        columns.swap(col_idx, col_idx - 1);
-                        if let Err(e) = self.datatable.dataframe.reorder_columns(&columns) {
-                            info!("Failed to move column left: {}", e);
-                        } else {
-                            self.datatable.selection.col = col_idx - 1;
-                            let _ = self.datatable.scroll_to_selection();
-                        }
-                    } else if matches!(action, Action::MoveSelectedColumnRight) && col_idx + 1 < columns.len() {
-                        columns.swap(col_idx, col_idx + 1);
-                        if let Err(e) = self.datatable.dataframe.reorder_columns(&columns) {
-                            info!("Failed to move column right: {}", e);
-                        } else {
-                            self.datatable.selection.col = col_idx + 1;
-                            let _ = self.datatable.scroll_to_selection();
-                        }
-                    }
-                    return Ok(None);
-                }
-                Action::OpenDataExportDialog => {
-                    let visible_columns = self.datatable.get_visible_columns().unwrap_or_default();
-                    let df_arc = self.datatable.get_dataframe()?;
-                    let df = df_arc.as_ref();
-                    let mut rows: Vec<Vec<String>> = Vec::with_capacity(df.height());
-                    for row_idx in 0..df.height() {
-                        let mut row: Vec<String> = Vec::with_capacity(visible_columns.len());
-                        for col in &visible_columns {
-                            let cell = df.column(col).ok().and_then(|s| s.get(row_idx).ok()).map(|v| v.str_value().to_string()).unwrap_or_default();
-                            row.push(cell);
-                        }
-                        rows.push(row);
-                    }
-                    let suggested = Some("export.csv".to_string());
-                    self.data_export_dialog = Some(DataExportDialog::new(visible_columns, rows, suggested));
-                    self.data_export_dialog_active = true;
-                    return Ok(None);
-                }
-                Action::OpenSqlDialog => { self.sql_dialog_active = true; return Ok(None); }
-                Action::OpenJmesDialog => { self.jmes_dialog_active = true; return Ok(None); }
-                Action::OpenColumnOperationsDialog => { self.column_operations_dialog_active = true; return Ok(None); }
-                Action::OpenFindDialog => { self.find_dialog_active = true; return Ok(None); }
-                Action::OpenDataframeDetailsDialog => {
-                    let df_arc = self.datatable.get_dataframe()?;
-                    let df_ref = df_arc.as_ref();
-                    let columns: Vec<String> = df_ref
-                        .get_column_names_owned()
-                        .into_iter()
-                        .map(|s| s.to_string())
-                        .collect();
-                    let col_index = self.datatable.selection.col.min(columns.len().saturating_sub(1));
-                    self.dataframe_details_dialog.set_columns(columns, col_index);
-                    self.dataframe_details_dialog.set_dataframe(df_arc.clone());
-                    self.dataframe_details_dialog_active = true;
-                    return Ok(None);
-                }
-                Action::OpenColumnWidthDialog => {
-                    let df = self.datatable.get_dataframe()?;
-                    let df = df.as_ref();
-                    let columns: Vec<String> = df
-                        .get_column_names_owned()
-                        .into_iter()
-                        .map(|s| s.to_string()).collect();
-                    self.column_width_dialog.set_columns(columns);
-                    let config = self.datatable.get_column_width_config();
-                    self.column_width_dialog.set_config(config);
-                    self.column_width_dialog_active = true;
-                    return Ok(None);
-                }
-                Action::CopySelectedCell => {
-                    let cell_value = self.selected_cell_json_value()?;
-                    let cell_value = match cell_value { Value::String(s) => s, v => v.to_string() };
-                    if let Err(e) = Clipboard::new().and_then(|mut clipboard| clipboard.set_text(cell_value.clone())) {
-                        info!("Failed to copy to clipboard: {}", e);
-                    }
-                    return Ok(None);
-                }
-                Action::ToggleInstructions => { self.toggle_instructions(); return Ok(None); }
-                _ => {
-                    info!("DataTableContainer unhandled action: {:?} for key: {:?}", action, key);
-                }
-            }
-        }
         // If busy overlay is active, consume input except maybe Esc; block cell navigation
         if self.busy_active {
             // Ignore all input while busy to prevent navigation/interaction
@@ -1941,181 +1788,160 @@ impl Component for DataTableContainer {
             }
             return Ok(None);
         }
-        // Not active: check for Ctrl+S, Ctrl+E, Ctrl+Q
-        // Shift+Left/Shift+Right: move current column
-        // if key.kind == KeyEventKind::Press && key.modifiers.contains(KeyModifiers::SHIFT) {
-        //     // Shift+S: instant sort toggle on current column
-        //     if key.code == KeyCode::Char('S') && !key.modifiers.contains(KeyModifiers::CONTROL) {
-        //         let visible_columns = self.datatable.get_visible_columns()?;
-        //         let col_idx = self.datatable.selection.col.min(visible_columns.len().saturating_sub(1));
-        //         if let Some(col_name) = visible_columns.get(col_idx) {
-        //             // Add or select the current column in the SortDialog instead of sorting now
-        //             if let Some(existing_idx) = self
-        //                 .sort_dialog
-        //                 .sort_columns
-        //                 .iter()
-        //                 .position(|sc| sc.name == *col_name)
-        //             {
-        //                 self.sort_dialog.active_index = existing_idx;
-        //             } else {
-        //                 self.sort_dialog.sort_columns.push(crate::dialog::sort_dialog::SortColumn {
-        //                     name: col_name.clone(),
-        //                     ascending: true,
-        //                 });
-        //                 self.sort_dialog.active_index = self.sort_dialog.sort_columns.len().saturating_sub(1);
-        //             }
-        //             self.sort_dialog.mode = SortDialogMode::List;
-        //             self.sort_dialog_active = true;
-        //         }
-        //         return Ok(None);
-        //     }
-        //     // Shift+E: open FilterDialog Add with Equals selected value prefilled
-        //     if key.code == KeyCode::Char('E') && !key.modifiers.contains(KeyModifiers::CONTROL) {
-        //         let col_index = self.datatable.selection.col;
-        //         let df = self.datatable.get_dataframe()?;
-        //         let df = df.as_ref();
-        //         let columns: Vec<String> = df
-        //             .get_column_names_owned()
-        //             .into_iter()
-        //             .map(|s| s.to_string())
-        //             .collect();
-        //         self.filter_dialog.set_columns(columns, col_index);
-        //         let selected_value = self.datatable.selected_cell_value()?;
-        //         self.filter_dialog.add_value = selected_value.clone();
-        //         self.filter_dialog.add_condition = Some(FilterCondition::Equals { value: selected_value, case_sensitive: false });
-        //         let root_children = self.filter_dialog.get_root_expr().child_count();
-        //         self.filter_dialog.add_insertion_path = Some(vec![root_children]);
-        //         self.filter_dialog.mode = FilterDialogMode::Add;
-        //         self.filter_dialog_active = true;
-        //         return Ok(None);
-        //     }
-        //     if key.code == KeyCode::Left || key.code == KeyCode::Right {
-        //         // Determine new order and apply
-        //         let df_arc = self.datatable.get_dataframe()?;
-        //         let df = df_arc.as_ref();
-        //         let mut columns: Vec<String> = df
-        //             .get_column_names_owned()
-        //             .into_iter()
-        //             .map(|s| s.to_string())
-        //             .collect();
-        //         let col_idx = self.datatable.selection.col.min(columns.len().saturating_sub(1));
-        //         if key.code == KeyCode::Left && col_idx > 0 {
-        //             columns.swap(col_idx, col_idx - 1);
-        //             if let Err(e) = self.datatable.dataframe.reorder_columns(&columns) {
-        //                 info!("Failed to move column left: {}", e);
-        //             } else {
-        //                 self.datatable.selection.col = col_idx - 1;
-        //                 let _ = self.datatable.scroll_to_selection();
-        //             }
-        //         } else if key.code == KeyCode::Right && col_idx + 1 < columns.len() {
-        //             columns.swap(col_idx, col_idx + 1);
-        //             if let Err(e) = self.datatable.dataframe.reorder_columns(&columns) {
-        //                 info!("Failed to move column right: {}", e);
-        //             } else {
-        //                 self.datatable.selection.col = col_idx + 1;
-        //                 let _ = self.datatable.scroll_to_selection();
-        //             }
-        //         }
-        //         return Ok(None);
-        //     }
-        // }
-        // if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        //     self.sort_dialog_active = true;
-        //     return Ok(None);
-        // }
-        // // Alt+e: Open DataExportDialog for current visible DataFrame
-        // if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::ALT) {
-        //     let visible_columns = self.datatable.get_visible_columns().unwrap_or_default();
-        //     let df_arc = self.datatable.get_dataframe()?;
-        //     let df = df_arc.as_ref();
-        //     let mut rows: Vec<Vec<String>> = Vec::with_capacity(df.height());
-        //     for row_idx in 0..df.height() {
-        //         let mut row: Vec<String> = Vec::with_capacity(visible_columns.len());
-        //         for col in &visible_columns {
-        //             let cell = df.column(col).ok().and_then(|s| s.get(row_idx).ok()).map(|v| v.str_value().to_string()).unwrap_or_default();
-        //             row.push(cell);
-        //         }
-        //         rows.push(row);
-        //     }
-        //     let suggested = Some("export.csv".to_string());
-        //     self.data_export_dialog = Some(DataExportDialog::new(visible_columns, rows, suggested));
-        //     self.data_export_dialog_active = true;
-        //     return Ok(None);
-        // }
-        // if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        //     // Refresh filter dialog columns from current DataFrame before opening
-        //     let df_arc = self.datatable.get_dataframe()?;
-        //     let df = df_arc.as_ref();
-        //     let columns: Vec<String> = df
-        //         .get_column_names_owned()
-        //         .into_iter()
-        //         .map(|s| s.to_string())
-        //         .collect();
-        //     let col_index = self.datatable.selection.col.min(columns.len().saturating_sub(1));
-        //     self.filter_dialog.set_columns(columns, col_index);
-        //     self.filter_dialog_active = true;
-        //     return Ok(None);
-        // }
-        // if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        //     self.sql_dialog_active = true;
-        //     return Ok(None);
-        // }
-        // if key.code == KeyCode::Char('j') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        //     self.jmes_dialog_active = true;
-        //     return Ok(None);
-        // }
-        // if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        //     self.column_operations_dialog_active = true;
-        //     return Ok(None);
-        // }
-        // if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        //     self.find_dialog_active = true;
-        //     return Ok(None);
-        // }
-        // if key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        //     // Initialize details dialog with current dataframe and column
-        //     let df_arc = self.datatable.get_dataframe()?;
-        //     let df_ref = df_arc.as_ref();
-        //     let columns: Vec<String> = df_ref
-        //         .get_column_names_owned()
-        //         .into_iter()
-        //         .map(|s| s.to_string())
-        //         .collect();
-        //     let col_index = self.datatable.selection.col.min(columns.len().saturating_sub(1));
-        //     self.dataframe_details_dialog.set_columns(columns, col_index);
-        //     self.dataframe_details_dialog.set_dataframe(df_arc.clone());
-        //     self.dataframe_details_dialog_active = true;
-        //     return Ok(None);
-        // }
-        // if key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        //     let df = self.datatable.get_dataframe()?;
-        //     let df = df.as_ref();
-        //     let columns: Vec<String> = df
-        //         .get_column_names_owned()
-        //         .into_iter()
-        //         .map(|s| s.to_string()).collect();
-        //     self.column_width_dialog.set_columns(columns);
-        //     let config = self.datatable.get_column_width_config();
-        //     self.column_width_dialog.set_config(config);
-        //     self.column_width_dialog_active = true;
-        //     return Ok(None);
-        // }
-        // if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        //     let cell_value = self.selected_cell_json_value()?;
-        //     let cell_value = match cell_value {
-        //         Value::String(s) => s,
-        //         v => v.to_string(),
-        //     };
-        //     if let Err(e) = Clipboard::new().and_then(|mut clipboard| clipboard.set_text(cell_value.clone())) {
-        //         info!("Failed to copy to clipboard: {}", e);
-        //     }
-        //     return Ok(None);
-        // }
-        // if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) && key.kind == KeyEventKind::Press {
-        //     self.toggle_instructions();
-        //     return Ok(None);
-        // }
-        // // Otherwise, forward to DataTable
+        
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::DataTableContainer, key) {
+            match action {
+                Action::OpenSortDialog => {
+                    self.sort_dialog_active = true;
+                    return Ok(None);
+                }
+                Action::QuickSortCurrentColumn => {
+                    let visible_columns = self.datatable.get_visible_columns()?;
+                    let col_idx = self.datatable.selection.col.min(visible_columns.len().saturating_sub(1));
+                    if let Some(col_name) = visible_columns.get(col_idx) {
+                        if let Some(existing_idx) = self
+                            .sort_dialog
+                            .sort_columns
+                            .iter()
+                            .position(|sc| sc.name == *col_name)
+                        {
+                            self.sort_dialog.active_index = existing_idx;
+                        } else {
+                            self.sort_dialog.sort_columns.push(crate::dialog::sort_dialog::SortColumn {
+                                name: col_name.clone(),
+                                ascending: true,
+                            });
+                            self.sort_dialog.active_index = self.sort_dialog.sort_columns.len().saturating_sub(1);
+                        }
+                        self.sort_dialog.mode = SortDialogMode::List;
+                        self.sort_dialog_active = true;
+                    }
+                    return Ok(None);
+                }
+                Action::OpenFilterDialog => {
+                    let df_arc = self.datatable.get_dataframe()?;
+                    let df = df_arc.as_ref();
+                    let columns: Vec<String> = df
+                        .get_column_names_owned()
+                        .into_iter()
+                        .map(|s| s.to_string())
+                        .collect();
+                    let col_index = self.datatable.selection.col.min(columns.len().saturating_sub(1));
+                    self.filter_dialog.set_columns(columns, col_index);
+                    self.filter_dialog_active = true;
+                    return Ok(None);
+                }
+                Action::QuickFilterEqualsCurrentValue => {
+                    let col_index = self.datatable.selection.col;
+                    let df = self.datatable.get_dataframe()?;
+                    let df = df.as_ref();
+                    let columns: Vec<String> = df
+                        .get_column_names_owned()
+                        .into_iter()
+                        .map(|s| s.to_string())
+                        .collect();
+                    self.filter_dialog.set_columns(columns, col_index);
+                    let selected_value = self.datatable.selected_cell_value()?;
+                    self.filter_dialog.add_value = selected_value.clone();
+                    self.filter_dialog.add_condition = Some(FilterCondition::Equals { value: selected_value, case_sensitive: false });
+                    let root_children = self.filter_dialog.get_root_expr().child_count();
+                    self.filter_dialog.add_insertion_path = Some(vec![root_children]);
+                    self.filter_dialog.mode = FilterDialogMode::Add;
+                    self.filter_dialog_active = true;
+                    return Ok(None);
+                }
+                Action::MoveSelectedColumnLeft | Action::MoveSelectedColumnRight => {
+                    let df_arc = self.datatable.get_dataframe()?;
+                    let df = df_arc.as_ref();
+                    let mut columns: Vec<String> = df
+                        .get_column_names_owned()
+                        .into_iter()
+                        .map(|s| s.to_string())
+                        .collect();
+                    let col_idx = self.datatable.selection.col.min(columns.len().saturating_sub(1));
+                    if matches!(action, Action::MoveSelectedColumnLeft) && col_idx > 0 {
+                        columns.swap(col_idx, col_idx - 1);
+                        if let Err(e) = self.datatable.dataframe.reorder_columns(&columns) {
+                            info!("Failed to move column left: {}", e);
+                        } else {
+                            self.datatable.selection.col = col_idx - 1;
+                            let _ = self.datatable.scroll_to_selection();
+                        }
+                    } else if matches!(action, Action::MoveSelectedColumnRight) && col_idx + 1 < columns.len() {
+                        columns.swap(col_idx, col_idx + 1);
+                        if let Err(e) = self.datatable.dataframe.reorder_columns(&columns) {
+                            info!("Failed to move column right: {}", e);
+                        } else {
+                            self.datatable.selection.col = col_idx + 1;
+                            let _ = self.datatable.scroll_to_selection();
+                        }
+                    }
+                    return Ok(None);
+                }
+                Action::OpenDataExportDialog => {
+                    let visible_columns = self.datatable.get_visible_columns().unwrap_or_default();
+                    let df_arc = self.datatable.get_dataframe()?;
+                    let df = df_arc.as_ref();
+                    let mut rows: Vec<Vec<String>> = Vec::with_capacity(df.height());
+                    for row_idx in 0..df.height() {
+                        let mut row: Vec<String> = Vec::with_capacity(visible_columns.len());
+                        for col in &visible_columns {
+                            let cell = df.column(col).ok().and_then(|s| s.get(row_idx).ok()).map(|v| v.str_value().to_string()).unwrap_or_default();
+                            row.push(cell);
+                        }
+                        rows.push(row);
+                    }
+                    let suggested = Some("export.csv".to_string());
+                    self.data_export_dialog = Some(DataExportDialog::new(visible_columns, rows, suggested));
+                    self.data_export_dialog_active = true;
+                    return Ok(None);
+                }
+                Action::OpenSqlDialog => { self.sql_dialog_active = true; return Ok(None); }
+                Action::OpenJmesDialog => { self.jmes_dialog_active = true; return Ok(None); }
+                Action::OpenColumnOperationsDialog => { self.column_operations_dialog_active = true; return Ok(None); }
+                Action::OpenFindDialog => { self.find_dialog_active = true; return Ok(None); }
+                Action::OpenDataframeDetailsDialog => {
+                    let df_arc = self.datatable.get_dataframe()?;
+                    let df_ref = df_arc.as_ref();
+                    let columns: Vec<String> = df_ref
+                        .get_column_names_owned()
+                        .into_iter()
+                        .map(|s| s.to_string())
+                        .collect();
+                    let col_index = self.datatable.selection.col.min(columns.len().saturating_sub(1));
+                    self.dataframe_details_dialog.set_columns(columns, col_index);
+                    self.dataframe_details_dialog.set_dataframe(df_arc.clone());
+                    self.dataframe_details_dialog_active = true;
+                    return Ok(None);
+                }
+                Action::OpenColumnWidthDialog => {
+                    let df = self.datatable.get_dataframe()?;
+                    let df = df.as_ref();
+                    let columns: Vec<String> = df
+                        .get_column_names_owned()
+                        .into_iter()
+                        .map(|s| s.to_string()).collect();
+                    self.column_width_dialog.set_columns(columns);
+                    let config = self.datatable.get_column_width_config();
+                    self.column_width_dialog.set_config(config);
+                    self.column_width_dialog_active = true;
+                    return Ok(None);
+                }
+                Action::CopySelectedCell => {
+                    let cell_value = self.selected_cell_json_value()?;
+                    let cell_value = match cell_value { Value::String(s) => s, v => v.to_string() };
+                    if let Err(e) = Clipboard::new().and_then(|mut clipboard| clipboard.set_text(cell_value.clone())) {
+                        info!("Failed to copy to clipboard: {}", e);
+                    }
+                    return Ok(None);
+                }
+                Action::ToggleInstructions => { self.toggle_instructions(); return Ok(None); }
+                _ => {
+                    info!("DataTableContainer unhandled action: {:?} for key: {:?}", action, key);
+                }
+            }
+        }
+
         self.datatable.handle_key_event(key)
     }
     /// Handle mouse events for the component.
