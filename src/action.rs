@@ -247,6 +247,10 @@ pub enum Action {
     OpenSqlFileBrowser,
     ClearText,
     PasteText,
+    /// XlsxOptionsDialog specific actions
+    OpenXlsxFileBrowser,
+    PasteFilePath,
+    ToggleWorksheetLoad,
 }
 
 #[cfg(test)]

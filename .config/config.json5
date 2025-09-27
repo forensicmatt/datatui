@@ -99,6 +99,11 @@
       "<Ctrl-l>": "ClearText",
       "<Ctrl-p>": "PasteText"
     },
+    "XlsxOptionsDialog": {
+      "<Ctrl-b>": "OpenXlsxFileBrowser",
+      "<Ctrl-p>": "PasteFilePath",
+      "<space>": "ToggleWorksheetLoad"
+    },
     "JmesPath": {
       "<Ctrl-a>": "AddColumn",
       "<Ctrl-e>": "EditColumn",
