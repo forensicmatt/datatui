@@ -212,6 +212,10 @@ pub enum Action {
     ColumnOperationRequested(String),
     /// User applied column operation options
     ColumnOperationOptionsApplied(crate::dialog::column_operation_options_dialog::ColumnOperationConfig),
+    /// Sort dialog specific actions
+    ToggleSortDirection,
+    RemoveSortColumn,
+    AddSortColumn,
 }
 
 #[cfg(test)]

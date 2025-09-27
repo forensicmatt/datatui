@@ -61,6 +61,11 @@
       "<Ctrl-b>": "OpenFileBrowser",
       "<Ctrl-p>": "Paste",
       "<esc>": "CloseCsvOptionsDialog"
+    },
+    "Sort": {
+      "<t>": "ToggleSortDirection",
+      "<d>": "RemoveSortColumn",
+      "<a>": "AddSortColumn"
     }
   }
 }

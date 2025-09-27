@@ -22,6 +22,7 @@ pub enum Mode {
     DataManagement,
     DataImport,
     CsvOptions,
+    Sort,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");
