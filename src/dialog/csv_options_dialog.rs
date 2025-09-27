@@ -123,6 +123,105 @@ impl CsvOptionsDialog {
         self.file_path = path;
     }
 
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        use std::fmt::Write as _;
+        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
+            use crossterm::event::{KeyCode, KeyModifiers};
+            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
+            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
+            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
+            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
+            let key_part = match key.code {
+                KeyCode::Char(' ') => "Space".to_string(),
+                KeyCode::Char(c) => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
+                }
+                KeyCode::Left => "Left".to_string(),
+                KeyCode::Right => "Right".to_string(),
+                KeyCode::Up => "Up".to_string(),
+                KeyCode::Down => "Down".to_string(),
+                KeyCode::Enter => "Enter".to_string(),
+                KeyCode::Esc => "Esc".to_string(),
+                KeyCode::Tab => "Tab".to_string(),
+                KeyCode::BackTab => "BackTab".to_string(),
+                KeyCode::Delete => "Delete".to_string(),
+                KeyCode::Insert => "Insert".to_string(),
+                KeyCode::Home => "Home".to_string(),
+                KeyCode::End => "End".to_string(),
+                KeyCode::PageUp => "PageUp".to_string(),
+                KeyCode::PageDown => "PageDown".to_string(),
+                KeyCode::F(n) => format!("F{n}"),
+                _ => "?".to_string(),
+            };
+            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
+        }
+
+        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
+            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
+            parts.join(", ")
+        }
+
+        let mut segments: Vec<String> = Vec::new();
+
+        // Global actions
+        if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
+            let global_actions: &[(Action, &str)] = &[
+                (Action::Up, "Move"),
+                (Action::Down, "Move"),
+                (Action::Enter, "Select"),
+                (Action::Escape, "Cancel"),
+            ];
+
+            for (action, label) in global_actions {
+                let mut keys_for_action: Vec<&Vec<crossterm::event::KeyEvent>> = global_bindings
+                    .iter()
+                    .filter_map(|(seq, a)| if a == action { Some(seq) } else { None })
+                    .collect();
+                keys_for_action.sort_by_key(|seq| seq.len());
+                if let Some(first) = keys_for_action.first() {
+                    let key_text = fmt_sequence(first);
+                    match action {
+                        Action::Up | Action::Down => {
+                            if segments.iter().any(|s| s.contains("Move")) { continue; }
+                            segments.push(format!("{}/Down: {}", key_text.replace("Down", "Up"), label));
+                        }
+                        _ => segments.push(format!("{}: {}", key_text, label)),
+                    }
+                }
+            }
+        }
+
+        // CsvOptions-specific actions
+        if let Some(csv_bindings) = self.config.keybindings.0.get(&crate::config::Mode::CsvOptions) {
+            let csv_actions: &[(Action, &str)] = &[
+                (Action::Tab, "Navigate"),
+                (Action::OpenFileBrowser, "Browse"),
+                (Action::Paste, "Paste"),
+            ];
+
+            for (action, label) in csv_actions {
+                let mut keys_for_action: Vec<&Vec<crossterm::event::KeyEvent>> = csv_bindings
+                    .iter()
+                    .filter_map(|(seq, a)| if a == action { Some(seq) } else { None })
+                    .collect();
+                keys_for_action.sort_by_key(|seq| seq.len());
+                if let Some(first) = keys_for_action.first() {
+                    let key_text = fmt_sequence(first);
+                    segments.push(format!("{}: {}", key_text, label));
+                }
+            }
+        }
+
+        // Join with double space for readability
+        let mut out = String::new();
+        for (i, seg) in segments.iter().enumerate() {
+            if i > 0 { let _ = write!(out, "  "); }
+            let _ = write!(out, "{}", seg);
+        }
+        out
+    }
+
     /// Update a CSV option
     fn update_csv_option(&mut self, c: char) {
         match self.option_selected {
@@ -257,6 +356,15 @@ impl CsvOptionsDialog {
             Style::default().fg(Color::Gray)
         };
         buf.set_string(finish_x, finish_y, finish_text, finish_style);
+        
+        // Render instructions at the bottom left
+        let instructions = self.build_instructions_from_config();
+        if !instructions.is_empty() {
+            let instruction_x = area.x + 1;
+            let instruction_y = area.y + area.height.saturating_sub(2);
+            buf.set_string(instruction_x, instruction_y, instructions, Style::default().fg(Color::Yellow));
+        }
+        
         options_block.render(options_area, buf);
     }
 }

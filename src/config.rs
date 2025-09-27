@@ -23,6 +23,9 @@ pub enum Mode {
     DataImport,
     CsvOptions,
     Sort,
+    Filter,
+    Find,
+    JmesPath,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");

@@ -24,7 +24,8 @@
       "<right>": "Right",
       "<esc>": "Escape",
       "<enter>": "Enter",
-      "<backspace>": "Backspace"
+      "<backspace>": "Backspace",
+      "<Ctrl-i>": "ToggleInstructions"
     },
     "DataTableContainer": {
       "<Ctrl-s>": "OpenSortDialog",
@@ -66,6 +67,27 @@
       "<t>": "ToggleSortDirection",
       "<d>": "RemoveSortColumn",
       "<a>": "AddSortColumn"
+    },
+    "Filter": {
+      "<Ctrl-a>": "AddFilter",
+      "<Ctrl-e>": "EditFilter",
+      "<Ctrl-d>": "DeleteFilter",
+      "<Ctrl-g>": "AddFilterGroup",
+      "<Ctrl-s>": "SaveFilter",
+      "<Ctrl-o>": "LoadFilter",
+      "<Ctrl-r>": "ResetFilters",
+      "<tab>": "ToggleFilterGroupType"
+    },
+    "Find": {
+      "<tab>": "Tab",
+      "<space>": "ToggleSpace",
+      "<delete>": "Delete"
+    },
+    "JmesPath": {
+      "<Ctrl-a>": "AddColumn",
+      "<Ctrl-e>": "EditColumn",
+      "<Ctrl-d>": "DeleteColumn",
+      "<Ctrl-enter>": "ApplyTransform"
     }
   }
 }

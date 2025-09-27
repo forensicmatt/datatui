@@ -216,6 +216,23 @@ pub enum Action {
     ToggleSortDirection,
     RemoveSortColumn,
     AddSortColumn,
+    /// Filter dialog specific actions
+    AddFilter,
+    EditFilter,
+    DeleteFilter,
+    AddFilterGroup,
+    SaveFilter,
+    LoadFilter,
+    ResetFilters,
+    ToggleFilterGroupType,
+    /// Find dialog specific actions
+    ToggleSpace,
+    Delete,
+    /// JMESPath dialog specific actions
+    AddColumn,
+    EditColumn,
+    DeleteColumn,
+    ApplyTransform,
 }
 
 #[cfg(test)]

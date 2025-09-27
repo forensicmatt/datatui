@@ -1,5 +1,5 @@
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::prelude::*;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, BorderType, Clear, Paragraph, Wrap, Tabs, Table, Row, Cell};
@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::action::Action;
 use crate::components::Component;
 use crate::components::dialog_layout::split_dialog_area;
+use crate::config::Config;
 use crate::dialog::TransformScope;
 use crate::dialog::error_dialog::{ErrorDialog, render_error_dialog};
 use crate::style::StyleConfig;
@@ -57,6 +58,7 @@ pub struct JmesPathDialog {
     add_pair_focus: AddPairFocus,
     add_pair_name: TextArea<'static>,
     add_pair_value: TextArea<'static>,
+    pub config: Config,
 }
 
 impl Default for JmesPathDialog {
@@ -82,6 +84,7 @@ impl JmesPathDialog {
             add_pair_focus: AddPairFocus::Name,
             add_pair_name: TextArea::default(),
             add_pair_value: TextArea::default(),
+            config: Config::default(),
         }
     }
 
@@ -89,16 +92,140 @@ impl JmesPathDialog {
         self.mode = JmesDialogMode::Error(msg);
     }
 
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        use std::fmt::Write as _;
+        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
+            use crossterm::event::{KeyCode, KeyModifiers};
+            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
+            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
+            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
+            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
+            let key_part = match key.code {
+                KeyCode::Char(' ') => "Space".to_string(),
+                KeyCode::Char(c) => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
+                }
+                KeyCode::Left => "Left".to_string(),
+                KeyCode::Right => "Right".to_string(),
+                KeyCode::Up => "Up".to_string(),
+                KeyCode::Down => "Down".to_string(),
+                KeyCode::Enter => "Enter".to_string(),
+                KeyCode::Esc => "Esc".to_string(),
+                KeyCode::Tab => "Tab".to_string(),
+                KeyCode::BackTab => "BackTab".to_string(),
+                KeyCode::Delete => "Delete".to_string(),
+                KeyCode::Insert => "Insert".to_string(),
+                KeyCode::Home => "Home".to_string(),
+                KeyCode::End => "End".to_string(),
+                KeyCode::PageUp => "PageUp".to_string(),
+                KeyCode::PageDown => "PageDown".to_string(),
+                KeyCode::F(n) => format!("F{n}"),
+                _ => "?".to_string(),
+            };
+            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
+        }
+        
+        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
+            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
+            parts.join(", ")
+        }
+
+        let mut segments: Vec<String> = Vec::new();
+
+        match self.mode {
+            JmesDialogMode::InputTransform => {
+                segments.push("Enter JMESPath expression.".to_string());
+                
+                // Add JMESPath-specific actions
+                if let Some(jmes_bindings) = self.config.keybindings.0.get(&crate::config::Mode::JmesPath) {
+                    for (keys, action) in jmes_bindings.iter() {
+                        match action {
+                            Action::ApplyTransform => {
+                                segments.push(format!("{}:Apply", fmt_sequence(keys)));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                
+                // Add Global actions
+                if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
+                    for (keys, action) in global_bindings.iter() {
+                        match action {
+                            Action::Up => segments.push(format!("{}:Move Focus", fmt_sequence(keys))),
+                            Action::Down => segments.push(format!("{}:Move Focus", fmt_sequence(keys))),
+                            Action::Left => segments.push(format!("{}:on Tabs", fmt_sequence(keys))),
+                            Action::Right => segments.push(format!("{}:on Tabs", fmt_sequence(keys))),
+                            Action::Escape => segments.push(format!("{}:Close", fmt_sequence(keys))),
+                            Action::ToggleInstructions => segments.push(format!("{}:Toggle Instructions", fmt_sequence(keys))),
+                            _ => {}
+                        }
+                    }
+                }
+                
+                segments.push("Space:Toggle Option".to_string());
+            }
+            JmesDialogMode::InputAddColumns => {
+                segments.push("Add column entries as key/value pairs.".to_string());
+                
+                // Add JMESPath-specific actions
+                if let Some(jmes_bindings) = self.config.keybindings.0.get(&crate::config::Mode::JmesPath) {
+                    for (keys, action) in jmes_bindings.iter() {
+                        match action {
+                            Action::AddColumn => segments.push(format!("{}:Add", fmt_sequence(keys))),
+                            Action::EditColumn => segments.push(format!("{}:Edit", fmt_sequence(keys))),
+                            Action::DeleteColumn => segments.push(format!("{}:Delete", fmt_sequence(keys))),
+                            Action::ApplyTransform => segments.push(format!("{}:Apply", fmt_sequence(keys))),
+                            _ => {}
+                        }
+                    }
+                }
+                
+                // Add Global actions
+                if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
+                    for (keys, action) in global_bindings.iter() {
+                        match action {
+                            Action::Up => segments.push(format!("{}:Select/Move Focus", fmt_sequence(keys))),
+                            Action::Down => segments.push(format!("{}:Select/Move Focus", fmt_sequence(keys))),
+                            Action::Left => segments.push(format!("{}:on Tabs", fmt_sequence(keys))),
+                            Action::Right => segments.push(format!("{}:on Tabs", fmt_sequence(keys))),
+                            Action::Escape => segments.push(format!("{}:Close", fmt_sequence(keys))),
+                            Action::ToggleInstructions => segments.push(format!("{}:Toggle Instructions", fmt_sequence(keys))),
+                            _ => {}
+                        }
+                    }
+                }
+                
+                segments.push("Space:Toggle Option (when selected)".to_string());
+            }
+            JmesDialogMode::Error(_) => return String::new(),
+        }
+
+        // Join segments
+        let mut out = String::new();
+        for (i, seg) in segments.iter().enumerate() {
+            if i > 0 { let _ = write!(out, "  "); }
+            let _ = write!(out, "{}", seg);
+        }
+        
+        if out.is_empty() {
+            match self.mode {
+                JmesDialogMode::InputTransform =>
+                    "Enter JMESPath expression. Ctrl+Enter:Apply  Up/Down:Select/Move Focus  Left/Right:on Tabs  Space:Toggle Option  Ctrl+i:Toggle Instructions  Esc:Close".to_string(),
+                JmesDialogMode::InputAddColumns =>
+                    "Add column entries as key/value pairs. Ctrl+A:Add  Ctrl+E:Edit  Ctrl+D:Delete  Up/Down:Select/Move Focus  Left/Right:on Tabs  Space:Toggle Option (when selected)  Ctrl+Enter:Apply  Ctrl+i:Toggle Instructions  Esc:Close".to_string(),
+                JmesDialogMode::Error(_) => String::new(),
+            }
+        } else {
+            out
+        }
+    }
+
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         // Instructions text per mode; toggled by self.show_instructions
-        let instructions = match self.mode {
-            JmesDialogMode::InputTransform =>
-                "Enter JMESPath expression. Ctrl+Enter:Apply  Up/Down:Select/Move Focus  Left/Right:on Tabs  Space:Toggle Option  Ctrl+i:Toggle Instructions  Esc:Close",
-            JmesDialogMode::InputAddColumns =>
-                "Add column entries as key/value pairs. Ctrl+A:Add  Ctrl+E:Edit  Ctrl+D:Delete  Up/Down:Select/Move Focus  Left/Right:on Tabs  Space:Toggle Option (when selected)  Ctrl+Enter:Apply  Ctrl+i:Toggle Instructions  Esc:Close",
-            JmesDialogMode::Error(_) => "",
-        };
+        let instructions = self.build_instructions_from_config();
 
         // Outer double-bordered block wrapping the entire dialog area
         let outer_block: Block<'_> = Block::default()
@@ -110,7 +237,8 @@ impl JmesPathDialog {
         outer_block.render(area, buf);
 
         // Split the inner area into content and optional instructions (inside the double border)
-        let inner_layout = split_dialog_area(inner_total_area, self.show_instructions, Some(instructions));
+        let inner_layout = split_dialog_area(inner_total_area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = inner_layout.content_area;
 
         // Split content into scope selector, tabs header, and body areas
@@ -345,95 +473,67 @@ impl JmesPathDialog {
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
         if key.kind == KeyEventKind::Press {
-            // Global toggles for instructions
-            if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                self.show_instructions = !self.show_instructions;
-                return None;
+            // Handle Global actions first
+            if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+                match global_action {
+                    Action::Escape => return Some(Action::DialogClose),
+                    Action::ToggleInstructions => {
+                        self.show_instructions = !self.show_instructions;
+                        return None;
+                    }
+                    Action::Up => {
+                        match self.focus {
+                            FocusArea::Tabs => { self.focus = FocusArea::Scope; return None; }
+                            FocusArea::Scope => { return None; }
+                            FocusArea::Body => { /* handled per-mode below */ }
+                        }
+                    }
+                    Action::Down => {
+                        match self.focus {
+                            FocusArea::Scope => { self.focus = FocusArea::Tabs; return None; }
+                            FocusArea::Tabs => { self.focus = FocusArea::Body; return None; }
+                            FocusArea::Body => { /* handled per-mode below */ }
+                        }
+                    }
+                    Action::Left => {
+                        if self.focus == FocusArea::Tabs {
+                            self.mode = JmesDialogMode::InputTransform;
+                            return None;
+                        }
+                    }
+                    Action::Right => {
+                        if self.focus == FocusArea::Tabs {
+                            self.mode = JmesDialogMode::InputAddColumns;
+                            return None;
+                        }
+                    }
+                    Action::Enter => {
+                        // Handle per-mode below
+                    }
+                    _ => {}
+                }
             }
 
-            // Focus navigation with Up/Down and Tabs/Options handling
-            match key.code {
-                KeyCode::Up => {
-                    match self.focus {
-                        FocusArea::Tabs => { self.focus = FocusArea::Scope; return None; }
-                        FocusArea::Scope => { return None; }
-                        FocusArea::Body => { /* handled per-mode below (e.g., textarea top -> Tabs) */ }
-                    }
-                }
-                KeyCode::Down => {
-                    match self.focus {
-                        FocusArea::Scope => { self.focus = FocusArea::Tabs; return None; }
-                        FocusArea::Tabs => { self.focus = FocusArea::Body; return None; }
-                        FocusArea::Body => {}
-                    }
-                }
-                KeyCode::Left => {
-                    if self.focus == FocusArea::Tabs {
-                        self.mode = JmesDialogMode::InputTransform;
-                        return None;
-                    }
-                }
-                KeyCode::Right => {
-                    if self.focus == FocusArea::Tabs {
-                        self.mode = JmesDialogMode::InputAddColumns;
-                        return None;
-                    }
-                }
-                KeyCode::Tab => {
-                    // Do not change focus in Add Column modal via Tab per request
-                }
-                KeyCode::Char(' ') => {
-                    if self.focus == FocusArea::Scope && self.selected_option == 0 {
-                        self.scope = match self.scope { 
-                            TransformScope::Current => TransformScope::Original,
-                            TransformScope::Original => TransformScope::Current
-                        };
-                        return None;
-                    }
-                }
-                _ => {}
-            }
-            match &mut self.mode {
-                JmesDialogMode::InputTransform => {
-                    match key.code {
-                        KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            let query = self.textarea.lines().join("\n");
-                            return Some(Action::JmesTransformDataset((query, self.scope.clone())));
-                        }
-                        KeyCode::Enter => {
-                            let input: tui_textarea::Input = key.into();
-                            if self.focus == FocusArea::Body { self.textarea.input(input); }
-                            return None;
-                        }
-                        KeyCode::Up => {
-                            if self.focus == FocusArea::Body {
-                                let (row, _col) = self.textarea.cursor();
-                                if row == 0 {
-                                    self.focus = FocusArea::Tabs;
-                                    return None;
-                                }
+            // Handle JmesPath-specific actions
+            if let Some(jmes_action) = self.config.action_for_key(crate::config::Mode::JmesPath, key) {
+                match jmes_action {
+                    Action::ApplyTransform => {
+                        match self.mode {
+                            JmesDialogMode::InputTransform => {
+                                let query = self.textarea.lines().join("\n");
+                                return Some(Action::JmesTransformDataset((query, self.scope.clone())));
                             }
-                            // otherwise let textarea handle it
-                            if self.focus == FocusArea::Body {
-                                let input: tui_textarea::Input = key.into();
-                                self.textarea.input(input);
+                            JmesDialogMode::InputAddColumns => {
+                                return Some(Action::JmesTransformAddColumns(
+                                    self.add_columns.clone(),
+                                    self.scope.clone()
+                                ));
                             }
-                            return None;
-                        }
-                        KeyCode::Esc => {
-                            return Some(Action::DialogClose);
-                        }
-                        _ => {
-                            let input: tui_textarea::Input = key.into();
-                            if self.focus == FocusArea::Body { self.textarea.input(input); }
-                            return None;
+                            _ => {}
                         }
                     }
-                }
-                JmesDialogMode::InputAddColumns => {
-                    match key.code {
-                        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            // Open Add Pair dialog
+                    Action::AddColumn => {
+                        if matches!(self.mode, JmesDialogMode::InputAddColumns) {
                             self.add_pair_open = true;
                             self.add_pair_edit_index = None;
                             self.add_pair_focus = AddPairFocus::Name;
@@ -441,51 +541,112 @@ impl JmesPathDialog {
                             self.add_pair_value = TextArea::default();
                             return None;
                         }
-                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            if !self.add_columns.is_empty() && self.selected_add_col < self.add_columns.len() {
-                                self.add_columns.remove(self.selected_add_col);
-                                if self.selected_add_col > 0 {
-                                    self.selected_add_col -= 1;
-                                }
+                    }
+                    Action::EditColumn => {
+                        if matches!(self.mode, JmesDialogMode::InputAddColumns) 
+                            && !self.add_columns.is_empty() 
+                            && self.selected_add_col < self.add_columns.len() {
+                            let pair = self.add_columns[self.selected_add_col].clone();
+                            self.add_pair_open = true;
+                            self.add_pair_edit_index = Some(self.selected_add_col);
+                            self.add_pair_focus = AddPairFocus::Name;
+                            self.add_pair_name = TextArea::from(vec![pair.name]);
+                            let value_lines: Vec<String> = if pair.value.is_empty() {
+                                Vec::new()
+                            } else {
+                                pair.value.lines().map(|l| l.to_string()).collect()
+                            };
+                            self.add_pair_value = TextArea::from(value_lines);
+                            return None;
+                        }
+                    }
+                    Action::DeleteColumn => {
+                        if matches!(self.mode, JmesDialogMode::InputAddColumns) 
+                            && !self.add_columns.is_empty() 
+                            && self.selected_add_col < self.add_columns.len() {
+                            self.add_columns.remove(self.selected_add_col);
+                            if self.selected_add_col > 0 {
+                                self.selected_add_col -= 1;
                             }
                             return None;
                         }
-                        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            // Open Add Pair dialog in Edit mode for selected row
-                            if !self.add_columns.is_empty() && self.selected_add_col < self.add_columns.len() {
-                                let pair = self.add_columns[self.selected_add_col].clone();
-                                self.add_pair_open = true;
-                                self.add_pair_edit_index = Some(self.selected_add_col);
-                                self.add_pair_focus = AddPairFocus::Name;
-                                self.add_pair_name = TextArea::from(vec![pair.name]);
-                                let value_lines: Vec<String> = if pair.value.is_empty() {
-                                    Vec::new()
-                                } else {
-                                    pair.value.lines().map(|l| l.to_string()).collect()
-                                };
-                                self.add_pair_value = TextArea::from(value_lines);
-                            }
-                            return None;
-                        }
-                        KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            return Some(
-                                Action::JmesTransformAddColumns(
-                                    self.add_columns.clone(),
-                                    self.scope.clone()
-                                )
-                            );
-                        }
-                        KeyCode::Enter if !self.add_pair_open => {
-                            // Treat pressing Enter while Add Columns tab is focused (Body) as clicking the Add button
-                            if self.focus == FocusArea::Body {
-                                self.add_pair_open = true;
-                                self.add_pair_edit_index = None;
-                                self.add_pair_focus = AddPairFocus::Name;
-                                self.add_pair_name = TextArea::default();
-                                self.add_pair_value = TextArea::default();
+                    }
+                    _ => {}
+                }
+            }
+
+            // Handle Space for toggle
+            if key.code == KeyCode::Char(' ') && self.focus == FocusArea::Scope && self.selected_option == 0 {
+                self.scope = match self.scope { 
+                    TransformScope::Current => TransformScope::Original,
+                    TransformScope::Original => TransformScope::Current
+                };
+                return None;
+            }
+            match &mut self.mode {
+                JmesDialogMode::InputTransform => {
+                    // Handle Global Enter action for textarea input
+                    if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+                        match global_action {
+                            Action::Enter => {
+                                let input: tui_textarea::Input = key.into();
+                                if self.focus == FocusArea::Body { self.textarea.input(input); }
                                 return None;
                             }
+                            Action::Up => {
+                                if self.focus == FocusArea::Body {
+                                    let (row, _col) = self.textarea.cursor();
+                                    if row == 0 {
+                                        self.focus = FocusArea::Tabs;
+                                        return None;
+                                    }
+                                    // otherwise let textarea handle it
+                                    let input: tui_textarea::Input = key.into();
+                                    self.textarea.input(input);
+                                }
+                                return None;
+                            }
+                            _ => {}
                         }
+                    }
+
+                    // Handle other input for textarea
+                    let input: tui_textarea::Input = key.into();
+                    if self.focus == FocusArea::Body { self.textarea.input(input); }
+                    return None;
+                }
+                JmesDialogMode::InputAddColumns => {
+                    // Handle Global Enter action for adding columns when not in pair dialog
+                    if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+                        match global_action {
+                            Action::Enter if !self.add_pair_open => {
+                                // Treat pressing Enter while Add Columns tab is focused (Body) as clicking the Add button
+                                if self.focus == FocusArea::Body {
+                                    self.add_pair_open = true;
+                                    self.add_pair_edit_index = None;
+                                    self.add_pair_focus = AddPairFocus::Name;
+                                    self.add_pair_name = TextArea::default();
+                                    self.add_pair_value = TextArea::default();
+                                    return None;
+                                }
+                            }
+                            Action::Up if !self.add_pair_open => {
+                                if self.focus == FocusArea::Body && self.selected_add_col == 0 {
+                                    self.focus = FocusArea::Tabs;
+                                    return None;
+                                }
+                                if self.selected_add_col > 0 { self.selected_add_col -= 1; }
+                                return None;
+                            }
+                            Action::Down if !self.add_pair_open => {
+                                if self.selected_add_col + 1 < self.add_columns.len() { self.selected_add_col += 1; }
+                                return None;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    match key.code {
                         KeyCode::Enter if self.add_pair_open => {
                             match self.add_pair_focus {
                                 AddPairFocus::Button => {
@@ -626,32 +787,21 @@ impl JmesPathDialog {
                             };
                             return None;
                         }
-                        KeyCode::Up => {
-                            if self.focus == FocusArea::Body && self.selected_add_col == 0 {
-                                self.focus = FocusArea::Tabs;
-                                return None;
-                            }
-                            if self.selected_add_col > 0 { self.selected_add_col -= 1; }
-                            return None;
-                        }
-                        KeyCode::Down => {
-                            if self.selected_add_col + 1 < self.add_columns.len() { self.selected_add_col += 1; }
-                            return None;
-                        }
-                        KeyCode::Esc => {
-                            return Some(Action::DialogClose);
-                        }
-                        _ => { return None; }
+                        _ => return None,
                     }
                 }
                 JmesDialogMode::Error(_) => {
-                    match key.code {
-                        KeyCode::Enter | KeyCode::Esc => {
-                            self.mode = JmesDialogMode::InputTransform;
-                            return None;
+                    // Handle Global actions in Error mode
+                    if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+                        match global_action {
+                            Action::Enter | Action::Escape => {
+                                self.mode = JmesDialogMode::InputTransform;
+                                return None;
+                            }
+                            _ => return None,
                         }
-                        _ => return None,
                     }
+                    return None;
                 }
             }
         }
@@ -661,7 +811,10 @@ impl JmesPathDialog {
 
 impl Component for JmesPathDialog {
     fn register_action_handler(&mut self, _tx: tokio::sync::mpsc::UnboundedSender<Action>) -> Result<()> { Ok(()) }
-    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { Ok(()) }
+    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { 
+        self.config = _config; 
+        Ok(()) 
+    }
     fn init(&mut self, _area: ratatui::layout::Size) -> Result<()> { Ok(()) }
     fn handle_events(&mut self, _event: Option<crate::tui::Event>) -> Result<Option<Action>> { Ok(None) }
     fn handle_key_event(&mut self, _key: KeyEvent) -> Result<Option<Action>> { Ok(None) }

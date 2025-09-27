@@ -4,6 +4,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Wrap, BorderType};
 use crate::action::Action;
 use crate::components::Component;
+use crate::config::Config;
 use color_eyre::Result;
 use crossterm::event::{KeyEvent, KeyEventKind};
 use ratatui::Frame;
@@ -37,6 +38,7 @@ pub struct FindDialog {
     pub searching: bool,
     pub search_progress: f64,
     pub action_selected: FindActionSelected, // New field
+    pub config: Config,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +91,7 @@ impl Default for FindDialog {
             searching: false,
             search_progress: 0.0,
             action_selected: FindActionSelected::FindNext, // New field
+            config: Config::default(),
         }
     }
 }
@@ -144,8 +147,9 @@ impl FindDialog {
             gauge.render(inner_area, buf);
             return 1;
         }
-        let instructions = "Enter search pattern. Tab: Next field  Space: Toggle  Enter: Action  Esc: Close";
-        let layout = split_dialog_area(inner_area, self.show_instructions, Some(instructions));
+        let instructions = self.build_instructions_from_config();
+        let layout = split_dialog_area(inner_area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
         let block = Block::default()
@@ -319,6 +323,117 @@ impl FindDialog {
         }
     }
 
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        use std::fmt::Write as _;
+        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
+            use crossterm::event::{KeyCode, KeyModifiers};
+            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
+            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
+            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
+            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
+            let key_part = match key.code {
+                KeyCode::Char(' ') => "Space".to_string(),
+                KeyCode::Char(c) => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
+                }
+                KeyCode::Left => "Left".to_string(),
+                KeyCode::Right => "Right".to_string(),
+                KeyCode::Up => "Up".to_string(),
+                KeyCode::Down => "Down".to_string(),
+                KeyCode::Enter => "Enter".to_string(),
+                KeyCode::Esc => "Esc".to_string(),
+                KeyCode::Tab => "Tab".to_string(),
+                KeyCode::BackTab => "BackTab".to_string(),
+                KeyCode::Delete => "Delete".to_string(),
+                KeyCode::Insert => "Insert".to_string(),
+                KeyCode::Home => "Home".to_string(),
+                KeyCode::End => "End".to_string(),
+                KeyCode::PageUp => "PageUp".to_string(),
+                KeyCode::PageDown => "PageDown".to_string(),
+                KeyCode::F(n) => format!("F{n}"),
+                _ => "?".to_string(),
+            };
+            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
+        }
+        
+        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
+            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
+            parts.join(", ")
+        }
+
+        let mut segments: Vec<String> = Vec::new();
+
+        // Handle Global actions
+        if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
+            // Find Enter key
+            for (keys, action) in global_bindings.iter() {
+                match action {
+                    Action::Enter => {
+                        segments.push(format!("{}: Action", fmt_sequence(keys)));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            
+            // Find Escape key
+            for (keys, action) in global_bindings.iter() {
+                match action {
+                    Action::Escape => {
+                        segments.push(format!("{}: Close", fmt_sequence(keys)));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Handle Find-specific actions  
+        if let Some(find_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Find) {
+            for (keys, action) in find_bindings.iter() {
+                match action {
+                    Action::Tab => {
+                        segments.push(format!("{}: Next field", fmt_sequence(keys)));
+                    }
+                    Action::ToggleSpace => {
+                        segments.push(format!("{}: Toggle", fmt_sequence(keys)));
+                    }
+                    Action::Delete => {
+                        segments.push(format!("{}: Delete", fmt_sequence(keys)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Add instructions toggle from Global config
+        if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
+            for (keys, action) in global_bindings.iter() {
+                match action {
+                    Action::ToggleInstructions => {
+                        segments.push(format!("{}: Toggle Instructions", fmt_sequence(keys)));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Join segments
+        let mut out = String::new();
+        for (i, seg) in segments.iter().enumerate() {
+            if i > 0 { let _ = write!(out, "  "); }
+            let _ = write!(out, "{}", seg);
+        }
+        
+        if out.is_empty() {
+            "Enter search pattern. Tab: Next field  Space: Toggle  Enter: Action  Esc: Close".to_string()
+        } else {
+            format!("Enter search pattern. {}", out)
+        }
+    }
+
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
         use SearchMode::*;
         use crossterm::event::{KeyCode, KeyModifiers};
@@ -346,149 +461,169 @@ impl FindDialog {
             }
             return None;
         }
+        
+        match key.code {
+            KeyCode::Char(c) => {
+                if self.active_field == FindDialogField::Pattern && !key.modifiers.contains(KeyModifiers::CONTROL) {
+                    let cursor = self.search_pattern_cursor.min(self.search_pattern.len());
+                    self.search_pattern.insert(cursor, c);
+                    self.search_pattern_cursor = cursor + 1;
+                    return None;
+                }
+            }
+            _ => {}
+        }
+        
         if key.kind == KeyEventKind::Press {
-            match key.code {
-                KeyCode::Down => {
-                    self.active_field = self.next_field();
-                }
-                KeyCode::Up => {
-                    self.active_field = self.prev_field();
-                }
-                KeyCode::Left => {
-                    if self.active_field == FindDialogField::Pattern {
-                        if self.search_pattern_cursor > 0 {
+            // First, honor config-driven Global actions
+            if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+                match global_action {
+                    Action::Escape => return Some(Action::DialogClose),
+                    Action::Enter => {
+                        if self.active_field == FindDialogField::ActionsRow || self.active_field == FindDialogField::Pattern {
+                            match self.action_selected {
+                                FindActionSelected::FindNext => {
+                                    return Some(Action::FindNext {
+                                        pattern: self.search_pattern.clone(),
+                                        options: self.options.clone(),
+                                        search_mode: self.search_mode.clone(),
+                                    });
+                                }
+                                FindActionSelected::Count => {
+                                    return Some(Action::FindCount {
+                                        pattern: self.search_pattern.clone(),
+                                        options: self.options.clone(),
+                                        search_mode: self.search_mode.clone(),
+                                    });
+                                }
+                                FindActionSelected::FindAll => {
+                                    return Some(Action::FindAll {
+                                        pattern: self.search_pattern.clone(),
+                                        options: self.options.clone(),
+                                        search_mode: self.search_mode.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Action::Up => {
+                        self.active_field = self.prev_field();
+                    }
+                    Action::Down => {
+                        self.active_field = self.next_field();
+                    }
+                    Action::Left => {
+                        if self.active_field == FindDialogField::Pattern {
+                            if self.search_pattern_cursor > 0 {
+                                self.search_pattern_cursor -= 1;
+                            }
+                        } else if self.active_field == FindDialogField::ActionsRow {
+                            use FindActionSelected::*;
+                            self.action_selected = match self.action_selected {
+                                FindNext => FindAll,
+                                Count => FindNext,
+                                FindAll => Count,
+                            };
+                        } else {
+                            use FindDialogField::*;
+                            match self.active_field {
+                                Backward => self.options.backward = !self.options.backward,
+                                WholeWord => self.options.whole_word = !self.options.whole_word,
+                                MatchCase => self.options.match_case = !self.options.match_case,
+                                WrapAround => self.options.wrap_around = !self.options.wrap_around,
+                                SearchMode => {
+                                    self.search_mode = match self.search_mode {
+                                        Normal => Regex,
+                                        Regex => Normal,
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Action::Right => {
+                        if self.active_field == FindDialogField::Pattern {
+                            if self.search_pattern_cursor < self.search_pattern.len() {
+                                self.search_pattern_cursor += 1;
+                            }
+                        } else if self.active_field == FindDialogField::ActionsRow {
+                            use FindActionSelected::*;
+                            self.action_selected = match self.action_selected {
+                                FindNext => Count,
+                                Count => FindAll,
+                                FindAll => FindNext,
+                            };
+                        } else {
+                            use FindDialogField::*;
+                            match self.active_field {
+                                Backward => self.options.backward = !self.options.backward,
+                                WholeWord => self.options.whole_word = !self.options.whole_word,
+                                MatchCase => self.options.match_case = !self.options.match_case,
+                                WrapAround => self.options.wrap_around = !self.options.wrap_around,
+                                SearchMode => {
+                                    self.search_mode = match self.search_mode {
+                                        Normal => Regex,
+                                        Regex => Normal,
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Action::Backspace => {
+                        if self.active_field == FindDialogField::Pattern
+                            && self.search_pattern_cursor > 0 && !self.search_pattern.is_empty() {
+                            let cursor = self.search_pattern_cursor;
+                            let mut chars: Vec<char> = self.search_pattern.chars().collect();
+                            chars.remove(cursor - 1);
+                            self.search_pattern = chars.into_iter().collect();
                             self.search_pattern_cursor -= 1;
                         }
-                    } else if self.active_field == FindDialogField::ActionsRow {
-                        use FindActionSelected::*;
-                        self.action_selected = match self.action_selected {
-                            FindNext => FindAll,
-                            Count => FindNext,
-                            FindAll => Count,
-                        };
-                    } else {
-                        use FindDialogField::*;
-                        match self.active_field {
-                            Backward => self.options.backward = !self.options.backward,
-                            WholeWord => self.options.whole_word = !self.options.whole_word,
-                            MatchCase => self.options.match_case = !self.options.match_case,
-                            WrapAround => self.options.wrap_around = !self.options.wrap_around,
-                            SearchMode => {
-                                self.search_mode = match self.search_mode {
-                                    Normal => Regex,
-                                    Regex => Normal,
-                                }
-                            }
-                            _ => {}
-                        }
                     }
-                }
-                KeyCode::Right => {
-                    if self.active_field == FindDialogField::Pattern {
-                        if self.search_pattern_cursor < self.search_pattern.len() {
-                            self.search_pattern_cursor += 1;
-                        }
-                    } else if self.active_field == FindDialogField::ActionsRow {
-                        use FindActionSelected::*;
-                        self.action_selected = match self.action_selected {
-                            FindNext => Count,
-                            Count => FindAll,
-                            FindAll => FindNext,
-                        };
-                    } else {
-                        use FindDialogField::*;
-                        match self.active_field {
-                            Backward => self.options.backward = !self.options.backward,
-                            WholeWord => self.options.whole_word = !self.options.whole_word,
-                            MatchCase => self.options.match_case = !self.options.match_case,
-                            WrapAround => self.options.wrap_around = !self.options.wrap_around,
-                            SearchMode => {
-                                self.search_mode = match self.search_mode {
-                                    Normal => Regex,
-                                    Regex => Normal,
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                KeyCode::Esc => {
-                    return Some(Action::DialogClose);
-                }
-                KeyCode::Char(' ') => {
-                    use FindDialogField::*;
-                    match self.active_field {
-                        Backward => self.options.backward = !self.options.backward,
-                        WholeWord => self.options.whole_word = !self.options.whole_word,
-                        MatchCase => self.options.match_case = !self.options.match_case,
-                        WrapAround => self.options.wrap_around = !self.options.wrap_around,
-                        SearchMode => {
-                            self.search_mode = match self.search_mode {
-                                Normal => Regex,
-                                Regex => Normal,
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                KeyCode::Enter => {
-                    if self.active_field == FindDialogField::ActionsRow || self.active_field == FindDialogField::Pattern {
-                        match self.action_selected {
-                            FindActionSelected::FindNext => {
-                                return Some(Action::FindNext {
-                                    pattern: self.search_pattern.clone(),
-                                    options: self.options.clone(),
-                                    search_mode: self.search_mode.clone(),
-                                });
-                            }
-                            FindActionSelected::Count => {
-                                return Some(Action::FindCount {
-                                    pattern: self.search_pattern.clone(),
-                                    options: self.options.clone(),
-                                    search_mode: self.search_mode.clone(),
-                                });
-                            }
-                            FindActionSelected::FindAll => {
-                                return Some(Action::FindAll {
-                                    pattern: self.search_pattern.clone(),
-                                    options: self.options.clone(),
-                                    search_mode: self.search_mode.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-                KeyCode::Char(c) => {
-                    if self.active_field == FindDialogField::Pattern && !key.modifiers.contains(KeyModifiers::CONTROL) {
-                        let cursor = self.search_pattern_cursor.min(self.search_pattern.len());
-                        self.search_pattern.insert(cursor, c);
-                        self.search_pattern_cursor = cursor + 1;
-                    }
-                    if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    Action::ToggleInstructions => {
                         self.show_instructions = !self.show_instructions;
                     }
+                    _ => {}
                 }
-                KeyCode::Backspace => {
-                    if self.active_field == FindDialogField::Pattern
-                        && self.search_pattern_cursor > 0 && !self.search_pattern.is_empty() {
-                        let cursor = self.search_pattern_cursor;
-                        let mut chars: Vec<char> = self.search_pattern.chars().collect();
-                        chars.remove(cursor - 1);
-                        self.search_pattern = chars.into_iter().collect();
-                        self.search_pattern_cursor -= 1;
+            }
+
+            // Next, check for Find-specific actions
+            if let Some(find_action) = self.config.action_for_key(crate::config::Mode::Find, key) {
+                match find_action {
+                    Action::Tab => {
+                        self.active_field = self.next_field();
+                        return None;
                     }
-                }
-                KeyCode::Delete => {
-                    if self.active_field == FindDialogField::Pattern {
-                        let cursor = self.search_pattern_cursor;
-                        if cursor < self.search_pattern.len() && !self.search_pattern.is_empty() {
-                            let mut chars: Vec<char> = self.search_pattern.chars().collect();
-                            chars.remove(cursor);
-                            self.search_pattern = chars.into_iter().collect();
+                    Action::ToggleSpace => {
+                        use FindDialogField::*;
+                        match self.active_field {
+                            Backward => self.options.backward = !self.options.backward,
+                            WholeWord => self.options.whole_word = !self.options.whole_word,
+                            MatchCase => self.options.match_case = !self.options.match_case,
+                            WrapAround => self.options.wrap_around = !self.options.wrap_around,
+                            SearchMode => {
+                                self.search_mode = match self.search_mode {
+                                    Normal => Regex,
+                                    Regex => Normal,
+                                }
+                            }
+                            _ => {}
                         }
+                        return None;
                     }
+                    Action::Delete => {
+                        if self.active_field == FindDialogField::Pattern {
+                            let cursor = self.search_pattern_cursor;
+                            if cursor < self.search_pattern.len() && !self.search_pattern.is_empty() {
+                                let mut chars: Vec<char> = self.search_pattern.chars().collect();
+                                chars.remove(cursor);
+                                self.search_pattern = chars.into_iter().collect();
+                            }
+                        }
+                        return None;
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
         None
@@ -499,8 +634,9 @@ impl Component for FindDialog {
     fn register_action_handler(&mut self, _tx: UnboundedSender<Action>) -> Result<()> {
         Ok(())
     }
-    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> {
-        Ok(())
+    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { 
+        self.config = _config; 
+        Ok(()) 
     }
     fn init(&mut self, _area: Size) -> Result<()> {
         Ok(())

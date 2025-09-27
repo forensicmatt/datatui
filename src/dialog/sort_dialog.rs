@@ -84,6 +84,116 @@ impl SortDialog {
         self.current_column = self.columns.get(current_index).cloned();
     }
 
+    /// Build instructions string from configured keybindings for Sort mode
+    fn build_instructions_from_config(&self) -> String {
+        use std::fmt::Write as _;
+        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
+            use crossterm::event::{KeyCode, KeyModifiers};
+            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
+            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
+            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
+            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
+            let key_part = match key.code {
+                KeyCode::Char(' ') => "Space".to_string(),
+                KeyCode::Char(c) => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
+                }
+                KeyCode::Left => "Left".to_string(),
+                KeyCode::Right => "Right".to_string(),
+                KeyCode::Up => "Up".to_string(),
+                KeyCode::Down => "Down".to_string(),
+                KeyCode::Enter => "Enter".to_string(),
+                KeyCode::Esc => "Esc".to_string(),
+                KeyCode::Tab => "Tab".to_string(),
+                KeyCode::BackTab => "BackTab".to_string(),
+                KeyCode::Delete => "Delete".to_string(),
+                KeyCode::Insert => "Insert".to_string(),
+                KeyCode::Home => "Home".to_string(),
+                KeyCode::End => "End".to_string(),
+                KeyCode::PageUp => "PageUp".to_string(),
+                KeyCode::PageDown => "PageDown".to_string(),
+                KeyCode::F(n) => format!("F{n}"),
+                _ => "?".to_string(),
+            };
+            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
+        }
+
+        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
+            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
+            parts.join(", ")
+        }
+
+        let mut segments: Vec<String> = Vec::new();
+
+        // Global actions first
+        if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
+            let global_actions: &[(Action, &str)] = &[
+                (Action::Up, "Move"),
+                (Action::Down, "Move"),
+                (Action::Enter, "Apply"),
+                (Action::Escape, "Close"),
+            ];
+
+            for (action, label) in global_actions {
+                let mut keys_for_action: Vec<&Vec<crossterm::event::KeyEvent>> = global_bindings
+                    .iter()
+                    .filter_map(|(seq, a)| if a == action { Some(seq) } else { None })
+                    .collect();
+                keys_for_action.sort_by_key(|seq| seq.len());
+                if let Some(first) = keys_for_action.first() {
+                    let key_text = fmt_sequence(first);
+                    match action {
+                        Action::Up | Action::Down => {
+                            if segments.iter().any(|s| s.contains("Move")) { continue; }
+                            segments.push(format!("{}/Down: {}", key_text.replace("Down", "Up"), label));
+                        }
+                        _ => segments.push(format!("{}: {}", key_text, label)),
+                    }
+                }
+            }
+        }
+
+        // Sort-specific actions
+        if let Some(sort_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Sort) {
+            let sort_actions: &[(Action, &str)] = match self.mode {
+                SortDialogMode::List => &[
+                    (Action::ToggleSortDirection, "Toggle"),
+                    (Action::RemoveSortColumn, "Remove"),
+                    (Action::AddSortColumn, "Add"),
+                ],
+                SortDialogMode::AddColumn => &[],
+            };
+
+            for (action, label) in sort_actions {
+                let mut keys_for_action: Vec<&Vec<crossterm::event::KeyEvent>> = sort_bindings
+                    .iter()
+                    .filter_map(|(seq, a)| if a == action { Some(seq) } else { None })
+                    .collect();
+                keys_for_action.sort_by_key(|seq| seq.len());
+                if let Some(first) = keys_for_action.first() {
+                    let key_text = fmt_sequence(first);
+                    segments.push(format!("{}: {}", key_text, label));
+                }
+            }
+        }
+
+        // Special handling for AddColumn mode
+        if matches!(self.mode, SortDialogMode::AddColumn) {
+            segments.clear();
+            segments.push("Up/Down: Select".to_string());
+            segments.push("Enter: Add".to_string());
+            segments.push("Esc: Cancel".to_string());
+        }
+
+        // Join with double space for readability
+        let mut out = String::new();
+        for (i, seg) in segments.iter().enumerate() {
+            if i > 0 { let _ = write!(out, "  "); }
+            let _ = write!(out, "{}", seg);
+        }
+        out
+    }
+
     /// Get columns available to add (not already in sort_columns)
     fn available_columns(&self) -> Vec<&String> {
         self.columns.iter().filter(|c| !self.sort_columns.iter().any(|sc| &sc.name == *c)).collect()
@@ -100,12 +210,9 @@ impl SortDialog {
             .border_type(BorderType::Double);
         let outer_inner_area = outer_block.inner(area);
         outer_block.render(area, buf);
-        // Dialog instructions per mode
-        let instructions = match self.mode {
-            SortDialogMode::List => "Up/Down: Move  t: Toggle  d: Remove  a: Add  Enter: Apply  Esc: Close",
-            SortDialogMode::AddColumn => "Up/Down: Select  Enter: Add  Esc: Cancel",
-        };
-        let layout = split_dialog_area(outer_inner_area, self.show_instructions, Some(instructions));
+        // Build dynamic instructions from config
+        let instructions = self.build_instructions_from_config();
+        let layout = split_dialog_area(outer_inner_area, self.show_instructions, if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
         // Draw dialog frame
