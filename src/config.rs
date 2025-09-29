@@ -29,6 +29,7 @@ pub enum Mode {
     JmesPath,
     SqlDialog,
     XlsxOptionsDialog,
+    ParquetOptionsDialog,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");

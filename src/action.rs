@@ -251,6 +251,9 @@ pub enum Action {
     OpenXlsxFileBrowser,
     PasteFilePath,
     ToggleWorksheetLoad,
+    /// ParquetOptionsDialog specific actions
+    OpenParquetFileBrowser,
+    PasteParquetFilePath,
 }
 
 #[cfg(test)]

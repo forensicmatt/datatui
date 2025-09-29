@@ -104,6 +104,10 @@
       "<Ctrl-p>": "PasteFilePath",
       "<space>": "ToggleWorksheetLoad"
     },
+    "ParquetOptionsDialog": {
+      "<Ctrl-b>": "OpenParquetFileBrowser",
+      "<Ctrl-p>": "PasteParquetFilePath"
+    },
     "JmesPath": {
       "<Ctrl-a>": "AddColumn",
       "<Ctrl-e>": "EditColumn",
