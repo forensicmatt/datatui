@@ -30,6 +30,7 @@ pub enum Mode {
     SqlDialog,
     XlsxOptionsDialog,
     ParquetOptionsDialog,
+    SqliteOptionsDialog,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");

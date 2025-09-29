@@ -254,6 +254,10 @@ pub enum Action {
     /// ParquetOptionsDialog specific actions
     OpenParquetFileBrowser,
     PasteParquetFilePath,
+    /// SqliteOptionsDialog specific actions
+    OpenSqliteFileBrowser,
+    ToggleImportAllTables,
+    ToggleTableSelection,
 }
 
 #[cfg(test)]

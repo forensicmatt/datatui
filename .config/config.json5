@@ -108,6 +108,10 @@
       "<Ctrl-b>": "OpenParquetFileBrowser",
       "<Ctrl-p>": "PasteParquetFilePath"
     },
+    "SqliteOptionsDialog": {
+      "<Ctrl-b>": "OpenSqliteFileBrowser",
+      "<space>": "ToggleTableSelection"
+    },
     "JmesPath": {
       "<Ctrl-a>": "AddColumn",
       "<Ctrl-e>": "EditColumn",

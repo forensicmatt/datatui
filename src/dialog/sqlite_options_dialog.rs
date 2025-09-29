@@ -1,7 +1,8 @@
 //! SqliteOptionsDialog: Dialog for configuring SQLite import options
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use crate::components::dialog_layout::split_dialog_area;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::action::Action;
@@ -43,10 +44,13 @@ pub struct SqliteOptionsDialog {
     pub file_browser_path: PathBuf,
     pub available_tables: Vec<String>,
     pub selected_table_index: usize,
+    pub show_instructions: bool, // Whether to show instructions area
     #[serde(skip)]
     pub file_path_input: TextArea<'static>,
     #[serde(skip)]
     pub file_browser: Option<FileBrowserDialog>,
+    #[serde(skip)]
+    pub config: Config,
 }
 
 impl SqliteOptionsDialog {
@@ -69,8 +73,10 @@ impl SqliteOptionsDialog {
             file_browser_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             available_tables: Vec::new(),
             selected_table_index: 0,
+            show_instructions: true,
             file_path_input,
             file_browser: None,
+            config: Config::default(),
         }
     }
 
@@ -132,6 +138,104 @@ impl SqliteOptionsDialog {
         }
     }
 
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        use std::fmt::Write as _;
+        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
+            use crossterm::event::{KeyCode, KeyModifiers};
+            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
+            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
+            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
+            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
+            let key_part = match key.code {
+                KeyCode::Char(' ') => "Space".to_string(),
+                KeyCode::Char(c) => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
+                }
+                KeyCode::Left => "Left".to_string(),
+                KeyCode::Right => "Right".to_string(),
+                KeyCode::Up => "Up".to_string(),
+                KeyCode::Down => "Down".to_string(),
+                KeyCode::Enter => "Enter".to_string(),
+                KeyCode::Esc => "Esc".to_string(),
+                KeyCode::Tab => "Tab".to_string(),
+                KeyCode::BackTab => "BackTab".to_string(),
+                KeyCode::Delete => "Delete".to_string(),
+                KeyCode::Insert => "Insert".to_string(),
+                KeyCode::Home => "Home".to_string(),
+                KeyCode::End => "End".to_string(),
+                KeyCode::PageUp => "PageUp".to_string(),
+                KeyCode::PageDown => "PageDown".to_string(),
+                KeyCode::F(n) => format!("F{n}"),
+                _ => "?".to_string(),
+            };
+            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
+        }
+        
+        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
+            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
+            parts.join(", ")
+        }
+
+        let mut segments: Vec<String> = Vec::new();
+
+        // Handle Global actions
+        if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
+            for (key_seq, action) in global_bindings {
+                match action {
+                    crate::action::Action::Escape => {
+                        segments.push(format!("{}: Cancel", fmt_sequence(key_seq)));
+                    }
+                    crate::action::Action::Enter => {
+                        segments.push(format!("{}: Confirm/Toggle", fmt_sequence(key_seq)));
+                    }
+                    crate::action::Action::Tab => {
+                        segments.push(format!("{}: Tab Fields", fmt_sequence(key_seq)));
+                    }
+                    crate::action::Action::Up => {
+                        segments.push(format!("{}: Navigate Up", fmt_sequence(key_seq)));
+                    }
+                    crate::action::Action::Down => {
+                        segments.push(format!("{}: Navigate Down", fmt_sequence(key_seq)));
+                    }
+                    crate::action::Action::Left => {
+                        segments.push(format!("{}: Navigate Left", fmt_sequence(key_seq)));
+                    }
+                    crate::action::Action::Right => {
+                        segments.push(format!("{}: Navigate Right", fmt_sequence(key_seq)));
+                    }
+                    crate::action::Action::ToggleInstructions => {
+                        segments.push(format!("{}: Toggle Instructions", fmt_sequence(key_seq)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Handle SqliteOptionsDialog-specific actions  
+        if let Some(dialog_bindings) = self.config.keybindings.0.get(&crate::config::Mode::SqliteOptionsDialog) {
+            for (key_seq, action) in dialog_bindings {
+                match action {
+                    crate::action::Action::OpenSqliteFileBrowser => {
+                        segments.push(format!("{}: Browse Files", fmt_sequence(key_seq)));
+                    }
+                    crate::action::Action::ToggleTableSelection => {
+                        segments.push(format!("{}: Toggle Selection", fmt_sequence(key_seq)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Join segments
+        let mut out = String::new();
+        for (i, seg) in segments.iter().enumerate() {
+            if i > 0 { let _ = write!(out, "  "); }
+            let _ = write!(out, "{}", seg);
+        }
+        out
+    }
+
     /// Render the dialog
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         // Clear the background for the popup
@@ -149,14 +253,19 @@ impl SqliteOptionsDialog {
             .title("SQLite Import Options")
             .borders(Borders::ALL);
 
-        // Create a layout with the file path input at the top
+        // Use split_dialog_area to handle instructions layout
+        let instructions = self.build_instructions_from_config();
+        let main_layout = split_dialog_area(area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
+        
+        // Split the content area for file path and options
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // File path input
                 Constraint::Min(0),    // Options content
             ])
-            .split(area);
+            .split(main_layout.content_area);
 
         // Render file path input
         let file_path_area = chunks[0];
@@ -219,6 +328,15 @@ impl SqliteOptionsDialog {
             .borders(Borders::ALL)
             .title("SQLite Options");
         options_block.render(options_area, buf);
+
+        // Render instructions area if available
+        if let Some(instructions_area) = main_layout.instructions_area {
+            let instructions_paragraph = Paragraph::new(instructions.as_str())
+                .block(Block::default().borders(Borders::ALL).title("Instructions"))
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: true });
+            instructions_paragraph.render(instructions_area, buf);
+        }
     }
 }
 
@@ -228,6 +346,7 @@ impl Component for SqliteOptionsDialog {
     }
 
     fn register_config_handler(&mut self, _config: Config) -> Result<()> {
+        self.config = _config;
         Ok(())
     }
 
@@ -275,9 +394,25 @@ impl Component for SqliteOptionsDialog {
             return Ok(None);
         }
 
-        let result = if key.kind == crossterm::event::KeyEventKind::Press {
-            match key.code {
-                KeyCode::Tab => {
+        if key.kind != crossterm::event::KeyEventKind::Press {
+            return Ok(None);
+        }
+
+        // Get config-driven actions once
+        let global_action = self.config.action_for_key(crate::config::Mode::Global, key);
+        let sqlite_dialog_action = self.config.action_for_key(crate::config::Mode::SqliteOptionsDialog, key);
+
+        // First, honor config-driven Global actions
+        if let Some(global_action) = &global_action {
+            match global_action {
+                Action::Escape => {
+                    return Ok(Some(Action::CloseSqliteOptionsDialog));
+                }
+                Action::ToggleInstructions => {
+                    self.show_instructions = !self.show_instructions;
+                    return Ok(None);
+                }
+                Action::Tab => {
                     // Tab moves between file path and browse button
                     if self.file_path_focused {
                         self.file_path_focused = false;
@@ -286,9 +421,9 @@ impl Component for SqliteOptionsDialog {
                         self.file_path_focused = true;
                         self.browse_button_selected = false;
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Right => {
+                Action::Right => {
                     if self.file_path_focused {
                         // Check if cursor is at the end of the text
                         let lines = self.file_path_input.lines();
@@ -307,9 +442,9 @@ impl Component for SqliteOptionsDialog {
                             self.update_file_path(self.file_path_input.lines().join("\n"));
                         }
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Left => {
+                Action::Left => {
                     if self.browse_button_selected {
                         // Move from browse button to file path
                         self.file_path_focused = true;
@@ -321,9 +456,9 @@ impl Component for SqliteOptionsDialog {
                         self.file_path_input.input(input);
                         self.update_file_path(self.file_path_input.lines().join("\n"));
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Up => {
+                Action::Up => {
                     if self.file_path_focused {
                         // When file path is focused, up arrow moves to options
                         self.file_path_focused = false;
@@ -338,9 +473,9 @@ impl Component for SqliteOptionsDialog {
                             self.selected_table_index = self.selected_table_index.saturating_sub(1);
                         }
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Down => {
+                Action::Down => {
                     if self.file_path_focused {
                         // When file path is focused, down arrow moves to options
                         self.file_path_focused = false;
@@ -354,9 +489,9 @@ impl Component for SqliteOptionsDialog {
                             self.selected_table_index = self.selected_table_index.saturating_add(1);
                         }
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Enter => {
+                Action::Enter => {
                     if self.browse_button_selected {
                         // Open file browser
                         self.file_browser = Some(FileBrowserDialog::new(
@@ -366,7 +501,7 @@ impl Component for SqliteOptionsDialog {
                             FileBrowserMode::Load
                         ));
                         self.file_browser_mode = true;
-                        None
+                        return Ok(None);
                     } else if !self.file_path_focused && !self.browse_button_selected {
                         // Toggle import all tables or table selection
                         if self.sqlite_options.import_all_tables {
@@ -375,12 +510,18 @@ impl Component for SqliteOptionsDialog {
                             let table_name = self.available_tables[self.selected_table_index].clone();
                             self.toggle_table_selection(&table_name);
                         }
-                        None
-                    } else {
-                        None
+                        return Ok(None);
                     }
+                    return Ok(None);
                 }
-                KeyCode::Char('b') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                _ => {}
+            }
+        }
+
+        // Next, check for SqliteOptionsDialog-specific actions
+        if let Some(dialog_action) = &sqlite_dialog_action {
+            match dialog_action {
+                Action::OpenSqliteFileBrowser => {
                     // Ctrl+B: Open file browser
                     self.file_browser = Some(FileBrowserDialog::new(
                         Some(self.file_browser_path.clone()),
@@ -389,29 +530,40 @@ impl Component for SqliteOptionsDialog {
                         FileBrowserMode::Load
                     ));
                     self.file_browser_mode = true;
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Char(_c) => {
-                    if self.file_path_focused {
-                        // Handle text input for file path
-                        use tui_textarea::Input as TuiInput;
-                        let input: TuiInput = key.into();
-                        self.file_path_input.input(input);
-                        self.update_file_path(self.file_path_input.lines().join("\n"));
-                        None
-                    } else {
-                        None
+                Action::ToggleTableSelection => {
+                    // Space: Toggle table selection or import all tables
+                    if !self.file_path_focused && !self.browse_button_selected {
+                        if self.sqlite_options.import_all_tables {
+                            self.toggle_import_all_tables();
+                        } else if !self.available_tables.is_empty() {
+                            let table_name = self.available_tables[self.selected_table_index].clone();
+                            self.toggle_table_selection(&table_name);
+                        }
                     }
+                    return Ok(None);
                 }
-                KeyCode::Esc => {
-                    Some(Action::CloseSqliteOptionsDialog)
-                }
-                _ => None,
+                _ => {}
             }
-        } else {
-            None
-        };
-        Ok(result)
+        }
+
+        // Fallback for character input or other unhandled keys
+        match key.code {
+            KeyCode::Char(_c) => {
+                if self.file_path_focused {
+                    // Handle text input for file path
+                    use tui_textarea::Input as TuiInput;
+                    let input: TuiInput = key.into();
+                    self.file_path_input.input(input);
+                    self.update_file_path(self.file_path_input.lines().join("\n"));
+                    return Ok(None);
+                }
+            }
+            _ => {}
+        }
+
+        Ok(None)
     }
 
     fn handle_mouse_event(&mut self, _mouse: MouseEvent) -> Result<Option<Action>> {
