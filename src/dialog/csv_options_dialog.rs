@@ -1,7 +1,7 @@
 //! CsvOptionsDialog: Dialog for configuring CSV import options
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::action::Action;
@@ -13,6 +13,7 @@ use ratatui::Frame;
 use ratatui::layout::Size;
 use tokio::sync::mpsc::UnboundedSender;
 use crate::components::Component;
+use crate::components::dialog_layout::split_dialog_area;
 use crate::dialog::file_browser_dialog::FileBrowserAction;
 use crate::data_import_types::DataImportConfig;
 use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserMode};
@@ -51,6 +52,7 @@ pub struct CsvOptionsDialog {
     pub finish_button_selected: bool, // Whether the finish button is selected
     pub file_browser_mode: bool, // Whether the file browser is currently active
     pub file_browser_path: PathBuf,
+    pub show_instructions: bool, // Whether to show instructions area
     #[serde(skip)]
     pub file_path_input: TextArea<'static>,
     #[serde(skip)]
@@ -80,6 +82,7 @@ impl CsvOptionsDialog {
             finish_button_selected: false,
             file_browser_mode: false,
             file_browser_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            show_instructions: true,
             file_path_input,
             file_browser: None,
             config: Config::default(),
@@ -249,17 +252,18 @@ impl CsvOptionsDialog {
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         // Clear the background for the popup
         Clear.render(area, buf);
-        
+
         // If file browser mode is active, render the file browser
         if self.file_browser_mode {
             if let Some(browser) = &self.file_browser { browser.render(area, buf); }
             return;
         }
-        
-        let _block = Block::default()
-            .title("CSV Import Options")
-            .borders(Borders::ALL);
 
+        // Use split_dialog_area to handle instructions layout
+        let instructions = self.build_instructions_from_config();
+        let main_layout = split_dialog_area(area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
+        
         // Create a layout with the file path input at the top
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -267,7 +271,7 @@ impl CsvOptionsDialog {
                 Constraint::Length(3), // File path input
                 Constraint::Min(0),    // Options content
             ])
-            .split(area);
+            .split(main_layout.content_area);
 
         // Render file path input and [Browse] within a single bordered block,
         // shrinking the input area to avoid overlapping the [Browse] text
@@ -346,10 +350,10 @@ impl CsvOptionsDialog {
             .borders(Borders::ALL)
             .title("CSV Options");
 
-        // Render the [Finish] button at the bottom right of the full dialog area
+        // Render the [Finish] button at the bottom right of the content area
         let finish_text = "[Finish]";
-        let finish_x = area.x + area.width.saturating_sub(finish_text.len() as u16 + 2);
-        let finish_y = area.y + area.height.saturating_sub(2);
+        let finish_x = main_layout.content_area.x + main_layout.content_area.width.saturating_sub(finish_text.len() as u16 + 2);
+        let finish_y = main_layout.content_area.y + main_layout.content_area.height.saturating_sub(2);
         let finish_style = if self.finish_button_selected {
             Style::default().fg(Color::Black).bg(Color::White)
         } else {
@@ -357,15 +361,17 @@ impl CsvOptionsDialog {
         };
         buf.set_string(finish_x, finish_y, finish_text, finish_style);
         
-        // Render instructions at the bottom left
-        let instructions = self.build_instructions_from_config();
-        if !instructions.is_empty() {
-            let instruction_x = area.x + 1;
-            let instruction_y = area.y + area.height.saturating_sub(2);
-            buf.set_string(instruction_x, instruction_y, instructions, Style::default().fg(Color::Yellow));
-        }
-        
         options_block.render(options_area, buf);
+        
+        // Render instructions area if it exists
+        if self.show_instructions 
+            && let Some(instructions_area) = main_layout.instructions_area {
+                let instructions_paragraph = Paragraph::new(instructions)
+                    .block(Block::default().borders(Borders::ALL).title("Instructions"))
+                    .style(Style::default().fg(Color::Yellow))
+                    .wrap(Wrap { trim: true });
+                instructions_paragraph.render(instructions_area, buf);
+        }
     }
 }
 
@@ -430,6 +436,10 @@ impl Component for CsvOptionsDialog {
         // First, honor config-driven actions (Global + CsvOptions)
         if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
             match global_action {
+                Action::ToggleInstructions => {
+                    self.show_instructions = !self.show_instructions;
+                    return Ok(None);
+                }
                 Action::Escape => {
                     return Ok(Some(Action::CloseCsvOptionsDialog));
                 }

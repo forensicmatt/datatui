@@ -38,6 +38,7 @@ pub struct FileBrowserDialog {
     pub mode: FileBrowserMode,
     pub filename_input: String, // Only used in Save mode
     pub filename_active: bool,  // Whether filename input is focused
+    pub filename_cursor: usize, // Cursor position in filename input
     pub prompt: FileBrowserPrompt, // New: prompt state
     pub show_instructions: bool, // new: show instructions area (default true)
     pub open_button_selected: bool, // Load mode: footer [Open] button selection
@@ -61,6 +62,7 @@ impl FileBrowserDialog {
             mode: mode.clone(),
             filename_input: String::new(),
             filename_active,
+            filename_cursor: 0,
             prompt: FileBrowserPrompt::None,
             show_instructions: true,
             open_button_selected: false,
@@ -332,17 +334,42 @@ impl FileBrowserDialog {
             let input = &self.filename_input;
             let style = if self.filename_active {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .fg(Color::White)
+                    .bg(Color::Rgb(30, 30, 30))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
+                  .fg(Color::White)
             };
             let block = Block::default()
                 .borders(Borders::ALL)
                 .title("File Name");
             block.render(filename_area, buf);
+            
+            // Render the input text
             buf.set_string(filename_area.x + 1, filename_area.y + 1, input, style);
+            
+            // Render cursor if filename input is active
+            if self.filename_active {
+                let cursor_x = filename_area.x + 1 + self.filename_cursor as u16;
+                let cursor_y = filename_area.y + 1;
+                // Ensure cursor is within the visible area
+                if cursor_x < filename_area.x + filename_area.width - 1 {
+                    // Use a different background color for the cursor
+                    let cursor_style = Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::White);
+                    
+                    // Get the character at cursor position, or use space if at end
+                    let cursor_char = if self.filename_cursor < input.len() {
+                        input.chars().nth(self.filename_cursor).unwrap_or(' ')
+                    } else {
+                        ' '
+                    };
+                    
+                    buf.set_string(cursor_x, cursor_y, cursor_char.to_string(), cursor_style);
+                }
+            }
         }
         // Render footer with [Open] button in Load mode
         if let Some(footer) = footer_area {
@@ -446,11 +473,26 @@ impl FileBrowserDialog {
                         return None;
                     }
                     crate::action::Action::Backspace => {
-                        self.filename_input.pop();
+                        if self.filename_cursor > 0 {
+                            self.filename_cursor -= 1;
+                            self.filename_input.remove(self.filename_cursor);
+                        }
                         return None;
                     }
                     crate::action::Action::Escape => {
                         return Some(FileBrowserAction::Cancelled);
+                    }
+                    crate::action::Action::Left => {
+                        if self.filename_cursor > 0 {
+                            self.filename_cursor -= 1;
+                        }
+                        return None;
+                    }
+                    crate::action::Action::Right => {
+                        if self.filename_cursor < self.filename_input.len() {
+                            self.filename_cursor += 1;
+                        }
+                        return None;
                     }
                     _ => {}
                 }
@@ -459,7 +501,8 @@ impl FileBrowserDialog {
             // Fallback for character input
             use crossterm::event::KeyCode;
             if let KeyCode::Char(c) = key.code {
-                self.filename_input.push(c);
+                self.filename_input.insert(self.filename_cursor, c);
+                self.filename_cursor += 1;
             }
             return None;
         }
@@ -470,6 +513,7 @@ impl FileBrowserDialog {
                     match self.mode {
                         FileBrowserMode::Save => {
                             self.filename_active = true;
+                            self.filename_cursor = self.filename_input.len(); // Position cursor at end
                             return None;
                         }
                         FileBrowserMode::Load => {
