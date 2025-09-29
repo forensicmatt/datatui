@@ -347,6 +347,10 @@ impl Component for SqliteOptionsDialog {
 
     fn register_config_handler(&mut self, _config: Config) -> Result<()> {
         self.config = _config;
+        // Propagate to FileBrowserDialog if it exists
+        if let Some(ref mut browser) = self.file_browser {
+            browser.register_config_handler(self.config.clone());
+        }
         Ok(())
     }
 
@@ -494,12 +498,14 @@ impl Component for SqliteOptionsDialog {
                 Action::Enter => {
                     if self.browse_button_selected {
                         // Open file browser
-                        self.file_browser = Some(FileBrowserDialog::new(
+                        let mut browser = FileBrowserDialog::new(
                             Some(self.file_browser_path.clone()),
                             Some(vec!["db", "sqlite", "sqlite3"]),
                             false,
                             FileBrowserMode::Load
-                        ));
+                        );
+                        browser.register_config_handler(self.config.clone());
+                        self.file_browser = Some(browser);
                         self.file_browser_mode = true;
                         return Ok(None);
                     } else if !self.file_path_focused && !self.browse_button_selected {
@@ -523,12 +529,14 @@ impl Component for SqliteOptionsDialog {
             match dialog_action {
                 Action::OpenSqliteFileBrowser => {
                     // Ctrl+B: Open file browser
-                    self.file_browser = Some(FileBrowserDialog::new(
+                    let mut browser = FileBrowserDialog::new(
                         Some(self.file_browser_path.clone()),
                         Some(vec!["db", "sqlite", "sqlite3"]),
                         false,
                         FileBrowserMode::Load
-                    ));
+                    );
+                    browser.register_config_handler(self.config.clone());
+                    self.file_browser = Some(browser);
                     self.file_browser_mode = true;
                     return Ok(None);
                 }

@@ -258,6 +258,12 @@ pub enum Action {
     OpenSqliteFileBrowser,
     ToggleImportAllTables,
     ToggleTableSelection,
+    /// FileBrowserDialog specific actions
+    FileBrowserPageUp,
+    FileBrowserPageDown,
+    ConfirmOverwrite,
+    DenyOverwrite,
+    NavigateToParent,
 }
 
 #[cfg(test)]

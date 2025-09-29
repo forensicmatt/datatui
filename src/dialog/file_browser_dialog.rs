@@ -6,6 +6,7 @@ use std::path::{PathBuf};
 use crossterm::event::{KeyEvent, KeyEventKind};
 use ratatui::style::Color;
 use crate::components::dialog_layout::split_dialog_area;
+use crate::config::Config;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileBrowserMode {
@@ -40,6 +41,7 @@ pub struct FileBrowserDialog {
     pub prompt: FileBrowserPrompt, // New: prompt state
     pub show_instructions: bool, // new: show instructions area (default true)
     pub open_button_selected: bool, // Load mode: footer [Open] button selection
+    pub config: Config, // Configuration for keybindings
 }
 
 impl FileBrowserDialog {
@@ -62,6 +64,7 @@ impl FileBrowserDialog {
             prompt: FileBrowserPrompt::None,
             show_instructions: true,
             open_button_selected: false,
+            config: Config::default(),
         }
     }
 
@@ -100,13 +103,103 @@ impl FileBrowserDialog {
         self.current_dir.parent().is_none()
     }
 
+    /// Register config handler
+    pub fn register_config_handler(&mut self, config: Config) {
+        self.config = config;
+    }
+
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        use std::fmt::Write as _;
+        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
+            use crossterm::event::{KeyCode, KeyModifiers};
+            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
+            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
+            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
+            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
+            let key_part = match key.code {
+                KeyCode::Char(' ') => "Space".to_string(),
+                KeyCode::Char(c) => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
+                }
+                KeyCode::Left => "Left".to_string(),
+                KeyCode::Right => "Right".to_string(),
+                KeyCode::Up => "Up".to_string(),
+                KeyCode::Down => "Down".to_string(),
+                KeyCode::Enter => "Enter".to_string(),
+                KeyCode::Esc => "Esc".to_string(),
+                KeyCode::Tab => "Tab".to_string(),
+                KeyCode::BackTab => "BackTab".to_string(),
+                KeyCode::Delete => "Delete".to_string(),
+                KeyCode::Insert => "Insert".to_string(),
+                KeyCode::Home => "Home".to_string(),
+                KeyCode::End => "End".to_string(),
+                KeyCode::PageUp => "PageUp".to_string(),
+                KeyCode::PageDown => "PageDown".to_string(),
+                KeyCode::Backspace => "Backspace".to_string(),
+                KeyCode::F(n) => format!("F{n}"),
+                _ => "?".to_string(),
+            };
+            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
+        }
+        
+        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
+            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
+            parts.join(", ")
+        }
+
+        let mut segments: Vec<String> = Vec::new();
+
+        // Handle Global actions
+        if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
+            for (key_seq, action) in global_bindings {
+                match action {
+                    crate::action::Action::Tab => {
+                        segments.push(format!("{}: Tab", fmt_sequence(key_seq)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Handle FileBrowser-specific actions  
+        if let Some(dialog_bindings) = self.config.keybindings.0.get(&crate::config::Mode::FileBrowser) {
+            for (key_seq, action) in dialog_bindings {
+                match action {
+                    crate::action::Action::FileBrowserPageUp => {
+                        segments.push(format!("{}: Page Up", fmt_sequence(key_seq)));
+                    }
+                    crate::action::Action::FileBrowserPageDown => {
+                        segments.push(format!("{}: Page Down", fmt_sequence(key_seq)));
+                    }
+                    crate::action::Action::NavigateToParent => {
+                        segments.push(format!("{}: Up Directory", fmt_sequence(key_seq)));
+                    }
+                    crate::action::Action::ConfirmOverwrite => {
+                        segments.push(format!("{}: Confirm Overwrite", fmt_sequence(key_seq)));
+                    }
+                    crate::action::Action::DenyOverwrite => {
+                        segments.push(format!("{}: Deny Overwrite", fmt_sequence(key_seq)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Join segments
+        let mut out = String::new();
+        for (i, seg) in segments.iter().enumerate() {
+            if i > 0 { let _ = write!(out, "  "); }
+            let _ = write!(out, "{}", seg);
+        }
+        out
+    }
+
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        let instructions = match self.mode {
-            FileBrowserMode::Load => "Up/Down: Navigate  Ctrl+Up/Down: Page  Enter: Open/Select  Esc: Cancel  Backspace: Up  Tab: Open Button",
-            FileBrowserMode::Save => "Up/Down: Navigate  Ctrl+Up/Down: Page  Enter: Open Folder/Save  Esc: Cancel  Backspace: Up  Tab: Filename",
-        };
-        let layout = split_dialog_area(area, self.show_instructions, Some(instructions));
+        let instructions = self.build_instructions_from_config();
+        let layout = split_dialog_area(area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let mut content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
         let mut filename_area = None;
@@ -293,64 +386,87 @@ impl FileBrowserDialog {
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<FileBrowserAction> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        if key.kind != KeyEventKind::Press {
+            return None;
+        }
+
+        // Get config-driven actions once
+        let global_action = self.config.action_for_key(crate::config::Mode::Global, key);
+        let filebrowser_action = self.config.action_for_key(crate::config::Mode::FileBrowser, key);
         
-        // Handle Ctrl+I to toggle instructions
-        if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        // Handle Global ToggleInstructions first
+        if let Some(crate::action::Action::ToggleInstructions) = &global_action {
             self.show_instructions = !self.show_instructions;
             return None;
         }
         
         // Handle prompt first
         if let FileBrowserPrompt::OverwriteConfirm(ref path) = self.prompt {
-            if key.kind == KeyEventKind::Press {
-                let path_clone = path.clone();
-                match key.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+            let path_clone = path.clone();
+            
+            // Check for confirm/deny actions
+            if let Some(filebrowser_action) = &filebrowser_action {
+                match filebrowser_action {
+                    crate::action::Action::ConfirmOverwrite => {
                         self.prompt = FileBrowserPrompt::None;
                         return Some(FileBrowserAction::Selected(path_clone));
                     }
-                    KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    crate::action::Action::DenyOverwrite => {
                         self.prompt = FileBrowserPrompt::None;
                         return None;
                     }
                     _ => {}
                 }
             }
+            
+            // Also check for global Escape
+            if let Some(crate::action::Action::Escape) = &global_action {
+                self.prompt = FileBrowserPrompt::None;
+                return None;
+            }
+            
             return None;
         }
         let entries_offset = if self.at_root() { 0 } else { 1 };
         let total_items = self.entries.len() + entries_offset;
+        
         if self.mode == FileBrowserMode::Save && self.filename_active {
             // Handle filename input
-            if key.kind == KeyEventKind::Press {
-                match key.code {
-                    KeyCode::Tab => {
+            // Check config-driven actions for filename input mode
+            if let Some(global_action) = &global_action {
+                match global_action {
+                    crate::action::Action::Tab => {
                         self.filename_active = false;
                         return None;
                     }
-                    KeyCode::Enter => {
+                    crate::action::Action::Enter => {
                         if !self.filename_input.is_empty() {
                             return Some(FileBrowserAction::Selected(self.current_dir.join(&self.filename_input)));
                         }
+                        return None;
                     }
-                    KeyCode::Backspace => {
+                    crate::action::Action::Backspace => {
                         self.filename_input.pop();
+                        return None;
                     }
-                    KeyCode::Char(c) => {
-                        self.filename_input.push(c);
-                    }
-                    KeyCode::Esc => {
+                    crate::action::Action::Escape => {
                         return Some(FileBrowserAction::Cancelled);
                     }
                     _ => {}
                 }
             }
+            
+            // Fallback for character input
+            use crossterm::event::KeyCode;
+            if let KeyCode::Char(c) = key.code {
+                self.filename_input.push(c);
+            }
             return None;
         }
-        if key.kind == KeyEventKind::Press {
-            match key.code {
-                KeyCode::Tab => {
+        // Handle Global actions
+        if let Some(global_action) = &global_action {
+            match global_action {
+                crate::action::Action::Tab => {
                     match self.mode {
                         FileBrowserMode::Save => {
                             self.filename_active = true;
@@ -363,45 +479,25 @@ impl FileBrowserDialog {
                         }
                     }
                 }
-                KeyCode::Up => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        // Ctrl+Up: Page up - move by visible rows minus 1 (to show overlap)
-                        let page_size = self.calculate_visible_rows().saturating_sub(1);
-                        if self.selected > page_size {
-                            self.selected = self.selected.saturating_sub(page_size);
-                        } else {
-                            self.selected = 0;
-                        }
+                crate::action::Action::Up => {
+                    // Regular Up: Move one item up
+                    if self.selected > 0 {
+                        self.selected -= 1;
+                        // Update scroll offset with calculated visible rows
                         self.update_scroll_offset(self.calculate_visible_rows());
-                    } else {
-                        // Regular Up: Move one item up
-                        if self.selected > 0 {
-                            self.selected -= 1;
-                            // Update scroll offset with calculated visible rows
-                            self.update_scroll_offset(self.calculate_visible_rows());
-                        }
                     }
+                    return None;
                 }
-                KeyCode::Down => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        // Ctrl+Down: Page down - move by visible rows minus 1 (to show overlap)
-                        let page_size = self.calculate_visible_rows().saturating_sub(1);
-                        if self.selected + page_size < total_items {
-                            self.selected += page_size;
-                        } else {
-                            self.selected = total_items.saturating_sub(1);
-                        }
+                crate::action::Action::Down => {
+                    // Regular Down: Move one item down
+                    if self.selected + 1 < total_items {
+                        self.selected += 1;
+                        // Update scroll offset with calculated visible rows
                         self.update_scroll_offset(self.calculate_visible_rows());
-                    } else {
-                        // Regular Down: Move one item down
-                        if self.selected + 1 < total_items {
-                            self.selected += 1;
-                            // Update scroll offset with calculated visible rows
-                            self.update_scroll_offset(self.calculate_visible_rows());
-                        }
                     }
+                    return None;
                 }
-                KeyCode::Enter => {
+                crate::action::Action::Enter => {
                     // If footer [Open] is selected in Load mode, select the current directory only
                     if self.mode == FileBrowserMode::Load && self.open_button_selected {
                         return Some(FileBrowserAction::Selected(self.current_dir.clone()));
@@ -433,8 +529,9 @@ impl FileBrowserDialog {
                                 return None;
                             }
                         }
+                    return None;
                 }
-                KeyCode::Esc => {
+                crate::action::Action::Escape => {
                     // If footer button is selected, unselect first; otherwise cancel
                     if self.mode == FileBrowserMode::Load && self.open_button_selected {
                         self.open_button_selected = false;
@@ -442,7 +539,36 @@ impl FileBrowserDialog {
                     }
                     return Some(FileBrowserAction::Cancelled);
                 }
-                KeyCode::Backspace => {
+                _ => {}
+            }
+        }
+
+        // Handle FileBrowser-specific actions
+        if let Some(filebrowser_action) = &filebrowser_action {
+            match filebrowser_action {
+                crate::action::Action::FileBrowserPageUp => {
+                    // Ctrl+Up: Page up - move by visible rows minus 1 (to show overlap)
+                    let page_size = self.calculate_visible_rows().saturating_sub(1);
+                    if self.selected > page_size {
+                        self.selected = self.selected.saturating_sub(page_size);
+                    } else {
+                        self.selected = 0;
+                    }
+                    self.update_scroll_offset(self.calculate_visible_rows());
+                    return None;
+                }
+                crate::action::Action::FileBrowserPageDown => {
+                    // Ctrl+Down: Page down - move by visible rows minus 1 (to show overlap)
+                    let page_size = self.calculate_visible_rows().saturating_sub(1);
+                    if self.selected + page_size < total_items {
+                        self.selected += page_size;
+                    } else {
+                        self.selected = total_items.saturating_sub(1);
+                    }
+                    self.update_scroll_offset(self.calculate_visible_rows());
+                    return None;
+                }
+                crate::action::Action::NavigateToParent => {
                     if !self.at_root()
                         && let Some(parent) = self.current_dir.parent() {
                             self.current_dir = parent.to_path_buf();
@@ -450,6 +576,7 @@ impl FileBrowserDialog {
                             self.selected = 0;
                             self.scroll_offset = 0; // Reset scroll when changing directories
                         }
+                    return None;
                 }
                 _ => {}
             }

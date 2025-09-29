@@ -18,6 +18,7 @@
       "<Alt-k>": "SyncTabs"
     },
     "Global": {
+      "<tab>": "Tab",
       "<up>": "Up",
       "<down>": "Down",
       "<left>": "Left",
@@ -111,6 +112,13 @@
     "SqliteOptionsDialog": {
       "<Ctrl-b>": "OpenSqliteFileBrowser",
       "<space>": "ToggleTableSelection"
+    },
+    "FileBrowser": {
+      "<Ctrl-up>": "FileBrowserPageUp",
+      "<Ctrl-down>": "FileBrowserPageDown",
+      "<backspace>": "NavigateToParent",
+      "y": "ConfirmOverwrite",
+      "n": "DenyOverwrite"
     },
     "JmesPath": {
       "<Ctrl-a>": "AddColumn",

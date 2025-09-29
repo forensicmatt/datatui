@@ -31,6 +31,7 @@ pub enum Mode {
     XlsxOptionsDialog,
     ParquetOptionsDialog,
     SqliteOptionsDialog,
+    FileBrowser,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");

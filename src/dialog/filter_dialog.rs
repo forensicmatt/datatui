@@ -296,14 +296,45 @@ impl FilterDialog {
 
     /// Handle a key event. Returns Some(Action) if the dialog should close and apply, None otherwise.
     pub fn handle_key_event(&mut self, key: KeyEvent, max_rows: usize) -> Option<Action> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crossterm::event::KeyCode;
         
-        // Handle Ctrl+I to toggle instructions
-        if key.kind == KeyEventKind::Press
-            && key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                self.show_instructions = !self.show_instructions;
-                return None;
+        // Handle FileBrowser mode first - if file browser is open, pass keys to it
+        if let FilterDialogMode::FileBrowser(browser) = &mut self.mode {
+            if let Some(action) = browser.handle_key_event(key) {
+                match action {
+                    FileBrowserAction::Selected(path) => {
+                        match browser.mode {
+                            FileBrowserMode::Save => {
+                                match self.save_to_file(&path) {
+                                    Ok(_) => {
+                                        self.mode = FilterDialogMode::List;
+                                    }
+                                    Err(e) => {
+                                        self.mode = FilterDialogMode::List;
+                                        error!("Failed to save filter: {}", e);
+                                    }
+                                }
+                            }
+                            FileBrowserMode::Load => {
+                                match self.load_from_file(&path) {
+                                    Ok(_) => {
+                                        self.mode = FilterDialogMode::List;
+                                    }
+                                    Err(e) => {
+                                        self.mode = FilterDialogMode::List;
+                                        error!("Failed to load filter: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    FileBrowserAction::Cancelled => {
+                        self.mode = FilterDialogMode::List;
+                    }
+                }
             }
+            return None;
+        }
         
         // First, honor config-driven actions (Global + Filter)
         if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
@@ -537,6 +568,10 @@ impl FilterDialog {
                     }
                     return None;
                 }
+                Action::ToggleInstructions => {
+                    self.show_instructions = !self.show_instructions;
+                    return None;
+                }
                 _ => {}
             }
         }
@@ -652,14 +687,16 @@ impl FilterDialog {
                 }
                 Action::SaveFilter => {
                     if matches!(self.mode, FilterDialogMode::List) {
-                        let browser = FileBrowserDialog::new(None, Some(vec!["json"]), false, FileBrowserMode::Save);
+                        let mut browser = FileBrowserDialog::new(None, Some(vec!["json"]), false, FileBrowserMode::Save);
+                        browser.register_config_handler(self.config.clone());
                         self.mode = FilterDialogMode::FileBrowser(browser);
                     }
                     return None;
                 }
                 Action::LoadFilter => {
                     if matches!(self.mode, FilterDialogMode::List) {
-                        let browser = FileBrowserDialog::new(None, Some(vec!["json"]), false, FileBrowserMode::Load);
+                        let mut browser = FileBrowserDialog::new(None, Some(vec!["json"]), false, FileBrowserMode::Load);
+                        browser.register_config_handler(self.config.clone());
                         self.mode = FilterDialogMode::FileBrowser(browser);
                     }
                     return None;
@@ -716,42 +753,10 @@ impl FilterDialog {
                 }
             }
             FilterDialogMode::AddGroup => {
-                // All AddGroup functionality handled by config actions
+                // All AddGroup functionality handled by config actions above
             }
-            FilterDialogMode::FileBrowser(browser) => {
-                if let Some(action) = browser.handle_key_event(key) {
-                    match action {
-                        FileBrowserAction::Selected(path) => {
-                            match browser.mode {
-                                FileBrowserMode::Save => {
-                                    match self.save_to_file(&path) {
-                                        Ok(_) => {
-                                            self.mode = FilterDialogMode::List;
-                                        }
-                                        Err(e) => {
-                                            self.mode = FilterDialogMode::List;
-                                            error!("Failed to save filter: {}", e);
-                                        }
-                                    }
-                                }
-                                FileBrowserMode::Load => {
-                                    match self.load_from_file(&path) {
-                                        Ok(_) => {
-                                            self.mode = FilterDialogMode::List;
-                                        }
-                                        Err(e) => {
-                                            self.mode = FilterDialogMode::List;
-                                            error!("Failed to load filter: {}", e);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        FileBrowserAction::Cancelled => {
-                            self.mode = FilterDialogMode::List;
-                        }
-                    }
-                }
+            FilterDialogMode::FileBrowser(_) => {
+                // FileBrowser mode is handled at the top of the function
             }
         }
         None

@@ -374,7 +374,14 @@ impl Component for CsvOptionsDialog {
         Ok(())
     }
 
-    fn register_config_handler(&mut self, _config: Config) -> Result<()> { self.config = _config; Ok(()) }
+    fn register_config_handler(&mut self, _config: Config) -> Result<()> { 
+        self.config = _config; 
+        // Propagate to FileBrowserDialog if it exists
+        if let Some(ref mut browser) = self.file_browser {
+            browser.register_config_handler(self.config.clone());
+        }
+        Ok(()) 
+    }
 
     fn init(&mut self, _area: Size) -> Result<()> {
         Ok(())
@@ -429,12 +436,14 @@ impl Component for CsvOptionsDialog {
                 Action::Enter => {
                     // Enter key: if browse button is focused, open file browser
                     if self.browse_button_selected {
-                        self.file_browser = Some(FileBrowserDialog::new(
+                        let mut browser = FileBrowserDialog::new(
                             Some(self.file_browser_path.clone()),
                             Some(vec!["csv", "tsv"]),
                             false,
                             FileBrowserMode::Load
-                        ));
+                        );
+                        browser.register_config_handler(self.config.clone());
+                        self.file_browser = Some(browser);
                         self.file_browser_mode = true;
                         return Ok(None);
                     } else if self.finish_button_selected {
@@ -571,12 +580,14 @@ impl Component for CsvOptionsDialog {
                 }
                 Action::OpenFileBrowser => {
                     // Ctrl+B: Open file browser
-                    self.file_browser = Some(FileBrowserDialog::new(
+                    let mut browser = FileBrowserDialog::new(
                         Some(self.file_browser_path.clone()),
                         Some(vec!["csv", "tsv"]),
                         false,
                         FileBrowserMode::Load
-                    ));
+                    );
+                    browser.register_config_handler(self.config.clone());
+                    self.file_browser = Some(browser);
                     self.file_browser_mode = true;
                     return Ok(None);
                 }

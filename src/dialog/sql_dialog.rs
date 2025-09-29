@@ -332,7 +332,9 @@ impl SqlDialog {
                             return Some(Action::SqlDialogRestore);
                         }
                         Action::OpenSqlFileBrowser => {
-                            self.file_browser = Some(FileBrowserDialog::new(None, Some(vec!["sql"]), false, FileBrowserMode::Load));
+                            let mut browser = FileBrowserDialog::new(None, Some(vec!["sql"]), false, FileBrowserMode::Load);
+                            browser.register_config_handler(self.config.clone());
+                            self.file_browser = Some(browser);
                             self.mode = SqlDialogMode::FileBrowser;
                             return None;
                         }
@@ -485,6 +487,10 @@ impl Component for SqlDialog {
     }
     fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> {
         self.config = _config;
+        // Propagate to FileBrowserDialog if it exists
+        if let Some(ref mut browser) = self.file_browser {
+            browser.register_config_handler(self.config.clone());
+        }
         Ok(())
     }
     fn init(&mut self, _area: ratatui::layout::Size) -> Result<()> {
