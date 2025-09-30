@@ -248,11 +248,11 @@ impl SqlDialog {
         }
 
         // Get all configured actions once at the start
-        let global_action = self.config.action_for_key(crate::config::Mode::Global, key);
+        let optional_global_action = self.config.action_for_key(crate::config::Mode::Global, key);
         let sql_dialog_action = self.config.action_for_key(crate::config::Mode::SqlDialog, key);
 
         // Handle global actions that work in all modes
-        if let Some(global_action) = &global_action
+        if let Some(global_action) = &optional_global_action
             && global_action == &Action::ToggleInstructions {
                 self.show_instructions = !self.show_instructions;
                 return None;
@@ -262,15 +262,10 @@ impl SqlDialog {
             SqlDialogMode::Input => {
                 if self.error_active {
                     // Only allow Esc or Enter to clear error
-                    if let Some(global_action) = &global_action {
-                        match global_action {
-                            Action::Escape | Action::Enter => {
-                                self.error_active = false;
-                                self.mode = SqlDialogMode::Input;
-                                return None;
-                            }
-                            _ => {}
-                        }
+                    if let Some(Action::Escape | Action::Enter) = &optional_global_action {
+                        self.error_active = false;
+                        self.mode = SqlDialogMode::Input;
+                        return None;
                     }
                     // Fallback for hardcoded Esc/Enter
                     match key.code {
@@ -284,7 +279,7 @@ impl SqlDialog {
                 }
                 
                 // First, check Global actions
-                if let Some(global_action) = &global_action {
+                if let Some(global_action) = &optional_global_action {
                     match global_action {
                         Action::Escape => {
                             return Some(Action::DialogClose);
@@ -393,7 +388,7 @@ impl SqlDialog {
             }
             SqlDialogMode::NewDatasetInput => {
                 // Check Global actions first
-                if let Some(global_action) = &global_action {
+                if let Some(global_action) = &optional_global_action {
                     match global_action {
                         Action::Enter => {
                             // Create new dataset if name is not empty
@@ -447,15 +442,10 @@ impl SqlDialog {
             SqlDialogMode::Error(_) => {
                 // Only close error on Esc or Enter
                 // Check Global actions first
-                if let Some(global_action) = &global_action {
-                    match global_action {
-                        Action::Escape | Action::Enter => {
-                            self.error_active = false;
-                            self.mode = SqlDialogMode::Input;
-                            return None;
-                        }
-                        _ => {}
-                    }
+                if let Some(Action::Escape | Action::Enter) = &optional_global_action {
+                    self.error_active = false;
+                    self.mode = SqlDialogMode::Input;
+                    return None;
                 }
                 // Fallback for hardcoded keys
                 match key.code {

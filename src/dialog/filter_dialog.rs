@@ -57,7 +57,7 @@ pub enum FilterDialogMode {
     Add,
     Edit(usize), // index of filter being edited
     AddGroup,    // new: for group creation
-    FileBrowser(FileBrowserDialog), // new: for save/load
+    FileBrowser(Box<FileBrowserDialog>), // new: for save/load
 }
 
 /// FilterDialogField: Enum for filtering dialog fields
@@ -688,7 +688,7 @@ impl FilterDialog {
                     if matches!(self.mode, FilterDialogMode::List) {
                         let mut browser = FileBrowserDialog::new(None, Some(vec!["json"]), false, FileBrowserMode::Save);
                         browser.register_config_handler(self.config.clone());
-                        self.mode = FilterDialogMode::FileBrowser(browser);
+                        self.mode = FilterDialogMode::FileBrowser(Box::new(browser));
                     }
                     return None;
                 }
@@ -696,7 +696,7 @@ impl FilterDialog {
                     if matches!(self.mode, FilterDialogMode::List) {
                         let mut browser = FileBrowserDialog::new(None, Some(vec!["json"]), false, FileBrowserMode::Load);
                         browser.register_config_handler(self.config.clone());
-                        self.mode = FilterDialogMode::FileBrowser(browser);
+                        self.mode = FilterDialogMode::FileBrowser(Box::new(browser));
                     }
                     return None;
                 }
