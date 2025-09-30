@@ -125,6 +125,12 @@
       "<Ctrl-e>": "EditColumn",
       "<Ctrl-d>": "DeleteColumn",
       "<Ctrl-enter>": "ApplyTransform"
+    },
+    "ColumnWidthDialog": {
+      "<space>": "ToggleAutoExpand",
+      "h": "ToggleColumnHidden",
+      "<Ctrl-up>": "MoveColumnUp",
+      "<Ctrl-down>": "MoveColumnDown"
     }
   }
 }

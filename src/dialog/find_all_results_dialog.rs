@@ -1,7 +1,7 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Table, Row, Cell, Clear, Paragraph, Wrap, BorderType};
 use crate::components::dialog_layout::split_dialog_area;
-use crossterm::event::{KeyEvent, KeyCode, KeyEventKind};
+use crossterm::event::{KeyEvent, KeyEventKind};
 use crate::action::Action;
 use crate::config::Config;
 

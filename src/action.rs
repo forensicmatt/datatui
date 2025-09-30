@@ -264,6 +264,13 @@ pub enum Action {
     ConfirmOverwrite,
     DenyOverwrite,
     NavigateToParent,
+    /// ColumnWidthDialog specific actions
+    ToggleAutoExpand,
+    StartColumnEditing,
+    ToggleEditMode,
+    ToggleColumnHidden,
+    MoveColumnUp,
+    MoveColumnDown,
 }
 
 #[cfg(test)]

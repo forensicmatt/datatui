@@ -9,7 +9,7 @@ use crate::action::Action;
 use crate::config::Config;
 use crate::tui::Event;
 use color_eyre::Result;
-use crossterm::event::{KeyEvent, MouseEvent, KeyCode};
+use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::Frame;
 use ratatui::layout::Size;
 use tokio::sync::mpsc::UnboundedSender;

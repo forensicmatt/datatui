@@ -32,6 +32,7 @@ pub enum Mode {
     ParquetOptionsDialog,
     SqliteOptionsDialog,
     FileBrowser,
+    ColumnWidthDialog,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");
