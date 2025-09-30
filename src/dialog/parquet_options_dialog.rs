@@ -511,8 +511,8 @@ impl Component for ParquetOptionsDialog {
         }
 
         // Fallback for character input or other unhandled keys
-        if let KeyCode::Char(_c) = key.code {
-            if self.file_path_focused {
+        if let KeyCode::Char(_c) = key.code
+            && self.file_path_focused {
                 // Handle text input for file path
                 use tui_textarea::Input as TuiInput;
                 let input: TuiInput = key.into();
@@ -520,7 +520,6 @@ impl Component for ParquetOptionsDialog {
                 self.update_file_path(self.file_path_input.lines().join("\n"));
                 return Ok(None);
             }
-        }
 
         Ok(None)
     }

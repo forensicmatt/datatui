@@ -728,22 +728,18 @@ impl FilterDialog {
                 // Fallback for any unhandled keys in List mode
             }
             FilterDialogMode::Add => {
-                if key.kind == KeyEventKind::Press {
-                    if let KeyCode::Char(c) = key.code {
-                        if self.focus_field == FilterDialogField::Value {
+                if key.kind == KeyEventKind::Press
+                    && let KeyCode::Char(c) = key.code
+                        && self.focus_field == FilterDialogField::Value {
                             self.add_value.push(c);
                         }
-                    }
-                }
             }
             FilterDialogMode::Edit(_idx) => {
-                if key.kind == KeyEventKind::Press {
-                    if let KeyCode::Char(c) = key.code {
-                        if self.focus_field == FilterDialogField::Value {
+                if key.kind == KeyEventKind::Press
+                    && let KeyCode::Char(c) = key.code
+                        && self.focus_field == FilterDialogField::Value {
                             self.add_value.push(c);
                         }
-                    }
-                }
             }
             FilterDialogMode::AddGroup => {
                 // All AddGroup functionality handled by config actions above

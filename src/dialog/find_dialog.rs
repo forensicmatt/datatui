@@ -457,14 +457,13 @@ impl FindDialog {
             return None;
         }
         
-        if let KeyCode::Char(c) = key.code {
-            if self.active_field == FindDialogField::Pattern && !key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let KeyCode::Char(c) = key.code
+            && self.active_field == FindDialogField::Pattern && !key.modifiers.contains(KeyModifiers::CONTROL) {
                 let cursor = self.search_pattern_cursor.min(self.search_pattern.len());
                 self.search_pattern.insert(cursor, c);
                 self.search_pattern_cursor = cursor + 1;
                 return None;
             }
-        }
         
         if key.kind == KeyEventKind::Press {
             // First, honor config-driven Global actions

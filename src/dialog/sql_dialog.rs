@@ -252,12 +252,11 @@ impl SqlDialog {
         let sql_dialog_action = self.config.action_for_key(crate::config::Mode::SqlDialog, key);
 
         // Handle global actions that work in all modes
-        if let Some(global_action) = &global_action {
-            if global_action == &Action::ToggleInstructions {
+        if let Some(global_action) = &global_action
+            && global_action == &Action::ToggleInstructions {
                 self.show_instructions = !self.show_instructions;
                 return None;
             }
-        }
         
         match &mut self.mode {
             SqlDialogMode::Input => {
