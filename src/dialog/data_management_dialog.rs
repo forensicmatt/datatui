@@ -121,12 +121,27 @@ impl DataSource {
                 (name, excel_config.file_path.to_string_lossy().to_string(), "Excel File".to_string(), datasets)
             }
             DataImportConfig::Sqlite(sqlite_config) => {
-                let name = sqlite_config.file_path.file_name()
+                let file_name = sqlite_config.file_path.file_name()
                     .unwrap_or_else(|| OsStr::new("Unknown"))
                     .to_string_lossy()
                     .to_string();
-                let datasets = if sqlite_config.options.import_all_tables {
-                    vec![Dataset {
+                
+                let (name, datasets) = if let Some(table_name) = &sqlite_config.table_name {
+                    // Specific table import - create a single dataset for this table
+                    let dataset_name = format!("{} - {}", file_name, table_name);
+                    let datasets = vec![Dataset {
+                        id: Uuid::new_v4().to_string(),
+                        name: table_name.clone(),
+                        alias: None,
+                        row_count: 0,
+                        column_count: 0,
+                        status: DatasetStatus::Pending,
+                        error_message: None,
+                    }];
+                    (dataset_name, datasets)
+                } else {
+                    // Legacy behavior - should not be used with the new add_data_source logic
+                    let datasets = vec![Dataset {
                         id: Uuid::new_v4().to_string(),
                         name: "All Tables".to_string(),
                         alias: None,
@@ -134,19 +149,11 @@ impl DataSource {
                         column_count: 0,
                         status: DatasetStatus::Pending,
                         error_message: None,
-                    }]
-                } else {
-                    sqlite_config.options.selected_tables.iter().map(|table| Dataset {
-                        id: Uuid::new_v4().to_string(),
-                        name: table.clone(),
-                        alias: None,
-                        row_count: 0,
-                        column_count: 0,
-                        status: DatasetStatus::Pending,
-                        error_message: None,
-                    }).collect()
+                    }];
+                    (file_name, datasets)
                 };
-                (name, sqlite_config.file_path.to_string_lossy().to_string(), "SQLite Database".to_string(), datasets)
+                
+                (name, sqlite_config.file_path.to_string_lossy().to_string(), "SQLite Table".to_string(), datasets)
             }
             DataImportConfig::Parquet(parquet_config) => {
                 let name = parquet_config.file_path.file_name()
@@ -423,8 +430,98 @@ impl DataSource {
                     (df_excel, None)
                 }
             }
-            DataImportConfig::Sqlite(_) => {
-                return Err(color_eyre::eyre::eyre!("SQLite import not yet supported"));
+            DataImportConfig::Sqlite(sqlite_config) => {
+                use rusqlite::Connection;
+                use polars::prelude::*;
+                
+                // Open SQLite database connection
+                let conn = Connection::open(&sqlite_config.file_path)
+                    .map_err(|e| color_eyre::eyre::eyre!("Failed to open SQLite database: {}", e))?;
+                
+                // Determine which table to import
+                let table_name = if let Some(specific_table) = &sqlite_config.table_name {
+                    // Import the specific table
+                    specific_table.clone()
+                } else {
+                    // Use the original logic for backward compatibility
+                    let tables_to_import = if sqlite_config.options.import_all_tables {
+                        // Get all user tables from the database
+                        let mut stmt = conn.prepare(
+                            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                        ).map_err(|e| color_eyre::eyre::eyre!("Failed to prepare SQL statement: {}", e))?;
+                        
+                        let table_rows = stmt.query_map([], |row| {
+                            Ok(row.get::<_, String>(0)?)
+                        }).map_err(|e| color_eyre::eyre::eyre!("Failed to execute query: {}", e))?;
+                        
+                        let mut tables = Vec::new();
+                        for table_result in table_rows {
+                            let table_name = table_result
+                                .map_err(|e| color_eyre::eyre::eyre!("Failed to read table name: {}", e))?;
+                            tables.push(table_name);
+                        }
+                        tables
+                    } else {
+                        sqlite_config.options.selected_tables.clone()
+                    };
+                    
+                    if tables_to_import.is_empty() {
+                        return Err(color_eyre::eyre::eyre!("No tables selected for import"));
+                    }
+                    
+                    // Import the first table as the primary DataFrame
+                    tables_to_import[0].clone()
+                };
+                
+                // Query all data from the table
+                let query = format!("SELECT * FROM [{}]", table_name.replace("'", "''"));
+                let mut stmt = conn.prepare(&query)
+                    .map_err(|e| color_eyre::eyre::eyre!("Failed to prepare query for table '{}': {}", table_name, e))?;
+                
+                // Get column information
+                let column_count = stmt.column_count();
+                let column_names: Vec<String> = (0..column_count)
+                    .map(|i| stmt.column_name(i).unwrap_or("unknown").to_string())
+                    .collect();
+                
+                // Fetch all rows and convert to polars DataFrame
+                let rows = stmt.query_map([], |row| {
+                    let mut values = Vec::new();
+                    for i in 0..column_count {
+                        let value: Result<String, _> = row.get(i);
+                        values.push(value.unwrap_or_else(|_| "NULL".to_string()));
+                    }
+                    Ok(values)
+                }).map_err(|e| color_eyre::eyre::eyre!("Failed to execute query: {}", e))?;
+                
+                let mut data_rows = Vec::new();
+                for row_result in rows {
+                    let row = row_result
+                        .map_err(|e| color_eyre::eyre::eyre!("Failed to read row: {}", e))?;
+                    data_rows.push(row);
+                }
+                
+                // Convert to polars DataFrame
+                let mut columns = Vec::new();
+                for (i, col_name) in column_names.iter().enumerate() {
+                    let col_data: Vec<Option<String>> = data_rows.iter()
+                        .map(|row| {
+                            if i < row.len() && row[i] != "NULL" {
+                                Some(row[i].clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    
+                    let series = Series::new(col_name.clone().into(), col_data);
+                    columns.push(series.into());
+                }
+                
+                let df_sqlite = DataFrame::new(columns)
+                    .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame from SQLite table '{}': {}", table_name, e))?;
+                
+                (df_sqlite, Some(table_name.clone()))
             }
             DataImportConfig::Parquet(parquet_config) => {
                 let df_pq = polars::prelude::ParquetReader::new(std::fs::File::open(&parquet_config.file_path)?)
@@ -650,9 +747,74 @@ impl DataManagementDialog {
 
     /// Add a new data source from a DataImportConfig
     pub fn add_data_source(&mut self, config: DataImportConfig) {
+        // Special handling for SQLite to create individual data sources for each table
+        if let DataImportConfig::Sqlite(sqlite_config) = &config {
+            if sqlite_config.options.import_all_tables {
+                // Create a separate DataSource for each table
+                if let Ok(table_names) = DataManagementDialog::get_sqlite_table_names(&sqlite_config.file_path) {
+                    for table_name in table_names {
+                        let table_config = crate::data_import_types::DataImportConfig::sqlite_table(
+                            sqlite_config.file_path.clone(),
+                            sqlite_config.options.clone(),
+                            table_name
+                        );
+                        let id = self.data_sources.len();
+                        let data_source: DataSource = DataSource::from_import_config(id, &table_config);
+                        self.data_sources.push(data_source);
+                    }
+                    return;
+                } else {
+                    // Fallback to original behavior if we can't read tables
+                    let id = self.data_sources.len();
+                    let data_source: DataSource = DataSource::from_import_config(id, &config);
+                    self.data_sources.push(data_source);
+                    return;
+                }
+            } else if !sqlite_config.options.selected_tables.is_empty() {
+                // Create a separate DataSource for each selected table
+                for table_name in &sqlite_config.options.selected_tables {
+                    let table_config = crate::data_import_types::DataImportConfig::sqlite_table(
+                        sqlite_config.file_path.clone(),
+                        sqlite_config.options.clone(),
+                        table_name.clone()
+                    );
+                    let id = self.data_sources.len();
+                    let data_source: DataSource = DataSource::from_import_config(id, &table_config);
+                    self.data_sources.push(data_source);
+                }
+                return;
+            }
+        }
+        
+        // Default behavior for all other import types
         let id = self.data_sources.len();
         let data_source: DataSource = DataSource::from_import_config(id, &config);
         self.data_sources.push(data_source);
+    }
+
+    /// Get table names from a SQLite database
+    fn get_sqlite_table_names(file_path: &std::path::PathBuf) -> Result<Vec<String>> {
+        use rusqlite::Connection;
+        
+        let conn = Connection::open(file_path)
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to open SQLite database: {}", e))?;
+        
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).map_err(|e| color_eyre::eyre::eyre!("Failed to prepare SQL statement: {}", e))?;
+        
+        let table_rows = stmt.query_map([], |row| {
+            Ok(row.get::<_, String>(0)?)
+        }).map_err(|e| color_eyre::eyre::eyre!("Failed to execute query: {}", e))?;
+        
+        let mut tables = Vec::new();
+        for table_result in table_rows {
+            let table_name = table_result
+                .map_err(|e| color_eyre::eyre::eyre!("Failed to read table name: {}", e))?;
+            tables.push(table_name);
+        }
+        
+        Ok(tables)
     }
 
     /// Extend or merge data sources with the provided list

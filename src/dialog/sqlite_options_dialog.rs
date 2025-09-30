@@ -40,6 +40,7 @@ pub struct SqliteOptionsDialog {
     pub sqlite_options: SqliteImportOptions,
     pub file_path_focused: bool,
     pub browse_button_selected: bool,
+    pub finish_button_selected: bool, // Whether the finish button is selected
     pub file_browser_mode: bool, // Whether the file browser is currently active
     pub file_browser_path: PathBuf,
     pub available_tables: Vec<String>,
@@ -64,11 +65,12 @@ impl SqliteOptionsDialog {
         );
         file_path_input.insert_str(&file_path);
         
-        Self {
+        let mut dialog = Self {
             file_path,
             sqlite_options,
             file_path_focused: true,
             browse_button_selected: false,
+            finish_button_selected: false,
             file_browser_mode: false,
             file_browser_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             available_tables: Vec::new(),
@@ -77,7 +79,12 @@ impl SqliteOptionsDialog {
             file_path_input,
             file_browser: None,
             config: Config::default(),
-        }
+        };
+        
+        // Load available tables if file path is provided
+        let _ = dialog.load_available_tables();
+        
+        dialog
     }
 
     /// Get the current file path
@@ -94,6 +101,8 @@ impl SqliteOptionsDialog {
                 .title("File Path")
                 .borders(Borders::ALL)
         );
+        // Load available tables when file path changes
+        let _ = self.load_available_tables();
     }
 
     /// Get the current SQLite options
@@ -116,12 +125,68 @@ impl SqliteOptionsDialog {
 
     /// Set available tables
     pub fn set_available_tables(&mut self, tables: Vec<String>) {
-        self.available_tables = tables;
+        self.available_tables = tables.clone();
+        // When import_all_tables is true, select all available tables by default
+        if self.sqlite_options.import_all_tables {
+            self.sqlite_options.selected_tables = tables;
+        }
+    }
+
+    /// Load available tables from SQLite database
+    pub fn load_available_tables(&mut self) -> Result<()> {
+        if self.file_path.is_empty() || !std::path::Path::new(&self.file_path).exists() {
+            self.available_tables.clear();
+            self.sqlite_options.selected_tables.clear();
+            return Ok(());
+        }
+
+        // Try to use polars to query the SQLite database for table names
+        match self.query_sqlite_tables() {
+            Ok(tables) => {
+                self.set_available_tables(tables);
+            }
+            Err(_) => {
+                // If polars fails, fall back to empty tables list
+                self.available_tables.clear();
+                self.sqlite_options.selected_tables.clear();
+            }
+        }
+        Ok(())
+    }
+
+    /// Query SQLite database for table names using rusqlite
+    fn query_sqlite_tables(&self) -> Result<Vec<String>> {
+        use rusqlite::Connection;
+        
+        let mut tables = Vec::new();
+        
+        // Open connection to SQLite database
+        let conn = Connection::open(&self.file_path)
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to open SQLite database: {}", e))?;
+        
+        // Query for all user tables (excluding system tables)
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).map_err(|e| color_eyre::eyre::eyre!("Failed to prepare SQL statement: {}", e))?;
+        
+        let table_rows = stmt.query_map([], |row| {
+            Ok(row.get::<_, String>(0)?)
+        }).map_err(|e| color_eyre::eyre::eyre!("Failed to execute query: {}", e))?;
+        
+        for table_result in table_rows {
+            let table_name = table_result
+                .map_err(|e| color_eyre::eyre::eyre!("Failed to read table name: {}", e))?;
+            tables.push(table_name);
+        }
+        
+        Ok(tables)
     }
 
     /// Update the file path
     fn update_file_path(&mut self, path: String) {
         self.file_path = path;
+        // Load available tables when file path changes
+        let _ = self.load_available_tables();
     }
 
     /// Toggle import all tables
@@ -295,7 +360,7 @@ impl SqliteOptionsDialog {
         
         // Render import all tables option
         let import_all_text = format!("Import All Tables: {}", self.sqlite_options.import_all_tables);
-        let import_all_style = if !self.file_path_focused && !self.browse_button_selected {
+        let import_all_style = if !self.file_path_focused && !self.browse_button_selected && !self.finish_button_selected && self.selected_table_index == 0 {
             Style::default().fg(Color::Black).bg(Color::White)
         } else {
             Style::default()
@@ -313,7 +378,7 @@ impl SqliteOptionsDialog {
                 let checkbox = if is_selected { "[x]" } else { "[ ]" };
                 let table_text = format!("{checkbox} {table}");
                 
-                let style = if i == self.selected_table_index && !self.file_path_focused && !self.browse_button_selected {
+                let style = if i == (self.selected_table_index.saturating_sub(1)) && !self.file_path_focused && !self.browse_button_selected && !self.finish_button_selected && !self.sqlite_options.import_all_tables {
                     Style::default().fg(Color::Black).bg(Color::White)
                 } else {
                     Style::default()
@@ -328,6 +393,17 @@ impl SqliteOptionsDialog {
             .borders(Borders::ALL)
             .title("SQLite Options");
         options_block.render(options_area, buf);
+
+        // Render the [Finish] button at the bottom right of the content area
+        let finish_text = "[Finish]";
+        let finish_x = main_layout.content_area.x + main_layout.content_area.width.saturating_sub(finish_text.len() as u16 + 2);
+        let finish_y = main_layout.content_area.y + main_layout.content_area.height.saturating_sub(2);
+        let finish_style = if self.finish_button_selected {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        buf.set_string(finish_x, finish_y, finish_text, finish_style);
 
         // Render instructions area if available
         if let Some(instructions_area) = main_layout.instructions_area {
@@ -416,14 +492,25 @@ impl Component for SqliteOptionsDialog {
                     self.show_instructions = !self.show_instructions;
                     return Ok(None);
                 }
-                Action::Tab => {
-                    // Tab moves between file path and browse button
+                Action::Backspace => {
                     if self.file_path_focused {
-                        self.file_path_focused = false;
+                        use tui_textarea::Input as TuiInput;
+                        let input: TuiInput = key.into();
+                        self.file_path_input.input(input);
+                        self.update_file_path(self.file_path_input.lines().join("\n"));
+                    }
+                    return Ok(None);
+                }
+                Action::Tab => {
+                    // Tab only moves between file path and browse button
+                    if self.file_path_focused {
+                        self.file_path_focused = false; // Move to browse button
                         self.browse_button_selected = true;
+                        self.selected_table_index = 0; // Reset option selection
                     } else {
-                        self.file_path_focused = true;
+                        self.file_path_focused = true; // Move back to file path
                         self.browse_button_selected = false;
+                        self.selected_table_index = 0; // Reset option selection
                     }
                     return Ok(None);
                 }
@@ -445,11 +532,17 @@ impl Component for SqliteOptionsDialog {
                             self.file_path_input.input(input);
                             self.update_file_path(self.file_path_input.lines().join("\n"));
                         }
+                    } else if !self.file_path_focused && !self.browse_button_selected && !self.finish_button_selected {
+                        // If an option is selected, right arrow moves to finish button
+                        self.finish_button_selected = true;
                     }
                     return Ok(None);
                 }
                 Action::Left => {
-                    if self.browse_button_selected {
+                    if self.finish_button_selected {
+                        // Move from finish button back to options
+                        self.finish_button_selected = false;
+                    } else if self.browse_button_selected {
                         // Move from browse button to file path
                         self.file_path_focused = true;
                         self.browse_button_selected = false;
@@ -463,18 +556,34 @@ impl Component for SqliteOptionsDialog {
                     return Ok(None);
                 }
                 Action::Up => {
-                    if self.file_path_focused {
-                        // When file path is focused, up arrow moves to options
-                        self.file_path_focused = false;
-                        self.browse_button_selected = false;
+                    if self.finish_button_selected {
+                        // Move from finish button to last option
+                        self.finish_button_selected = false;
+                        if !self.sqlite_options.import_all_tables && !self.available_tables.is_empty() {
+                            self.selected_table_index = self.available_tables.len(); // Last table + 1 for "Import All Tables"
+                        } else {
+                            self.selected_table_index = 0; // "Import All Tables" option
+                        }
                     } else if self.browse_button_selected {
                         // If browse button is selected, up arrow goes back to file path
                         self.file_path_focused = true;
                         self.browse_button_selected = false;
-                    } else if !self.sqlite_options.import_all_tables && !self.available_tables.is_empty() {
-                        // Navigate table selection
+                    } else if self.file_path_focused {
+                        // When file path is focused, up arrow moves to last option
+                        self.file_path_focused = false;
+                        self.browse_button_selected = false;
+                        if !self.sqlite_options.import_all_tables && !self.available_tables.is_empty() {
+                            self.selected_table_index = self.available_tables.len(); // Last table + 1
+                        } else {
+                            self.selected_table_index = 0; // "Import All Tables" option
+                        }
+                    } else {
+                        // Navigate options (Import All Tables + individual tables)
                         if self.selected_table_index > 0 {
                             self.selected_table_index = self.selected_table_index.saturating_sub(1);
+                        } else {
+                            // At first option, go back to file path
+                            self.file_path_focused = true;
                         }
                     }
                     return Ok(None);
@@ -484,13 +593,24 @@ impl Component for SqliteOptionsDialog {
                         // When file path is focused, down arrow moves to options
                         self.file_path_focused = false;
                         self.browse_button_selected = false;
+                        self.selected_table_index = 0; // Start at "Import All Tables"
                     } else if self.browse_button_selected {
-                        // If browse button is selected, down arrow moves to options
+                        // If browse button is selected, down arrow moves to finish button
                         self.browse_button_selected = false;
-                    } else if !self.sqlite_options.import_all_tables && !self.available_tables.is_empty() {
-                        // Navigate table selection
-                        if self.selected_table_index < self.available_tables.len().saturating_sub(1) {
+                        self.finish_button_selected = true;
+                    } else {
+                        // Navigate options
+                        let max_index = if self.sqlite_options.import_all_tables {
+                            0 // Only "Import All Tables" option
+                        } else {
+                            self.available_tables.len() // "Import All Tables" + individual tables
+                        };
+                        
+                        if self.selected_table_index < max_index {
                             self.selected_table_index = self.selected_table_index.saturating_add(1);
+                        } else {
+                            // At last option, move to finish button
+                            self.finish_button_selected = true;
                         }
                     }
                     return Ok(None);
@@ -508,13 +628,21 @@ impl Component for SqliteOptionsDialog {
                         self.file_browser = Some(browser);
                         self.file_browser_mode = true;
                         return Ok(None);
-                    } else if !self.file_path_focused && !self.browse_button_selected {
+                    } else if self.finish_button_selected {
+                        // Finish button pressed - create import config and return it
+                        let config = self.create_import_config();
+                        return Ok(Some(Action::AddDataImportConfig { config }));
+                    } else if !self.file_path_focused && !self.browse_button_selected && !self.finish_button_selected {
                         // Toggle import all tables or table selection
-                        if self.sqlite_options.import_all_tables {
+                        if self.selected_table_index == 0 {
+                            // "Import All Tables" option
                             self.toggle_import_all_tables();
-                        } else if !self.available_tables.is_empty() {
-                            let table_name = self.available_tables[self.selected_table_index].clone();
-                            self.toggle_table_selection(&table_name);
+                        } else if !self.sqlite_options.import_all_tables && !self.available_tables.is_empty() {
+                            let table_index = self.selected_table_index.saturating_sub(1);
+                            if table_index < self.available_tables.len() {
+                                let table_name = self.available_tables[table_index].clone();
+                                self.toggle_table_selection(&table_name);
+                            }
                         }
                         return Ok(None);
                     }
@@ -542,12 +670,28 @@ impl Component for SqliteOptionsDialog {
                 }
                 Action::ToggleTableSelection => {
                     // Space: Toggle table selection or import all tables
-                    if !self.file_path_focused && !self.browse_button_selected {
-                        if self.sqlite_options.import_all_tables {
+                    if !self.file_path_focused && !self.browse_button_selected && !self.finish_button_selected {
+                        if self.selected_table_index == 0 {
+                            // "Import All Tables" option
                             self.toggle_import_all_tables();
-                        } else if !self.available_tables.is_empty() {
-                            let table_name = self.available_tables[self.selected_table_index].clone();
-                            self.toggle_table_selection(&table_name);
+                        } else if !self.sqlite_options.import_all_tables && !self.available_tables.is_empty() {
+                            let table_index = self.selected_table_index.saturating_sub(1);
+                            if table_index < self.available_tables.len() {
+                                let table_name = self.available_tables[table_index].clone();
+                                self.toggle_table_selection(&table_name);
+                            }
+                        }
+                    }
+                    return Ok(None);
+                }
+                Action::Paste => {
+                    // Paste clipboard text into the File Path when focused
+                    if self.file_path_focused {
+                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                            if let Ok(text) = clipboard.get_text() {
+                                let first_line = text.lines().next().unwrap_or("").to_string();
+                                self.set_file_path(first_line);
+                            }
                         }
                     }
                     return Ok(None);

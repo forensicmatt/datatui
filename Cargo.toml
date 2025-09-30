@@ -63,6 +63,7 @@ linfa-reduction = "0.7.1"
 ndarray = "0.15"
 linfa-clustering = "0.7.1"
 linfa-nn = "0.7.1"
+rusqlite = { version = "0.31.0", features = ["bundled"] }
 
 [build-dependencies]
 anyhow = "1.0.90"

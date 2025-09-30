@@ -651,17 +651,42 @@ impl DataTabManagerDialog {
         let available_width = tab_area.width as usize;
         let total_tabs = self.tabs.len();
         
-        // Estimate tab width (including padding and dividers)
-        let estimated_tab_width = 15; // Approximate width per tab
-        let max_visible_tabs = available_width / estimated_tab_width;
+        // Calculate actual tab width based on tab titles and divider
+        let divider_width = 1; // Single space character " "
+        let total_tab_content_width: usize = tab_titles.iter()
+            .map(|title| title.len())
+            .sum();
+        let total_divider_width = if total_tabs > 1 { (total_tabs - 1) * divider_width } else { 0 };
+        let total_required_width = total_tab_content_width + total_divider_width;
+        
+        // Calculate estimated width per tab (with some padding for safety)
+        let estimated_tab_width = if total_tabs > 0 {
+            (total_required_width / total_tabs).max(1) + 2 // Add 2 for padding
+        } else {
+            15 // Fallback to original value if no tabs
+        };
+        
+        let max_visible_tabs = if estimated_tab_width > 0 {
+            available_width / estimated_tab_width
+        } else {
+            1
+        };
         
         if max_visible_tabs >= total_tabs {
             // All tabs can fit, render normally
+            let tabs_block = Block::default()
+                .borders(Borders::BOTTOM);
+        
+            let highlight_style = Style::default()
+                .fg(Color::White)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD);
+
             let tabs = Tabs::new(tab_titles)
-                .block(Block::default().borders(Borders::BOTTOM))
+                .block(tabs_block)
                 .select(self.active_tab_index)
                 .divider(" ")
-                .highlight_style(Style::default().fg(Color::White).bg(Color::Yellow));
+                .highlight_style(highlight_style);
 
             tabs.render(tab_area, buf);
         } else {
@@ -683,7 +708,7 @@ impl DataTabManagerDialog {
                     let style = if is_active {
                         Style::default().fg(Color::White).bg(Color::Yellow)
                     } else {
-                        Style::default().fg(Color::White).bg(Color::White)
+                        Style::default().fg(Color::White).bg(Color::Black)
                     };
                     
                     let title = tab.display_name().to_string();
@@ -694,11 +719,19 @@ impl DataTabManagerDialog {
             // Calculate the relative index for the active tab within visible tabs
             let relative_active_index = self.active_tab_index.saturating_sub(start_index);
             
+            let tabs_block = Block::default()
+                .borders(Borders::BOTTOM);
+
+            let highlight_style = Style::default()
+                .fg(Color::White)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD);
+
             let tabs = Tabs::new(visible_titles)
-                .block(Block::default().borders(Borders::BOTTOM))
+                .block(tabs_block)
                 .select(relative_active_index)
                 .divider(" ")
-                .highlight_style(Style::default().fg(Color::White).bg(Color::Yellow));
+                .highlight_style(highlight_style);
 
             tabs.render(tab_area, buf);
             

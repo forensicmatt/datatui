@@ -27,6 +27,7 @@ pub struct ExcelImportConfig {
 pub struct SqliteImportConfig {
     pub file_path: PathBuf,
     pub options: SqliteImportOptions,
+    pub table_name: Option<String>, // Specific table to import (None means use options to determine)
 }
 
 /// Parquet file import configuration
@@ -97,6 +98,16 @@ impl DataImportConfig {
         DataImportConfig::Sqlite(SqliteImportConfig {
             file_path,
             options,
+            table_name: None,
+        })
+    }
+
+    /// Create a sqlite import configuration for a specific table
+    pub fn sqlite_table(file_path: PathBuf, options: SqliteImportOptions, table_name: String) -> Self {
+        DataImportConfig::Sqlite(SqliteImportConfig {
+            file_path,
+            options,
+            table_name: Some(table_name),
         })
     }
 
