@@ -271,6 +271,11 @@ pub enum Action {
     ToggleColumnHidden,
     MoveColumnUp,
     MoveColumnDown,
+    /// JsonOptionsDialog specific actions
+    OpenJsonFileBrowser,
+    PasteJsonFilePath,
+    ToggleNdjson,
+    FinishJsonImport,
 }
 
 #[cfg(test)]

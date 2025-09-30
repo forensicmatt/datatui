@@ -8,11 +8,12 @@ use crate::action::Action;
 use crate::config::Config;
 use crate::tui::Event;
 use color_eyre::Result;
-use crossterm::event::{KeyEvent, MouseEvent, KeyCode};
+use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::Frame;
 use ratatui::layout::Size;
 use tokio::sync::mpsc::UnboundedSender;
 use crate::components::Component;
+use crate::components::dialog_layout::split_dialog_area;
 use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserMode};
 use tui_textarea::TextArea;
 use arboard::Clipboard;
@@ -34,10 +35,13 @@ pub struct JsonOptionsDialog {
     pub finish_button_selected: bool,
     pub file_browser_mode: bool, // Whether the file browser is currently active
     pub file_browser_path: PathBuf,
+    pub show_instructions: bool,
     #[serde(skip)]
     pub file_path_input: TextArea<'static>,
     #[serde(skip)]
     pub file_browser: Option<FileBrowserDialog>,
+    #[serde(skip)]
+    pub key_config: Config,
 }
 
 impl JsonOptionsDialog {
@@ -59,8 +63,10 @@ impl JsonOptionsDialog {
             finish_button_selected: false,
             file_browser_mode: false,
             file_browser_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            show_instructions: true,
             file_path_input,
             file_browser: None,
+            key_config: Config::default(),
         }
     }
 
@@ -76,6 +82,110 @@ impl JsonOptionsDialog {
         self.file_path = path;
     }
 
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        use std::fmt::Write as _;
+        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
+            use crossterm::event::{KeyCode, KeyModifiers};
+            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
+            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
+            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
+            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
+            let key_part = match key.code {
+                KeyCode::Char(' ') => "Space".to_string(),
+                KeyCode::Char(c) => {
+                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
+                }
+                KeyCode::Left => "Left".to_string(),
+                KeyCode::Right => "Right".to_string(),
+                KeyCode::Up => "Up".to_string(),
+                KeyCode::Down => "Down".to_string(),
+                KeyCode::Enter => "Enter".to_string(),
+                KeyCode::Esc => "Esc".to_string(),
+                KeyCode::Tab => "Tab".to_string(),
+                KeyCode::BackTab => "BackTab".to_string(),
+                KeyCode::Delete => "Delete".to_string(),
+                KeyCode::Insert => "Insert".to_string(),
+                KeyCode::Home => "Home".to_string(),
+                KeyCode::End => "End".to_string(),
+                KeyCode::PageUp => "PageUp".to_string(),
+                KeyCode::PageDown => "PageDown".to_string(),
+                KeyCode::F(n) => format!("F{n}"),
+                _ => "?".to_string(),
+            };
+            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
+        }
+        
+        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
+            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
+            parts.join(", ")
+        }
+
+        let mut segments: Vec<String> = Vec::new();
+
+        // Handle Global actions
+        if let Some(global_bindings) = self.key_config.keybindings.0.get(&crate::config::Mode::Global) {
+            for (keys, action) in global_bindings {
+                match action {
+                    crate::action::Action::Escape => {
+                        segments.push(format!("{}: Close", fmt_sequence(keys)));
+                    }
+                    crate::action::Action::Enter => {
+                        segments.push(format!("{}: Confirm", fmt_sequence(keys)));
+                    }
+                    crate::action::Action::Tab => {
+                        segments.push(format!("{}: Navigate", fmt_sequence(keys)));
+                    }
+                    crate::action::Action::Up => {
+                        segments.push(format!("{}: Up", fmt_sequence(keys)));
+                    }
+                    crate::action::Action::Down => {
+                        segments.push(format!("{}: Down", fmt_sequence(keys)));
+                    }
+                    crate::action::Action::Left => {
+                        segments.push(format!("{}: Left", fmt_sequence(keys)));
+                    }
+                    crate::action::Action::Right => {
+                        segments.push(format!("{}: Right", fmt_sequence(keys)));
+                    }
+                    crate::action::Action::Backspace => {
+                        segments.push(format!("{}: Delete", fmt_sequence(keys)));
+                    }
+                    crate::action::Action::ToggleInstructions => {
+                        segments.push(format!("{}: Toggle Help", fmt_sequence(keys)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Handle JsonOptionsDialog specific actions
+        if let Some(dialog_bindings) = self.key_config.keybindings.0.get(&crate::config::Mode::JsonOptionsDialog) {
+            for (keys, action) in dialog_bindings {
+                match action {
+                    crate::action::Action::OpenJsonFileBrowser => {
+                        segments.push(format!("{}: Browse Files", fmt_sequence(keys)));
+                    }
+                    crate::action::Action::PasteJsonFilePath => {
+                        segments.push(format!("{}: Paste Path", fmt_sequence(keys)));
+                    }
+                    crate::action::Action::ToggleNdjson => {
+                        segments.push(format!("{}: Toggle NDJSON", fmt_sequence(keys)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Join segments
+        let mut out = String::new();
+        for (i, seg) in segments.iter().enumerate() {
+            if i > 0 { let _ = write!(out, "  "); }
+            let _ = write!(out, "{seg}");
+        }
+        out
+    }
+
     /// Render the dialog
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         // Clear the background for the popup
@@ -86,6 +196,15 @@ impl JsonOptionsDialog {
             if let Some(browser) = &self.file_browser { browser.render(area, buf); }
             return;
         }
+        
+        // Get dynamic instructions
+        let instructions = self.build_instructions_from_config();
+        
+        // Use split_dialog_area to handle instructions
+        let layout = split_dialog_area(area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
+        let content_area = layout.content_area;
+        let instructions_area = layout.instructions_area;
         
         let _block = Block::default()
             .title("JSON Import Options")
@@ -98,7 +217,7 @@ impl JsonOptionsDialog {
                 Constraint::Length(3), // File path input
                 Constraint::Min(0),    // Options/content
             ])
-            .split(area);
+            .split(content_area);
 
         // Render file path input and [Browse] within a single bordered block
         let file_path_area = chunks[0];
@@ -154,16 +273,26 @@ impl JsonOptionsDialog {
         let ndjson_label = format!("NDJSON (one JSON object per line): {}", if self.json_options.ndjson { "On" } else { "Off" });
         buf.set_string(options_area.x + 1, options_area.y + 1, ndjson_label, Style::default());
 
-        // Render the [Finish] button at the bottom right of the full dialog area
+        // Render the [Finish] button at the bottom right of the content area
         let finish_text = "[Finish]";
-        let finish_x = area.x + area.width.saturating_sub(finish_text.len() as u16 + 2);
-        let finish_y = area.y + area.height.saturating_sub(2);
+        let finish_x = content_area.x + content_area.width.saturating_sub(finish_text.len() as u16 + 2);
+        let finish_y = content_area.y + content_area.height.saturating_sub(2);
         let finish_style = if self.finish_button_selected {
             Style::default().fg(Color::Black).bg(Color::White)
         } else {
             Style::default().fg(Color::Gray)
         };
         buf.set_string(finish_x, finish_y, finish_text, finish_style);
+
+        // Render instructions if enabled and available
+        if self.show_instructions && let Some(instructions_area) = instructions_area {
+            use ratatui::widgets::{Paragraph, Wrap};
+            let instructions_paragraph = Paragraph::new(instructions)
+                .block(Block::default().borders(Borders::ALL).title("Instructions"))
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: true });
+            instructions_paragraph.render(instructions_area, buf);
+        }
     }
 }
 
@@ -172,7 +301,12 @@ impl Component for JsonOptionsDialog {
         Ok(())
     }
 
-    fn register_config_handler(&mut self, _config: Config) -> Result<()> {
+    fn register_config_handler(&mut self, config: Config) -> Result<()> {
+        self.key_config = config;
+        // Register config with file_browser if it exists
+        if let Some(browser) = &mut self.file_browser {
+            browser.register_config_handler(self.key_config.clone());
+        }
         Ok(())
     }
 
@@ -189,6 +323,8 @@ impl Component for JsonOptionsDialog {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        use crossterm::event::KeyCode;
+        
         // Handle file browser events if file browser mode is active
         if self.file_browser_mode {
             if let Some(browser) = &mut self.file_browser
@@ -221,90 +357,142 @@ impl Component for JsonOptionsDialog {
         }
 
         let result = if key.kind == crossterm::event::KeyEventKind::Press {
-            match key.code {
-                KeyCode::Tab => {
-                    // Cycle between file path, browse button, finish button
-                    if self.file_path_focused {
-                        self.file_path_focused = false;
-                        self.browse_button_selected = true;
-                        self.finish_button_selected = false;
-                    } else if self.browse_button_selected {
-                        self.file_path_focused = false;
-                        self.browse_button_selected = false;
-                        self.finish_button_selected = true;
-                    } else {
-                        self.file_path_focused = true;
-                        self.browse_button_selected = false;
-                        self.finish_button_selected = false;
+            // First, honor config-driven Global actions
+            if let Some(global_action) = self.key_config.action_for_key(crate::config::Mode::Global, key) {
+                match global_action {
+                    Action::Escape => {
+                        return Ok(Some(Action::CloseJsonOptionsDialog));
                     }
-                    None
-                }
-                KeyCode::Right => {
-                    if self.file_path_focused {
-                        // Check if cursor is at the end of the text
-                        let lines = self.file_path_input.lines();
-                        let cursor_pos = self.file_path_input.cursor();
-                        
-                        if cursor_pos.0 == lines.len().saturating_sub(1) && 
-                           cursor_pos.1 >= lines.last().unwrap_or(&String::new()).len() {
-                            // Cursor is at the end, move to browse button
+                    Action::Tab => {
+                        // Cycle between file path, browse button, finish button
+                        if self.file_path_focused {
                             self.file_path_focused = false;
                             self.browse_button_selected = true;
                             self.finish_button_selected = false;
+                        } else if self.browse_button_selected {
+                            self.file_path_focused = false;
+                            self.browse_button_selected = false;
+                            self.finish_button_selected = true;
                         } else {
-                            // Let the TextArea handle the right arrow normally
+                            self.file_path_focused = true;
+                            self.browse_button_selected = false;
+                            self.finish_button_selected = false;
+                        }
+                        return Ok(None);
+                    }
+                    Action::Enter => {
+                        if self.browse_button_selected {
+                            // Open file browser
+                            self.file_browser = Some(FileBrowserDialog::new(
+                                Some(self.file_browser_path.clone()),
+                                Some(vec!["json", "ndjson"]),
+                                false,
+                                FileBrowserMode::Load
+                            ));
+                            // Register config with the new file browser
+                            if let Some(browser) = &mut self.file_browser {
+                                browser.register_config_handler(self.key_config.clone());
+                            }
+                            self.file_browser_mode = true;
+                            return Ok(None);
+                        } else if self.finish_button_selected {
+                            // Finish button pressed - create import config and return it
+                            let config = self.create_import_config();
+                            return Ok(Some(Action::AddDataImportConfig { config }));
+                        } else if self.file_path_focused {
+                            // If file path is focused and Enter is pressed, select the finish button
+                            self.file_path_focused = false;
+                            self.finish_button_selected = true;
+                            return Ok(None);
+                        }
+                        return Ok(None);
+                    }
+                    Action::Right => {
+                        if self.file_path_focused {
+                            // Check if cursor is at the end of the text
+                            let lines = self.file_path_input.lines();
+                            let cursor_pos = self.file_path_input.cursor();
+                            
+                            if cursor_pos.0 == lines.len().saturating_sub(1) && 
+                               cursor_pos.1 >= lines.last().unwrap_or(&String::new()).len() {
+                                // Cursor is at the end, move to browse button
+                                self.file_path_focused = false;
+                                self.browse_button_selected = true;
+                                self.finish_button_selected = false;
+                            } else {
+                                // Let the TextArea handle the right arrow normally
+                                use tui_textarea::Input as TuiInput;
+                                let input: TuiInput = key.into();
+                                self.file_path_input.input(input);
+                                self.update_file_path(self.file_path_input.lines().join("\n"));
+                            }
+                        } else if self.browse_button_selected {
+                            // Move to finish button
+                            self.browse_button_selected = false;
+                            self.finish_button_selected = true;
+                        }
+                        return Ok(None);
+                    }
+                    Action::Left => {
+                        if self.finish_button_selected {
+                            // Move from finish button back to browse button
+                            self.finish_button_selected = false;
+                            self.browse_button_selected = true;
+                        } else if self.browse_button_selected {
+                            // Move from browse button to file path
+                            self.file_path_focused = true;
+                            self.browse_button_selected = false;
+                        } else if self.file_path_focused {
+                            // Let the TextArea handle the left arrow normally
                             use tui_textarea::Input as TuiInput;
                             let input: TuiInput = key.into();
                             self.file_path_input.input(input);
                             self.update_file_path(self.file_path_input.lines().join("\n"));
                         }
-                    } else if self.browse_button_selected {
-                        // Move to finish button
-                        self.browse_button_selected = false;
-                        self.finish_button_selected = true;
+                        return Ok(None);
                     }
-                    None
-                }
-                KeyCode::Left => {
-                    if self.finish_button_selected {
-                        // Move from finish button back to browse button
-                        self.finish_button_selected = false;
-                        self.browse_button_selected = true;
-                    } else if self.browse_button_selected {
-                        // Move from browse button to file path
-                        self.file_path_focused = true;
-                        self.browse_button_selected = false;
-                    } else if self.file_path_focused {
-                        // Let the TextArea handle the left arrow normally
-                        use tui_textarea::Input as TuiInput;
-                        let input: TuiInput = key.into();
-                        self.file_path_input.input(input);
-                        self.update_file_path(self.file_path_input.lines().join("\n"));
+                    Action::Up => {
+                        if self.finish_button_selected {
+                            self.finish_button_selected = false;
+                            self.browse_button_selected = true;
+                        } else if self.browse_button_selected {
+                            self.browse_button_selected = false;
+                            self.file_path_focused = true;
+                        }
+                        return Ok(None);
                     }
-                    None
-                }
-                KeyCode::Up => {
-                    if self.finish_button_selected {
-                        self.finish_button_selected = false;
-                        self.browse_button_selected = true;
-                    } else if self.browse_button_selected {
-                        self.browse_button_selected = false;
-                        self.file_path_focused = true;
+                    Action::Down => {
+                        if self.file_path_focused {
+                            self.file_path_focused = false;
+                            self.browse_button_selected = true;
+                        } else if self.browse_button_selected {
+                            self.browse_button_selected = false;
+                            self.finish_button_selected = true;
+                        }
+                        return Ok(None);
                     }
-                    None
-                }
-                KeyCode::Down => {
-                    if self.file_path_focused {
-                        self.file_path_focused = false;
-                        self.browse_button_selected = true;
-                    } else if self.browse_button_selected {
-                        self.browse_button_selected = false;
-                        self.finish_button_selected = true;
+                    Action::Backspace => {
+                        if self.file_path_focused {
+                            // Handle backspace to delete characters in file path
+                            use tui_textarea::Input as TuiInput;
+                            let input: TuiInput = key.into();
+                            self.file_path_input.input(input);
+                            self.update_file_path(self.file_path_input.lines().join("\n"));
+                        }
+                        return Ok(None);
                     }
-                    None
+                    Action::ToggleInstructions => {
+                        self.show_instructions = !self.show_instructions;
+                        return Ok(None);
+                    }
+                    _ => {}
                 }
-                KeyCode::Enter => {
-                    if self.browse_button_selected {
+            }
+
+            // Next, check for JsonOptionsDialog specific actions
+            if let Some(dialog_action) = self.key_config.action_for_key(crate::config::Mode::JsonOptionsDialog, key) {
+                match dialog_action {
+                    Action::OpenJsonFileBrowser => {
                         // Open file browser
                         self.file_browser = Some(FileBrowserDialog::new(
                             Some(self.file_browser_path.clone()),
@@ -312,82 +500,51 @@ impl Component for JsonOptionsDialog {
                             false,
                             FileBrowserMode::Load
                         ));
+                        // Register config with the new file browser
+                        if let Some(browser) = &mut self.file_browser {
+                            browser.register_config_handler(self.key_config.clone());
+                        }
                         self.file_browser_mode = true;
-                        None
-                    } else if self.finish_button_selected {
-                        // Finish button pressed - create import config and return it
-                        let config = self.create_import_config();
-                        Some(Action::AddDataImportConfig { config })
-                    } else if self.file_path_focused {
-                        // If file path is focused and Enter is pressed, select the finish button
-                        self.file_path_focused = false;
-                        self.finish_button_selected = true;
-                        None
-                    } else {
-                        None
+                        return Ok(None);
                     }
-                }
-                KeyCode::Char('b') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Ctrl+B: Open file browser
-                    self.file_browser = Some(FileBrowserDialog::new(
-                        Some(self.file_browser_path.clone()),
-                        Some(vec!["json", "ndjson"]),
-                        false,
-                        FileBrowserMode::Load
-                    ));
-                    self.file_browser_mode = true;
-                    None
-                }
-                KeyCode::Char('p') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Ctrl+P: Paste clipboard text into the File Path when focused
-                    if self.file_path_focused
-                        && let Ok(mut clipboard) = Clipboard::new()
-                        && let Ok(text) = clipboard.get_text() {
-                        let first_line = text.lines().next().unwrap_or("").to_string();
-                        self.file_path = first_line.clone();
-                        self.file_path_input = TextArea::from(vec![first_line]);
-                        self.file_path_input.set_block(
-                            Block::default()
-                                .title("File Path")
-                                .borders(Borders::ALL)
-                        );
+                    Action::PasteJsonFilePath => {
+                        // Paste clipboard text into the File Path when focused
+                        if self.file_path_focused
+                            && let Ok(mut clipboard) = Clipboard::new()
+                            && let Ok(text) = clipboard.get_text() {
+                            let first_line = text.lines().next().unwrap_or("").to_string();
+                            self.file_path = first_line.clone();
+                            self.file_path_input = TextArea::from(vec![first_line]);
+                            self.file_path_input.set_block(
+                                Block::default()
+                                    .title("File Path")
+                                    .borders(Borders::ALL)
+                            );
+                        }
+                        return Ok(None);
                     }
-                    None
-                }
-                KeyCode::Char('n') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Ctrl+N: Toggle NDJSON option
-                    let mut opts = self.json_options.clone();
-                    opts.ndjson = !opts.ndjson;
-                    self.json_options = opts;
-                    None
-                }
-                KeyCode::Backspace => {
-                    if self.file_path_focused {
-                        // Handle backspace to delete characters in file path
-                        use tui_textarea::Input as TuiInput;
-                        let input: TuiInput = key.into();
-                        self.file_path_input.input(input);
-                        self.update_file_path(self.file_path_input.lines().join("\n"));
+                    Action::ToggleNdjson => {
+                        // Toggle NDJSON option
+                        let mut opts = self.json_options.clone();
+                        opts.ndjson = !opts.ndjson;
+                        self.json_options = opts;
+                        return Ok(None);
                     }
-                    None
+                    _ => {}
                 }
-                KeyCode::Char(_c) => {
-                    if self.file_path_focused {
-                        // Handle text input for file path
-                        use tui_textarea::Input as TuiInput;
-                        let input: TuiInput = key.into();
-                        self.file_path_input.input(input);
-                        self.update_file_path(self.file_path_input.lines().join("\n"));
-                        None
-                    } else {
-                        None
-                    }
-                }
-                KeyCode::Esc => {
-                    Some(Action::CloseJsonOptionsDialog)
-                }
-                _ => None,
             }
+
+            // Fallback for character input when editing file path
+            if let KeyCode::Char(_c) = key.code
+                && self.file_path_focused {
+                    // Handle text input for file path
+                    use tui_textarea::Input as TuiInput;
+                    let input: TuiInput = key.into();
+                    self.file_path_input.input(input);
+                    self.update_file_path(self.file_path_input.lines().join("\n"));
+                    return Ok(None);
+                }
+            None
         } else {
             None
         };

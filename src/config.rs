@@ -33,6 +33,7 @@ pub enum Mode {
     SqliteOptionsDialog,
     FileBrowser,
     ColumnWidthDialog,
+    JsonOptionsDialog,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");

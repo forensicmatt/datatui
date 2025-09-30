@@ -131,6 +131,11 @@
       "h": "ToggleColumnHidden",
       "<Ctrl-up>": "MoveColumnUp",
       "<Ctrl-down>": "MoveColumnDown"
+    },
+    "JsonOptionsDialog": {
+      "<Ctrl-b>": "OpenJsonFileBrowser",
+      "<Ctrl-p>": "PasteJsonFilePath",
+      "<Ctrl-n>": "ToggleNdjson"
     }
   }
 }
