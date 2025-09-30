@@ -164,7 +164,7 @@ impl DataTabManagerDialog {
             keys_for_action.sort_by_key(|seq| seq.len());
             if let Some(first) = keys_for_action.first() {
                 let key_text = fmt_sequence(first);
-                segments.push(format!("{}: {}", key_text, label));
+                segments.push(format!("{key_text}: {label}"));
             }
         }
 
@@ -172,7 +172,7 @@ impl DataTabManagerDialog {
         let mut out = String::new();
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{}", seg);
+            let _ = write!(out, "{seg}");
         }
         out
     }

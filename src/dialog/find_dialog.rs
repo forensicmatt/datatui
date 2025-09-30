@@ -368,23 +368,17 @@ impl FindDialog {
         if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
             // Find Enter key
             for (keys, action) in global_bindings.iter() {
-                match action {
-                    Action::Enter => {
-                        segments.push(format!("{}: Action", fmt_sequence(keys)));
-                        break;
-                    }
-                    _ => {}
+                if action == &Action::Enter {
+                    segments.push(format!("{}: Action", fmt_sequence(keys)));
+                    break;
                 }
             }
             
             // Find Escape key
             for (keys, action) in global_bindings.iter() {
-                match action {
-                    Action::Escape => {
-                        segments.push(format!("{}: Close", fmt_sequence(keys)));
-                        break;
-                    }
-                    _ => {}
+                if action == &Action::Escape {
+                    segments.push(format!("{}: Close", fmt_sequence(keys)));
+                    break;
                 }
             }
         }
@@ -410,12 +404,9 @@ impl FindDialog {
         // Add instructions toggle from Global config
         if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
             for (keys, action) in global_bindings.iter() {
-                match action {
-                    Action::ToggleInstructions => {
-                        segments.push(format!("{}: Toggle Instructions", fmt_sequence(keys)));
-                        break;
-                    }
-                    _ => {}
+                if action == &Action::ToggleInstructions {
+                    segments.push(format!("{}: Toggle Instructions", fmt_sequence(keys)));
+                    break;
                 }
             }
         }
@@ -424,13 +415,13 @@ impl FindDialog {
         let mut out = String::new();
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{}", seg);
+            let _ = write!(out, "{seg}");
         }
         
         if out.is_empty() {
             "Enter search pattern. Tab: Next field  Space: Toggle  Enter: Action  Esc: Close".to_string()
         } else {
-            format!("Enter search pattern. {}", out)
+            format!("Enter search pattern. {out}")
         }
     }
 
@@ -466,16 +457,13 @@ impl FindDialog {
             return None;
         }
         
-        match key.code {
-            KeyCode::Char(c) => {
-                if self.active_field == FindDialogField::Pattern && !key.modifiers.contains(KeyModifiers::CONTROL) {
-                    let cursor = self.search_pattern_cursor.min(self.search_pattern.len());
-                    self.search_pattern.insert(cursor, c);
-                    self.search_pattern_cursor = cursor + 1;
-                    return None;
-                }
+        if let KeyCode::Char(c) = key.code {
+            if self.active_field == FindDialogField::Pattern && !key.modifiers.contains(KeyModifiers::CONTROL) {
+                let cursor = self.search_pattern_cursor.min(self.search_pattern.len());
+                self.search_pattern.insert(cursor, c);
+                self.search_pattern_cursor = cursor + 1;
+                return None;
             }
-            _ => {}
         }
         
         if key.kind == KeyEventKind::Press {

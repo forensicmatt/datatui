@@ -561,11 +561,10 @@ impl FilterDialog {
                     return None;
                 }
                 Action::Backspace => {
-                    if matches!(&self.mode, FilterDialogMode::Add | FilterDialogMode::Edit(_)) {
-                        if self.focus_field == FilterDialogField::Value {
+                    if matches!(&self.mode, FilterDialogMode::Add | FilterDialogMode::Edit(_))
+                        && self.focus_field == FilterDialogField::Value {
                             self.add_value.pop();
                         }
-                    }
                     return None;
                 }
                 Action::ToggleInstructions => {
@@ -730,25 +729,19 @@ impl FilterDialog {
             }
             FilterDialogMode::Add => {
                 if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char(c) => {
-                            if self.focus_field == FilterDialogField::Value {
-                                self.add_value.push(c);
-                            }
+                    if let KeyCode::Char(c) = key.code {
+                        if self.focus_field == FilterDialogField::Value {
+                            self.add_value.push(c);
                         }
-                        _ => {}
                     }
                 }
             }
             FilterDialogMode::Edit(_idx) => {
                 if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char(c) => {
-                            if self.focus_field == FilterDialogField::Value {
-                                self.add_value.push(c);
-                            }
+                    if let KeyCode::Char(c) = key.code {
+                        if self.focus_field == FilterDialogField::Value {
+                            self.add_value.push(c);
                         }
-                        _ => {}
                     }
                 }
             }
@@ -854,7 +847,7 @@ impl FilterDialog {
                                     if segments.iter().any(|s| s.contains("←/→:")) { continue; }
                                     segments.push("←/→:In/Out".to_string());
                                 }
-                                _ => segments.push(format!("{}: {}", key_text, label)),
+                                _ => segments.push(format!("{key_text}: {label}")),
                             }
                         }
                     }
@@ -880,7 +873,7 @@ impl FilterDialog {
                         keys_for_action.sort_by_key(|seq| seq.len());
                         if let Some(first) = keys_for_action.first() {
                             let key_text = fmt_sequence(first);
-                            segments.push(format!("{}: {}", key_text, label));
+                            segments.push(format!("{key_text}: {label}"));
                         }
                     }
                 }
@@ -894,12 +887,11 @@ impl FilterDialog {
                 segments.push("Esc: Cancel".to_string());
             }
             FilterDialogMode::AddGroup => {
-                if let Some(filter_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Filter) {
-                    if let Some(tab_binding) = filter_bindings.iter().find(|(_, a)| **a == Action::ToggleFilterGroupType) {
-                        let key_text = fmt_sequence(&tab_binding.0);
-                        segments.push(format!("{}: Toggle AND/OR", key_text));
+                if let Some(filter_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Filter)
+                    && let Some(tab_binding) = filter_bindings.iter().find(|(_, a)| **a == Action::ToggleFilterGroupType) {
+                        let key_text = fmt_sequence(tab_binding.0);
+                        segments.push(format!("{key_text}: Toggle AND/OR"));
                     }
-                }
                 segments.push("Enter: OK".to_string());
                 segments.push("Esc: Cancel".to_string());
             }
@@ -913,7 +905,7 @@ impl FilterDialog {
         let mut out = String::new();
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{}", seg);
+            let _ = write!(out, "{seg}");
         }
         out
     }

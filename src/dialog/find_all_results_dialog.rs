@@ -134,7 +134,7 @@ impl FindAllResultsDialog {
         let mut out = String::new();
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{}", seg);
+            let _ = write!(out, "{seg}");
         }
         out
     }

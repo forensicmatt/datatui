@@ -155,11 +155,8 @@ impl FileBrowserDialog {
         // Handle Global actions
         if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
             for (key_seq, action) in global_bindings {
-                match action {
-                    crate::action::Action::Tab => {
-                        segments.push(format!("{}: Tab", fmt_sequence(key_seq)));
-                    }
-                    _ => {}
+                if action == &crate::action::Action::Tab {
+                    segments.push(format!("{}: Tab", fmt_sequence(key_seq)));
                 }
             }
         }
@@ -192,7 +189,7 @@ impl FileBrowserDialog {
         let mut out = String::new();
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{}", seg);
+            let _ = write!(out, "{seg}");
         }
         out
     }

@@ -189,7 +189,7 @@ impl CsvOptionsDialog {
                             if segments.iter().any(|s| s.contains("Move")) { continue; }
                             segments.push(format!("{}/Down: {}", key_text.replace("Down", "Up"), label));
                         }
-                        _ => segments.push(format!("{}: {}", key_text, label)),
+                        _ => segments.push(format!("{key_text}: {label}")),
                     }
                 }
             }
@@ -211,7 +211,7 @@ impl CsvOptionsDialog {
                 keys_for_action.sort_by_key(|seq| seq.len());
                 if let Some(first) = keys_for_action.first() {
                     let key_text = fmt_sequence(first);
-                    segments.push(format!("{}: {}", key_text, label));
+                    segments.push(format!("{key_text}: {label}"));
                 }
             }
         }
@@ -220,7 +220,7 @@ impl CsvOptionsDialog {
         let mut out = String::new();
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{}", seg);
+            let _ = write!(out, "{seg}");
         }
         out
     }

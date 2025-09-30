@@ -154,7 +154,7 @@ impl SqlDialog {
         let mut out = String::new();
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{}", seg);
+            let _ = write!(out, "{seg}");
         }
         out
     }
@@ -253,12 +253,9 @@ impl SqlDialog {
 
         // Handle global actions that work in all modes
         if let Some(global_action) = &global_action {
-            match global_action {
-                Action::ToggleInstructions => {
-                    self.show_instructions = !self.show_instructions;
-                    return None;
-                }
-                _ => {}
+            if global_action == &Action::ToggleInstructions {
+                self.show_instructions = !self.show_instructions;
+                return None;
             }
         }
         

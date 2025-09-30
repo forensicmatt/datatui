@@ -170,7 +170,7 @@ impl SqliteOptionsDialog {
         ).map_err(|e| color_eyre::eyre::eyre!("Failed to prepare SQL statement: {}", e))?;
         
         let table_rows = stmt.query_map([], |row| {
-            Ok(row.get::<_, String>(0)?)
+            row.get::<_, String>(0)
         }).map_err(|e| color_eyre::eyre::eyre!("Failed to execute query: {}", e))?;
         
         for table_result in table_rows {
@@ -296,7 +296,7 @@ impl SqliteOptionsDialog {
         let mut out = String::new();
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{}", seg);
+            let _ = write!(out, "{seg}");
         }
         out
     }
@@ -686,14 +686,12 @@ impl Component for SqliteOptionsDialog {
                 }
                 Action::Paste => {
                     // Paste clipboard text into the File Path when focused
-                    if self.file_path_focused {
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            if let Ok(text) = clipboard.get_text() {
+                    if self.file_path_focused
+                        && let Ok(mut clipboard) = arboard::Clipboard::new()
+                            && let Ok(text) = clipboard.get_text() {
                                 let first_line = text.lines().next().unwrap_or("").to_string();
                                 self.set_file_path(first_line);
                             }
-                        }
-                    }
                     return Ok(None);
                 }
                 _ => {}
@@ -701,18 +699,15 @@ impl Component for SqliteOptionsDialog {
         }
 
         // Fallback for character input or other unhandled keys
-        match key.code {
-            KeyCode::Char(_c) => {
-                if self.file_path_focused {
-                    // Handle text input for file path
-                    use tui_textarea::Input as TuiInput;
-                    let input: TuiInput = key.into();
-                    self.file_path_input.input(input);
-                    self.update_file_path(self.file_path_input.lines().join("\n"));
-                    return Ok(None);
-                }
+        if let KeyCode::Char(_c) = key.code {
+            if self.file_path_focused {
+                // Handle text input for file path
+                use tui_textarea::Input as TuiInput;
+                let input: TuiInput = key.into();
+                self.file_path_input.input(input);
+                self.update_file_path(self.file_path_input.lines().join("\n"));
+                return Ok(None);
             }
-            _ => {}
         }
 
         Ok(None)

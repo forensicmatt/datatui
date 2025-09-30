@@ -128,7 +128,7 @@ impl DataSource {
                 
                 let (name, datasets) = if let Some(table_name) = &sqlite_config.table_name {
                     // Specific table import - create a single dataset for this table
-                    let dataset_name = format!("{} - {}", file_name, table_name);
+                    let dataset_name = format!("{file_name} - {table_name}");
                     let datasets = vec![Dataset {
                         id: Uuid::new_v4().to_string(),
                         name: table_name.clone(),
@@ -451,7 +451,7 @@ impl DataSource {
                         ).map_err(|e| color_eyre::eyre::eyre!("Failed to prepare SQL statement: {}", e))?;
                         
                         let table_rows = stmt.query_map([], |row| {
-                            Ok(row.get::<_, String>(0)?)
+                            row.get::<_, String>(0)
                         }).map_err(|e| color_eyre::eyre::eyre!("Failed to execute query: {}", e))?;
                         
                         let mut tables = Vec::new();
@@ -717,11 +717,11 @@ impl DataManagementDialog {
         if let Some(global_map) = self.config.keybindings.0.get(&Mode::Global) {
             if let Some(seq) = first_binding_for(global_map, &Action::Up) {
                 let keys = seq.iter().map(fmt_key_event).collect::<Vec<_>>().join(", ");
-                segments.push(format!("{}: Navigate Up", keys));
+                segments.push(format!("{keys}: Navigate Up"));
             }
             if let Some(seq) = first_binding_for(global_map, &Action::Down) {
                 let keys = seq.iter().map(fmt_key_event).collect::<Vec<_>>().join(", ");
-                segments.push(format!("{}: Navigate Down", keys));
+                segments.push(format!("{keys}: Navigate Down"));
             }
         }
 
@@ -737,7 +737,7 @@ impl DataManagementDialog {
             for (act, label) in ordered {
                 if let Some(seq) = first_binding_for(dm_map, act) {
                     let keys = seq.iter().map(fmt_key_event).collect::<Vec<_>>().join(", ");
-                    segments.push(format!("{}: {}", keys, label));
+                    segments.push(format!("{keys}: {label}"));
                 }
             }
         }
@@ -804,7 +804,7 @@ impl DataManagementDialog {
         ).map_err(|e| color_eyre::eyre::eyre!("Failed to prepare SQL statement: {}", e))?;
         
         let table_rows = stmt.query_map([], |row| {
-            Ok(row.get::<_, String>(0)?)
+            row.get::<_, String>(0)
         }).map_err(|e| color_eyre::eyre::eyre!("Failed to execute query: {}", e))?;
         
         let mut tables = Vec::new();

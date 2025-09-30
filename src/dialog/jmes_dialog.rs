@@ -140,11 +140,8 @@ impl JmesPathDialog {
                 // Add JMESPath-specific actions
                 if let Some(jmes_bindings) = self.config.keybindings.0.get(&crate::config::Mode::JmesPath) {
                     for (keys, action) in jmes_bindings.iter() {
-                        match action {
-                            Action::ApplyTransform => {
-                                segments.push(format!("{}:Apply", fmt_sequence(keys)));
-                            }
-                            _ => {}
+                        if action == &Action::ApplyTransform {
+                            segments.push(format!("{}:Apply", fmt_sequence(keys)));
                         }
                     }
                 }
@@ -206,7 +203,7 @@ impl JmesPathDialog {
         let mut out = String::new();
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{}", seg);
+            let _ = write!(out, "{seg}");
         }
         
         if out.is_empty() {

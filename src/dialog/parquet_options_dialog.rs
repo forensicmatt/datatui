@@ -172,7 +172,7 @@ impl ParquetOptionsDialog {
         let mut out = String::new();
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{}", seg);
+            let _ = write!(out, "{seg}");
         }
         out
     }
@@ -511,18 +511,15 @@ impl Component for ParquetOptionsDialog {
         }
 
         // Fallback for character input or other unhandled keys
-        match key.code {
-            KeyCode::Char(_c) => {
-                if self.file_path_focused {
-                    // Handle text input for file path
-                    use tui_textarea::Input as TuiInput;
-                    let input: TuiInput = key.into();
-                    self.file_path_input.input(input);
-                    self.update_file_path(self.file_path_input.lines().join("\n"));
-                    return Ok(None);
-                }
+        if let KeyCode::Char(_c) = key.code {
+            if self.file_path_focused {
+                // Handle text input for file path
+                use tui_textarea::Input as TuiInput;
+                let input: TuiInput = key.into();
+                self.file_path_input.input(input);
+                self.update_file_path(self.file_path_input.lines().join("\n"));
+                return Ok(None);
             }
-            _ => {}
         }
 
         Ok(None)

@@ -147,7 +147,7 @@ impl SortDialog {
                             if segments.iter().any(|s| s.contains("Move")) { continue; }
                             segments.push(format!("{}/Down: {}", key_text.replace("Down", "Up"), label));
                         }
-                        _ => segments.push(format!("{}: {}", key_text, label)),
+                        _ => segments.push(format!("{key_text}: {label}")),
                     }
                 }
             }
@@ -172,7 +172,7 @@ impl SortDialog {
                 keys_for_action.sort_by_key(|seq| seq.len());
                 if let Some(first) = keys_for_action.first() {
                     let key_text = fmt_sequence(first);
-                    segments.push(format!("{}: {}", key_text, label));
+                    segments.push(format!("{key_text}: {label}"));
                 }
             }
         }
@@ -189,7 +189,7 @@ impl SortDialog {
         let mut out = String::new();
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{}", seg);
+            let _ = write!(out, "{seg}");
         }
         out
     }
@@ -442,16 +442,15 @@ impl SortDialog {
             if let Some(sort_action) = self.config.action_for_key(crate::config::Mode::Sort, key) {
                 match sort_action {
                     Action::ToggleSortDirection => {
-                        if self.mode == SortDialogMode::List {
-                            if let Some(col) = self.sort_columns.get_mut(self.active_index) {
+                        if self.mode == SortDialogMode::List
+                            && let Some(col) = self.sort_columns.get_mut(self.active_index) {
                                 col.ascending = !col.ascending;
                             }
-                        }
                         return None;
                     }
                     Action::RemoveSortColumn => {
-                        if self.mode == SortDialogMode::List {
-                            if !self.sort_columns.is_empty() && self.active_index < self.sort_columns.len() {
+                        if self.mode == SortDialogMode::List
+                            && !self.sort_columns.is_empty() && self.active_index < self.sort_columns.len() {
                                 self.sort_columns.remove(self.active_index);
                                 if self.sort_columns.is_empty() {
                                     self.active_index = 0;
@@ -473,7 +472,6 @@ impl SortDialog {
                                     }
                                 }
                             }
-                        }
                         return None;
                     }
                     Action::AddSortColumn => {

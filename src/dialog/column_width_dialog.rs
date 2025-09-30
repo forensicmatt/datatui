@@ -284,7 +284,7 @@ impl ColumnWidthDialog {
         let mut out = String::new();
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{}", seg);
+            let _ = write!(out, "{seg}");
         }
         out
     }
@@ -565,16 +565,13 @@ impl ColumnWidthDialog {
             }
 
             // Fallback for character input when editing
-            match key.code {
-                KeyCode::Char(c) => {
-                    // Handle direct number input when editing
-                    if let Some(editing_col) = self.editing_column
-                        && editing_col == self.active_index - 1 && matches!(self.input_mode, InputMode::Number)
-                            && c.is_ascii_digit() {
-                                self.input_buffer.push(c);
-                            }
-                }
-                _ => {}
+            if let KeyCode::Char(c) = key.code {
+                // Handle direct number input when editing
+                if let Some(editing_col) = self.editing_column
+                    && editing_col == self.active_index - 1 && matches!(self.input_mode, InputMode::Number)
+                        && c.is_ascii_digit() {
+                            self.input_buffer.push(c);
+                        }
             }
         }
         None
