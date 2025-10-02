@@ -118,6 +118,136 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Build instructions string from list of (mode, action) tuples
+    pub fn actions_to_instructions(&self, actions: &[(Mode, Action)]) -> String {
+        actions.iter()
+            .map(|(mode, action)| {
+                let friendly_name = self.action_to_friendly_name(action);
+                if let Some(key) = self.key_for_action(*mode, action) {
+                    format!("{}: {}", key, friendly_name)
+                } else {
+                    friendly_name.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ")
+    }
+
+    /// Convert an action to a friendly name
+    pub fn action_to_friendly_name(&self,action: &Action) -> &'static str {
+        match action {
+            // Global actions
+            Action::Escape => "Esc",
+            Action::Enter => "Enter",
+            Action::Backspace => "Backspace",
+            Action::Up => "Up",
+            Action::Down => "Down",
+            Action::Left => "Left",
+            Action::Right => "Right",
+            Action::Tab => "Tab",
+            Action::Paste => "Paste",
+            Action::ToggleInstructions => "Toggle Instructions",
+            
+            // DataTableContainer actions
+            Action::OpenSortDialog => "Sort",
+            Action::QuickSortCurrentColumn => "Quick Sort",
+            Action::OpenFilterDialog => "Filter",
+            Action::QuickFilterEqualsCurrentValue => "Quick Filter",
+            Action::MoveSelectedColumnLeft => "Move Column Left",
+            Action::MoveSelectedColumnRight => "Move Column Right",
+            Action::OpenSqlDialog => "SQL",
+            Action::OpenJmesDialog => "JMESPath",
+            Action::OpenColumnOperationsDialog => "Column Ops",
+            Action::OpenFindDialog => "Find",
+            Action::OpenDataframeDetailsDialog => "Details",
+            Action::OpenColumnWidthDialog => "Column Width",
+            Action::OpenDataExportDialog => "Export",
+            Action::CopySelectedCell => "Copy",
+            
+            // DataTabManager actions
+            Action::OpenProjectSettingsDialog => "Settings",
+            Action::OpenDataManagementDialog => "Data Management",
+            Action::MoveTabToFront => "Move Tab Front",
+            Action::MoveTabToBack => "Move Tab Back",
+            Action::MoveTabLeft => "Move Tab Left",
+            Action::MoveTabRight => "Move Tab Right",
+            Action::PrevTab => "Prev Tab",
+            Action::NextTab => "Next Tab",
+            Action::SyncTabs => "Sync Tabs",
+            
+            // Dialog actions
+            Action::DeleteSelectedSource => "Delete Source",
+            Action::LoadAllPendingDatasets => "Load All",
+            Action::EditSelectedAlias => "Edit Alias",
+            Action::OpenDataImportDialog => "Import",
+            Action::ConfirmDataImport => "Confirm Import",
+            Action::DataImportSelect => "Select",
+            Action::DataImportBack => "Back",
+            Action::OpenFileBrowser => "Browse Files",
+            
+            // Sort dialog actions
+            Action::ToggleSortDirection => "Toggle Sort",
+            Action::RemoveSortColumn => "Remove Sort",
+            Action::AddSortColumn => "Add Sort",
+            
+            // Filter dialog actions
+            Action::AddFilter => "Add Filter",
+            Action::EditFilter => "Edit Filter",
+            Action::DeleteFilter => "Delete Filter",
+            Action::AddFilterGroup => "Add Group",
+            Action::SaveFilter => "Save Filter",
+            Action::LoadFilter => "Load Filter",
+            Action::ResetFilters => "Reset Filters",
+            Action::ToggleFilterGroupType => "Toggle Group",
+            
+            // Find dialog actions
+            Action::ToggleSpace => "Toggle Space",
+            Action::Delete => "Delete",
+            Action::GoToFirst => "First",
+            Action::GoToLast => "Last",
+            Action::PageUp => "Page Up",
+            Action::PageDown => "Page Down",
+            
+            // SQL dialog actions
+            Action::SelectAllText => "Select All",
+            Action::CopyText => "Copy Text",
+            Action::RunQuery => "Run Query",
+            Action::CreateNewDataset => "New Dataset",
+            Action::RestoreDataFrame => "Restore",
+            Action::OpenSqlFileBrowser => "Browse SQL",
+            Action::ClearText => "Clear",
+            Action::PasteText => "Paste Text",
+            
+            // File browser actions
+            Action::FileBrowserPageUp => "Page Up",
+            Action::FileBrowserPageDown => "Page Down",
+            Action::ConfirmOverwrite => "Confirm",
+            Action::DenyOverwrite => "Deny",
+            Action::NavigateToParent => "Parent Dir",
+            
+            // Column width dialog actions
+            Action::ToggleAutoExpand => "Auto Expand",
+            Action::ToggleColumnHidden => "Hide Column",
+            Action::MoveColumnUp => "Move Up",
+            Action::MoveColumnDown => "Move Down",
+            
+            // JMESPath dialog actions
+            Action::AddColumn => "Add Column",
+            Action::EditColumn => "Edit Column",
+            Action::DeleteColumn => "Delete Column",
+            Action::ApplyTransform => "Apply",
+            
+            // Other actions
+            Action::Quit => "Quit",
+            Action::Suspend => "Suspend",
+            Action::Help => "Help",
+            Action::DialogClose => "Close",
+            
+            // Default to the debug representation for unknown actions
+            _ => "Unknown",
+        }
+    }
+    
     /// Resolve an action for a full key sequence for a given mode.
     pub fn action_for_keys(&self, mode: Mode, keys: &[KeyEvent]) -> Option<Action> {
         let map = self.keybindings.0.get(&mode)?;
@@ -130,6 +260,20 @@ impl Config {
             return None;
         }
         self.action_for_keys(mode, &[key])
+    }
+
+    /// Find the key for a given action in a specific mode
+    pub fn key_for_action(&self, mode: Mode, action: &Action) -> Option<String> {
+        let mode_bindings = self.keybindings.0.get(&mode)?;
+        for (key_sequence, bound_action) in mode_bindings.iter() {
+            if bound_action == action {
+                return Some(key_sequence.iter()
+                    .map(key_event_to_string)
+                    .collect::<Vec<_>>()
+                    .join(" "));
+            }
+        }
+        None
     }
 }
 

@@ -63,100 +63,18 @@ impl SqlDialog {
 
     /// Build instructions string from configured keybindings
     fn build_instructions_from_config(&self) -> String {
-        use std::fmt::Write as _;
-        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
-            use crossterm::event::{KeyCode, KeyModifiers};
-            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
-            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
-            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
-            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
-            let key_part = match key.code {
-                KeyCode::Char(' ') => "Space".to_string(),
-                KeyCode::Char(c) => {
-                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
-                }
-                KeyCode::Left => "Left".to_string(),
-                KeyCode::Right => "Right".to_string(),
-                KeyCode::Up => "Up".to_string(),
-                KeyCode::Down => "Down".to_string(),
-                KeyCode::Enter => "Enter".to_string(),
-                KeyCode::Esc => "Esc".to_string(),
-                KeyCode::Tab => "Tab".to_string(),
-                KeyCode::BackTab => "BackTab".to_string(),
-                KeyCode::Delete => "Delete".to_string(),
-                KeyCode::Insert => "Insert".to_string(),
-                KeyCode::Home => "Home".to_string(),
-                KeyCode::End => "End".to_string(),
-                KeyCode::PageUp => "PageUp".to_string(),
-                KeyCode::PageDown => "PageDown".to_string(),
-                KeyCode::F(n) => format!("F{n}"),
-                _ => "?".to_string(),
-            };
-            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
-        }
-        
-        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
-            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
-            parts.join(", ")
-        }
-
-        let mut segments: Vec<String> = Vec::new();
-
-        // Handle Global actions (Escape)
-        if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
-            for (key_seq, action) in global_bindings {
-                match action {
-                    crate::action::Action::Escape => {
-                        segments.push(format!("{}: Cancel", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::ToggleInstructions => {
-                        segments.push(format!("{}: Toggle Instructions", fmt_sequence(key_seq)));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        // Handle SqlDialog-specific actions  
-        if let Some(dialog_bindings) = self.config.keybindings.0.get(&crate::config::Mode::SqlDialog) {
-            for (key_seq, action) in dialog_bindings {
-                match action {
-                    crate::action::Action::RunQuery => {
-                        segments.push(format!("{}: Run", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::CreateNewDataset => {
-                        segments.push(format!("{}: New Dataset", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::SelectAllText => {
-                        segments.push(format!("{}: SelectAll", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::CopyText => {
-                        segments.push(format!("{}: Copy", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::ClearText => {
-                        segments.push(format!("{}: Clear", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::RestoreDataFrame => {
-                        segments.push(format!("{}: Restore", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::OpenSqlFileBrowser => {
-                        segments.push(format!("{}: OpenFile", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::PasteText => {
-                        segments.push(format!("{}: Paste", fmt_sequence(key_seq)));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        // Join segments
-        let mut out = String::new();
-        for (i, seg) in segments.iter().enumerate() {
-            if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{seg}");
-        }
-        out
+        self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Escape),
+            (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+            (crate::config::Mode::SqlDialog, crate::action::Action::RunQuery),
+            (crate::config::Mode::SqlDialog, crate::action::Action::CreateNewDataset),
+            (crate::config::Mode::SqlDialog, crate::action::Action::SelectAllText),
+            (crate::config::Mode::SqlDialog, crate::action::Action::CopyText),
+            (crate::config::Mode::SqlDialog, crate::action::Action::ClearText),
+            (crate::config::Mode::SqlDialog, crate::action::Action::RestoreDataFrame),
+            (crate::config::Mode::SqlDialog, crate::action::Action::OpenSqlFileBrowser),
+            (crate::config::Mode::SqlDialog, crate::action::Action::PasteText),
+        ])
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {

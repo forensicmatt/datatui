@@ -46,97 +46,15 @@ impl FindAllResultsDialog {
 
     /// Build instructions string from configured keybindings
     fn build_instructions_from_config(&self) -> String {
-        use std::fmt::Write as _;
-        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
-            use crossterm::event::{KeyCode, KeyModifiers};
-            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
-            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
-            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
-            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
-            let key_part = match key.code {
-                KeyCode::Char(' ') => "Space".to_string(),
-                KeyCode::Char(c) => {
-                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
-                }
-                KeyCode::Left => "Left".to_string(),
-                KeyCode::Right => "Right".to_string(),
-                KeyCode::Up => "Up".to_string(),
-                KeyCode::Down => "Down".to_string(),
-                KeyCode::Enter => "Enter".to_string(),
-                KeyCode::Esc => "Esc".to_string(),
-                KeyCode::Tab => "Tab".to_string(),
-                KeyCode::BackTab => "BackTab".to_string(),
-                KeyCode::Delete => "Delete".to_string(),
-                KeyCode::Insert => "Insert".to_string(),
-                KeyCode::Home => "Home".to_string(),
-                KeyCode::End => "End".to_string(),
-                KeyCode::PageUp => "PageUp".to_string(),
-                KeyCode::PageDown => "PageDown".to_string(),
-                KeyCode::F(n) => format!("F{n}"),
-                _ => "?".to_string(),
-            };
-            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
-        }
-        
-        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
-            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
-            parts.join(", ")
-        }
-
-        let mut segments: Vec<String> = Vec::new();
-
-        // Handle Global actions (Escape, Enter, Up, Down)
-        if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
-            for (key_seq, action) in global_bindings {
-                match action {
-                    crate::action::Action::Escape => {
-                        segments.push(format!("{}: Close", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::Enter => {
-                        segments.push(format!("{}: Go to Result", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::Up => {
-                        segments.push(format!("{}: Navigate Up", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::Down => {
-                        segments.push(format!("{}: Navigate Down", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::ToggleInstructions => {
-                        segments.push(format!("{}: Toggle Instructions", fmt_sequence(key_seq)));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        // Handle FindAllResults-specific actions  
-        if let Some(dialog_bindings) = self.config.keybindings.0.get(&crate::config::Mode::FindAllResults) {
-            for (key_seq, action) in dialog_bindings {
-                match action {
-                    crate::action::Action::GoToFirst => {
-                        segments.push(format!("{}: Go to First", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::GoToLast => {
-                        segments.push(format!("{}: Go to Last", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::PageUp => {
-                        segments.push(format!("{}: Page Up", fmt_sequence(key_seq)));
-                    }
-                    crate::action::Action::PageDown => {
-                        segments.push(format!("{}: Page Down", fmt_sequence(key_seq)));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        // Join segments
-        let mut out = String::new();
-        for (i, seg) in segments.iter().enumerate() {
-            if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{seg}");
-        }
-        out
+        self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Escape),
+            (crate::config::Mode::Global, crate::action::Action::Enter),
+            (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+            (crate::config::Mode::FindAllResults, crate::action::Action::GoToFirst),
+            (crate::config::Mode::FindAllResults, crate::action::Action::GoToLast),
+            (crate::config::Mode::FindAllResults, crate::action::Action::PageUp),
+            (crate::config::Mode::FindAllResults, crate::action::Action::PageDown),
+        ])
     }
 
     /// Render the dialog with a scrollable table of results

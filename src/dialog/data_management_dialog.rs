@@ -5,7 +5,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Table, Row, Cell, Paragraph, Wrap};
 use serde::{Deserialize, Serialize};
 use crate::action::Action;
-use crate::config::{Config, Mode};
+use crate::config::Config;
 use crate::tui::Event;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -673,76 +673,15 @@ impl DataManagementDialog {
 
     /// Build instructions string from configured keybindings (Global + DataManagement)
     fn build_instructions_from_config(&self) -> String {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-        fn fmt_key_event(key: &KeyEvent) -> String {
-            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
-            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
-            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
-            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
-            let key_part = match key.code {
-                KeyCode::Char(' ') => "Space".to_string(),
-                KeyCode::Char(c) => {
-                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
-                }
-                KeyCode::Left => "Left".to_string(),
-                KeyCode::Right => "Right".to_string(),
-                KeyCode::Up => "Up".to_string(),
-                KeyCode::Down => "Down".to_string(),
-                KeyCode::Enter => "Enter".to_string(),
-                KeyCode::Esc => "Esc".to_string(),
-                KeyCode::Tab => "Tab".to_string(),
-                KeyCode::BackTab => "BackTab".to_string(),
-                KeyCode::Delete => "Delete".to_string(),
-                KeyCode::Insert => "Insert".to_string(),
-                KeyCode::Home => "Home".to_string(),
-                KeyCode::End => "End".to_string(),
-                KeyCode::PageUp => "PageUp".to_string(),
-                KeyCode::PageDown => "PageDown".to_string(),
-                KeyCode::F(n) => format!("F{n}"),
-                _ => "?".to_string(),
-            };
-            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
-        }
-
-        fn first_binding_for<'a>(map: &'a std::collections::HashMap<Vec<KeyEvent>, Action>, action: &Action) -> Option<&'a Vec<KeyEvent>> {
-            let mut v: Vec<&Vec<KeyEvent>> = map.iter().filter_map(|(seq, a)| if a == action { Some(seq) } else { None }).collect();
-            v.sort_by_key(|seq| seq.len());
-            v.first().copied()
-        }
-
-        let mut segments: Vec<String> = Vec::new();
-
-        // Global navigation keys
-        if let Some(global_map) = self.config.keybindings.0.get(&Mode::Global) {
-            if let Some(seq) = first_binding_for(global_map, &Action::Up) {
-                let keys = seq.iter().map(fmt_key_event).collect::<Vec<_>>().join(", ");
-                segments.push(format!("{keys}: Navigate Up"));
-            }
-            if let Some(seq) = first_binding_for(global_map, &Action::Down) {
-                let keys = seq.iter().map(fmt_key_event).collect::<Vec<_>>().join(", ");
-                segments.push(format!("{keys}: Navigate Down"));
-            }
-        }
-
-        // DataManagement-specific actions (order matters)
-        if let Some(dm_map) = self.config.keybindings.0.get(&Mode::DataManagement) {
-            let ordered: &[(Action, &str)] = &[
-                (Action::EditSelectedAlias, "Edit Alias"),
-                (Action::DeleteSelectedSource, "Delete Source"),
-                (Action::OpenDataImportDialog, "Add Data Source"),
-                (Action::LoadAllPendingDatasets, "Load All Pending"),
-                (Action::CloseDataManagementDialog, "Close"),
-            ];
-            for (act, label) in ordered {
-                if let Some(seq) = first_binding_for(dm_map, act) {
-                    let keys = seq.iter().map(fmt_key_event).collect::<Vec<_>>().join(", ");
-                    segments.push(format!("{keys}: {label}"));
-                }
-            }
-        }
-
-        segments.join("  ")
+        self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Up),
+            (crate::config::Mode::Global, crate::action::Action::Down),
+            (crate::config::Mode::DataManagement, crate::action::Action::EditSelectedAlias),
+            (crate::config::Mode::DataManagement, crate::action::Action::DeleteSelectedSource),
+            (crate::config::Mode::DataManagement, crate::action::Action::OpenDataImportDialog),
+            (crate::config::Mode::DataManagement, crate::action::Action::LoadAllPendingDatasets),
+            (crate::config::Mode::DataManagement, crate::action::Action::DialogClose),
+        ])
     }
 
     /// Add a new data source from a DataImportConfig

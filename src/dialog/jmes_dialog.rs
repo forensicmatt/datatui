@@ -94,129 +94,38 @@ impl JmesPathDialog {
 
     /// Build instructions string from configured keybindings
     fn build_instructions_from_config(&self) -> String {
-        use std::fmt::Write as _;
-        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
-            use crossterm::event::{KeyCode, KeyModifiers};
-            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
-            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
-            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
-            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
-            let key_part = match key.code {
-                KeyCode::Char(' ') => "Space".to_string(),
-                KeyCode::Char(c) => {
-                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
-                }
-                KeyCode::Left => "Left".to_string(),
-                KeyCode::Right => "Right".to_string(),
-                KeyCode::Up => "Up".to_string(),
-                KeyCode::Down => "Down".to_string(),
-                KeyCode::Enter => "Enter".to_string(),
-                KeyCode::Esc => "Esc".to_string(),
-                KeyCode::Tab => "Tab".to_string(),
-                KeyCode::BackTab => "BackTab".to_string(),
-                KeyCode::Delete => "Delete".to_string(),
-                KeyCode::Insert => "Insert".to_string(),
-                KeyCode::Home => "Home".to_string(),
-                KeyCode::End => "End".to_string(),
-                KeyCode::PageUp => "PageUp".to_string(),
-                KeyCode::PageDown => "PageDown".to_string(),
-                KeyCode::F(n) => format!("F{n}"),
-                _ => "?".to_string(),
-            };
-            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
-        }
-        
-        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
-            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
-            parts.join(", ")
-        }
-
-        let mut segments: Vec<String> = Vec::new();
-
-        match self.mode {
+        let instructions = match self.mode {
             JmesDialogMode::InputTransform => {
-                segments.push("Enter JMESPath expression.".to_string());
-                
-                // Add JMESPath-specific actions
-                if let Some(jmes_bindings) = self.config.keybindings.0.get(&crate::config::Mode::JmesPath) {
-                    for (keys, action) in jmes_bindings.iter() {
-                        if action == &Action::ApplyTransform {
-                            segments.push(format!("{}:Apply", fmt_sequence(keys)));
-                        }
-                    }
-                }
-                
-                // Add Global actions
-                if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
-                    for (keys, action) in global_bindings.iter() {
-                        match action {
-                            Action::Up => segments.push(format!("{}:Move Focus", fmt_sequence(keys))),
-                            Action::Down => segments.push(format!("{}:Move Focus", fmt_sequence(keys))),
-                            Action::Left => segments.push(format!("{}:on Tabs", fmt_sequence(keys))),
-                            Action::Right => segments.push(format!("{}:on Tabs", fmt_sequence(keys))),
-                            Action::Escape => segments.push(format!("{}:Close", fmt_sequence(keys))),
-                            Action::ToggleInstructions => segments.push(format!("{}:Toggle Instructions", fmt_sequence(keys))),
-                            _ => {}
-                        }
-                    }
-                }
-                
-                segments.push("Space:Toggle Option".to_string());
+                let base_instructions = self.config.actions_to_instructions(&[
+                    (crate::config::Mode::JmesPath, crate::action::Action::ApplyTransform),
+                    (crate::config::Mode::Global, crate::action::Action::Up),
+                    (crate::config::Mode::Global, crate::action::Action::Down),
+                    (crate::config::Mode::Global, crate::action::Action::Left),
+                    (crate::config::Mode::Global, crate::action::Action::Right),
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                    (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+                ]);
+                format!("Enter JMESPath expression. {base_instructions}  Space:Toggle Option")
             }
             JmesDialogMode::InputAddColumns => {
-                segments.push("Add column entries as key/value pairs.".to_string());
-                
-                // Add JMESPath-specific actions
-                if let Some(jmes_bindings) = self.config.keybindings.0.get(&crate::config::Mode::JmesPath) {
-                    for (keys, action) in jmes_bindings.iter() {
-                        match action {
-                            Action::AddColumn => segments.push(format!("{}:Add", fmt_sequence(keys))),
-                            Action::EditColumn => segments.push(format!("{}:Edit", fmt_sequence(keys))),
-                            Action::DeleteColumn => segments.push(format!("{}:Delete", fmt_sequence(keys))),
-                            Action::ApplyTransform => segments.push(format!("{}:Apply", fmt_sequence(keys))),
-                            _ => {}
-                        }
-                    }
-                }
-                
-                // Add Global actions
-                if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
-                    for (keys, action) in global_bindings.iter() {
-                        match action {
-                            Action::Up => segments.push(format!("{}:Select/Move Focus", fmt_sequence(keys))),
-                            Action::Down => segments.push(format!("{}:Select/Move Focus", fmt_sequence(keys))),
-                            Action::Left => segments.push(format!("{}:on Tabs", fmt_sequence(keys))),
-                            Action::Right => segments.push(format!("{}:on Tabs", fmt_sequence(keys))),
-                            Action::Escape => segments.push(format!("{}:Close", fmt_sequence(keys))),
-                            Action::ToggleInstructions => segments.push(format!("{}:Toggle Instructions", fmt_sequence(keys))),
-                            _ => {}
-                        }
-                    }
-                }
-                
-                segments.push("Space:Toggle Option (when selected)".to_string());
+                let base_instructions = self.config.actions_to_instructions(&[
+                    (crate::config::Mode::JmesPath, crate::action::Action::AddColumn),
+                    (crate::config::Mode::JmesPath, crate::action::Action::EditColumn),
+                    (crate::config::Mode::JmesPath, crate::action::Action::DeleteColumn),
+                    (crate::config::Mode::JmesPath, crate::action::Action::ApplyTransform),
+                    (crate::config::Mode::Global, crate::action::Action::Up),
+                    (crate::config::Mode::Global, crate::action::Action::Down),
+                    (crate::config::Mode::Global, crate::action::Action::Left),
+                    (crate::config::Mode::Global, crate::action::Action::Right),
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                    (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+                ]);
+                format!("Add column entries as key/value pairs. {base_instructions}  Space:Toggle Option (when selected)")
             }
             JmesDialogMode::Error(_) => return String::new(),
-        }
-
-        // Join segments
-        let mut out = String::new();
-        for (i, seg) in segments.iter().enumerate() {
-            if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{seg}");
-        }
+        };
         
-        if out.is_empty() {
-            match self.mode {
-                JmesDialogMode::InputTransform =>
-                    "Enter JMESPath expression. Ctrl+Enter:Apply  Up/Down:Select/Move Focus  Left/Right:on Tabs  Space:Toggle Option  Ctrl+i:Toggle Instructions  Esc:Close".to_string(),
-                JmesDialogMode::InputAddColumns =>
-                    "Add column entries as key/value pairs. Ctrl+A:Add  Ctrl+E:Edit  Ctrl+D:Delete  Up/Down:Select/Move Focus  Left/Right:on Tabs  Space:Toggle Option (when selected)  Ctrl+Enter:Apply  Ctrl+i:Toggle Instructions  Esc:Close".to_string(),
-                JmesDialogMode::Error(_) => String::new(),
-            }
-        } else {
-            out
-        }
+        instructions
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) {

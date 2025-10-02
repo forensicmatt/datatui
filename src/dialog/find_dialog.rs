@@ -325,104 +325,16 @@ impl FindDialog {
 
     /// Build instructions string from configured keybindings
     fn build_instructions_from_config(&self) -> String {
-        use std::fmt::Write as _;
-        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
-            use crossterm::event::{KeyCode, KeyModifiers};
-            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
-            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
-            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
-            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
-            let key_part = match key.code {
-                KeyCode::Char(' ') => "Space".to_string(),
-                KeyCode::Char(c) => {
-                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
-                }
-                KeyCode::Left => "Left".to_string(),
-                KeyCode::Right => "Right".to_string(),
-                KeyCode::Up => "Up".to_string(),
-                KeyCode::Down => "Down".to_string(),
-                KeyCode::Enter => "Enter".to_string(),
-                KeyCode::Esc => "Esc".to_string(),
-                KeyCode::Tab => "Tab".to_string(),
-                KeyCode::BackTab => "BackTab".to_string(),
-                KeyCode::Delete => "Delete".to_string(),
-                KeyCode::Insert => "Insert".to_string(),
-                KeyCode::Home => "Home".to_string(),
-                KeyCode::End => "End".to_string(),
-                KeyCode::PageUp => "PageUp".to_string(),
-                KeyCode::PageDown => "PageDown".to_string(),
-                KeyCode::F(n) => format!("F{n}"),
-                _ => "?".to_string(),
-            };
-            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
-        }
+        let instructions = self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Enter),
+            (crate::config::Mode::Global, crate::action::Action::Escape),
+            (crate::config::Mode::Find, crate::action::Action::Tab),
+            (crate::config::Mode::Find, crate::action::Action::ToggleSpace),
+            (crate::config::Mode::Find, crate::action::Action::Delete),
+            (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+        ]);
         
-        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
-            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
-            parts.join(", ")
-        }
-
-        let mut segments: Vec<String> = Vec::new();
-
-        // Handle Global actions
-        if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
-            // Find Enter key
-            for (keys, action) in global_bindings.iter() {
-                if action == &Action::Enter {
-                    segments.push(format!("{}: Action", fmt_sequence(keys)));
-                    break;
-                }
-            }
-            
-            // Find Escape key
-            for (keys, action) in global_bindings.iter() {
-                if action == &Action::Escape {
-                    segments.push(format!("{}: Close", fmt_sequence(keys)));
-                    break;
-                }
-            }
-        }
-
-        // Handle Find-specific actions  
-        if let Some(find_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Find) {
-            for (keys, action) in find_bindings.iter() {
-                match action {
-                    Action::Tab => {
-                        segments.push(format!("{}: Next field", fmt_sequence(keys)));
-                    }
-                    Action::ToggleSpace => {
-                        segments.push(format!("{}: Toggle", fmt_sequence(keys)));
-                    }
-                    Action::Delete => {
-                        segments.push(format!("{}: Delete", fmt_sequence(keys)));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        // Add instructions toggle from Global config
-        if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
-            for (keys, action) in global_bindings.iter() {
-                if action == &Action::ToggleInstructions {
-                    segments.push(format!("{}: Toggle Instructions", fmt_sequence(keys)));
-                    break;
-                }
-            }
-        }
-
-        // Join segments
-        let mut out = String::new();
-        for (i, seg) in segments.iter().enumerate() {
-            if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{seg}");
-        }
-        
-        if out.is_empty() {
-            "Enter search pattern. Tab: Next field  Space: Toggle  Enter: Action  Esc: Close".to_string()
-        } else {
-            format!("Enter search pattern. {out}")
-        }
+        format!("Enter search pattern. {instructions}")
     }
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {

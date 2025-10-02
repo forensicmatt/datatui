@@ -48,7 +48,7 @@ use crate::components::{Component, datatable::DataTable};
 use crate::style::StyleConfig;
 use crate::dataframe::manager::SortableDataFrame;
 use crate::action::Action;
-use crate::config::Config;
+use crate::config::{Config, Mode};
 use crate::tui::Event;
 use crate::sql::register_all;
 use color_eyre::Result;
@@ -120,7 +120,6 @@ pub struct DataTableContainer {
     pub datatable: DataTable,
     pub style: StyleConfig,
     pub config: Config,
-    pub instructions: String,
     pub additional_instructions: Option<String>,
     pub show_instructions: bool,
     pub auto_expand_value_display: bool,
@@ -182,7 +181,6 @@ impl core::fmt::Debug for DataTableContainer {
         f.debug_struct("DataTableContainer")
             .field("datatable", &"DataTable{..}")
             .field("style", &"StyleConfig{..}")
-            .field("instructions", &self.instructions)
             .field("show_instructions", &self.show_instructions)
             .field("sql_current_df_name", &self.sql_current_df_name)
             .field("sort_dialog_active", &self.sort_dialog_active)
@@ -520,7 +518,7 @@ impl DataTableContainer {
                 .collect()
         );
         let find_dialog = FindDialog::new();
-        let instructions = "Ctrl+f: Find  Ctrl+s: Sort  Shift+s: Quick Sort  Ctrl+e: Filter  Shift+e Quick Filter  Ctrl+t: SQL  Ctrl+j: JMES  Ctrl+w: Widths  Ctrl+d: Details  Shift+←/→: Move Column  Ctrl+c: Copy  Ctrl+i: Toggle Instructions  Ctrl+z: Quit".to_string();
+        
         // Capture SQL registration name before moving `datatable`
         let sql_name = datatable.dataframe.metadata.name.clone();
         let dataframe_details_dialog = DataFrameDetailsDialog::new();
@@ -531,7 +529,6 @@ impl DataTableContainer {
             datatable,
             style,
             config: Config::default(),
-            instructions,
             additional_instructions: None,
             show_instructions: true,
             auto_expand_value_display: false,
@@ -1033,11 +1030,33 @@ impl DataTableContainer {
         &self.available_datasets
     }
 
+    fn build_instructions_from_config(&self) -> String {
+        self.config.actions_to_instructions(&[
+            (Mode::DataTableContainer, Action::OpenSortDialog),
+            (Mode::DataTableContainer, Action::QuickSortCurrentColumn),
+            (Mode::DataTableContainer, Action::OpenFilterDialog),
+            (Mode::DataTableContainer, Action::QuickFilterEqualsCurrentValue),
+            (Mode::DataTableContainer, Action::MoveSelectedColumnLeft),
+            (Mode::DataTableContainer, Action::MoveSelectedColumnRight),
+            (Mode::DataTableContainer, Action::OpenDataExportDialog),
+            (Mode::DataTableContainer, Action::OpenSqlDialog),
+            (Mode::DataTableContainer, Action::OpenJmesDialog),
+            (Mode::DataTableContainer, Action::OpenColumnOperationsDialog),
+            (Mode::DataTableContainer, Action::OpenFindDialog),
+            (Mode::DataTableContainer, Action::OpenDataframeDetailsDialog),
+            (Mode::DataTableContainer, Action::OpenColumnWidthDialog),
+            (Mode::DataTableContainer, Action::CopySelectedCell),
+            (Mode::Global, Action::ToggleInstructions),
+        ])
+    }
+
     fn get_instructions(&self) -> String {
+        let base_instructions = self.build_instructions_from_config();
+        
         if let Some(additional_instructions) = &self.additional_instructions {
-            format!("{}\n{}", additional_instructions, self.instructions)
+            format!("{}\n{}", additional_instructions, base_instructions)
         } else {
-            self.instructions.clone()
+            base_instructions
         }
     }
 
@@ -1881,7 +1900,8 @@ impl Component for DataTableContainer {
                     return Ok(None);
                 }
                 Action::OpenDataExportDialog => {
-                    let visible_columns = self.datatable.get_visible_columns().unwrap_or_default();
+                    let visible_columns = self.datatable.get_visible_columns()
+                        .unwrap_or_default();
                     let df_arc = self.datatable.get_dataframe()?;
                     let df = df_arc.as_ref();
                     let mut rows: Vec<Vec<String>> = Vec::with_capacity(df.height());

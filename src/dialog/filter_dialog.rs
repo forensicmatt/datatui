@@ -774,136 +774,46 @@ impl FilterDialog {
 
     /// Build instructions string from configured keybindings for Filter mode
     fn build_instructions_from_config(&self) -> String {
-        use std::fmt::Write as _;
-        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
-            use crossterm::event::{KeyCode, KeyModifiers};
-            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
-            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
-            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
-            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
-            let key_part = match key.code {
-                KeyCode::Char(' ') => "Space".to_string(),
-                KeyCode::Char(c) => {
-                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
-                }
-                KeyCode::Left => "Left".to_string(),
-                KeyCode::Right => "Right".to_string(),
-                KeyCode::Up => "Up".to_string(),
-                KeyCode::Down => "Down".to_string(),
-                KeyCode::Enter => "Enter".to_string(),
-                KeyCode::Esc => "Esc".to_string(),
-                KeyCode::Tab => "Tab".to_string(),
-                KeyCode::BackTab => "BackTab".to_string(),
-                KeyCode::Delete => "Delete".to_string(),
-                KeyCode::Insert => "Insert".to_string(),
-                KeyCode::Home => "Home".to_string(),
-                KeyCode::End => "End".to_string(),
-                KeyCode::PageUp => "PageUp".to_string(),
-                KeyCode::PageDown => "PageDown".to_string(),
-                KeyCode::F(n) => format!("F{n}"),
-                _ => "?".to_string(),
-            };
-            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
-        }
-
-        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
-            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
-            parts.join(", ")
-        }
-
-        let mut segments: Vec<String> = Vec::new();
-
         match &self.mode {
             FilterDialogMode::List => {
-                // Global actions for List mode
-                if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
-                    let global_actions: &[(Action, &str)] = &[
-                        (Action::Up, "Move"),
-                        (Action::Down, "Move"),
-                        (Action::Left, "In"),
-                        (Action::Right, "Out"),
-                        (Action::Enter, "OK"),
-                        (Action::Escape, "Cancel"),
-                    ];
-
-                    for (action, label) in global_actions {
-                        let mut keys_for_action: Vec<&Vec<crossterm::event::KeyEvent>> = global_bindings
-                            .iter()
-                            .filter_map(|(seq, a)| if a == action { Some(seq) } else { None })
-                            .collect();
-                        keys_for_action.sort_by_key(|seq| seq.len());
-                        if let Some(first) = keys_for_action.first() {
-                            let key_text = fmt_sequence(first);
-                            match action {
-                                Action::Up | Action::Down => {
-                                    if segments.iter().any(|s| s.contains("Move")) { continue; }
-                                    segments.push(format!("{}/Down: {}", key_text.replace("Down", "Up"), label));
-                                }
-                                Action::Left | Action::Right => {
-                                    if segments.iter().any(|s| s.contains("←/→:")) { continue; }
-                                    segments.push("←/→:In/Out".to_string());
-                                }
-                                _ => segments.push(format!("{key_text}: {label}")),
-                            }
-                        }
-                    }
-                }
-
-                // Filter-specific actions for List mode
-                if let Some(filter_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Filter) {
-                    let filter_actions: &[(Action, &str)] = &[
-                        (Action::AddFilter, "Add"),
-                        (Action::EditFilter, "Edit"),
-                        (Action::DeleteFilter, "Del"),
-                        (Action::AddFilterGroup, "Group"),
-                        (Action::SaveFilter, "Save"),
-                        (Action::LoadFilter, "Load"),
-                        (Action::ResetFilters, "Reset"),
-                    ];
-
-                    for (action, label) in filter_actions {
-                        let mut keys_for_action: Vec<&Vec<crossterm::event::KeyEvent>> = filter_bindings
-                            .iter()
-                            .filter_map(|(seq, a)| if a == action { Some(seq) } else { None })
-                            .collect();
-                        keys_for_action.sort_by_key(|seq| seq.len());
-                        if let Some(first) = keys_for_action.first() {
-                            let key_text = fmt_sequence(first);
-                            segments.push(format!("{key_text}: {label}"));
-                        }
-                    }
-                }
+                self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Global, crate::action::Action::Up),
+                    (crate::config::Mode::Global, crate::action::Action::Down),
+                    (crate::config::Mode::Global, crate::action::Action::Left),
+                    (crate::config::Mode::Global, crate::action::Action::Right),
+                    (crate::config::Mode::Global, crate::action::Action::Enter),
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                    (crate::config::Mode::Filter, crate::action::Action::AddFilter),
+                    (crate::config::Mode::Filter, crate::action::Action::EditFilter),
+                    (crate::config::Mode::Filter, crate::action::Action::DeleteFilter),
+                    (crate::config::Mode::Filter, crate::action::Action::AddFilterGroup),
+                    (crate::config::Mode::Filter, crate::action::Action::SaveFilter),
+                    (crate::config::Mode::Filter, crate::action::Action::LoadFilter),
+                    (crate::config::Mode::Filter, crate::action::Action::ResetFilters),
+                ])
             }
             FilterDialogMode::Add => {
-                segments.push("Enter: OK".to_string());
-                segments.push("Esc: Cancel".to_string());
+                "Enter: OK  Esc: Cancel".to_string()
             }
             FilterDialogMode::Edit(_) => {
-                segments.push("Enter: OK".to_string());
-                segments.push("Esc: Cancel".to_string());
+                "Enter: OK  Esc: Cancel".to_string()
             }
             FilterDialogMode::AddGroup => {
-                if let Some(filter_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Filter)
-                    && let Some(tab_binding) = filter_bindings.iter().find(|(_, a)| **a == Action::ToggleFilterGroupType) {
-                        let key_text = fmt_sequence(tab_binding.0);
-                        segments.push(format!("{key_text}: Toggle AND/OR"));
-                    }
-                segments.push("Enter: OK".to_string());
-                segments.push("Esc: Cancel".to_string());
+                let instructions = self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Filter, crate::action::Action::ToggleFilterGroupType),
+                    (crate::config::Mode::Global, crate::action::Action::Enter),
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                ]);
+                if instructions.is_empty() {
+                    "Enter: OK  Esc: Cancel".to_string()
+                } else {
+                    format!("{instructions}  Enter: OK  Esc: Cancel")
+                }
             }
             FilterDialogMode::FileBrowser(_) => {
-                segments.push("Enter: OK".to_string());
-                segments.push("Esc: Cancel".to_string());
+                "Enter: OK  Esc: Cancel".to_string()
             }
         }
-
-        // Join with double space for readability
-        let mut out = String::new();
-        for (i, seg) in segments.iter().enumerate() {
-            if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{seg}");
-        }
-        out
     }
 }
 

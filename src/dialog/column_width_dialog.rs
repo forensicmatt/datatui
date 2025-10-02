@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Display;
 use crate::action::Action;
-use crate::config::Config;
+use crate::config::{Config, Mode};
 use crate::tui::Event;
 use color_eyre::Result;
 use crossterm::event::{KeyEvent, KeyEventKind, MouseEvent};
@@ -196,97 +196,17 @@ impl ColumnWidthDialog {
 
     /// Build instructions string from configured keybindings
     fn build_instructions_from_config(&self) -> String {
-        use std::fmt::Write as _;
-        fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
-            use crossterm::event::{KeyCode, KeyModifiers};
-            let mut parts: Vec<&'static str> = Vec::with_capacity(3);
-            if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
-            if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
-            if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
-            let key_part = match key.code {
-                KeyCode::Char(' ') => "Space".to_string(),
-                KeyCode::Char(c) => {
-                    if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
-                }
-                KeyCode::Left => "Left".to_string(),
-                KeyCode::Right => "Right".to_string(),
-                KeyCode::Up => "Up".to_string(),
-                KeyCode::Down => "Down".to_string(),
-                KeyCode::Enter => "Enter".to_string(),
-                KeyCode::Esc => "Esc".to_string(),
-                KeyCode::Tab => "Tab".to_string(),
-                KeyCode::BackTab => "BackTab".to_string(),
-                KeyCode::Delete => "Delete".to_string(),
-                KeyCode::Insert => "Insert".to_string(),
-                KeyCode::Home => "Home".to_string(),
-                KeyCode::End => "End".to_string(),
-                KeyCode::PageUp => "PageUp".to_string(),
-                KeyCode::PageDown => "PageDown".to_string(),
-                KeyCode::F(n) => format!("F{n}"),
-                _ => "?".to_string(),
-            };
-            if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
-        }
-        
-        fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
-            let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
-            parts.join(", ")
-        }
-
-        let mut segments: Vec<String> = Vec::new();
-
-        // Handle Global actions
-        if let Some(global_bindings) = self.key_config.keybindings.0.get(&crate::config::Mode::Global) {
-            for (keys, action) in global_bindings {
-                match action {
-                    crate::action::Action::Escape => {
-                        segments.push(format!("{}: Apply/Close", fmt_sequence(keys)));
-                    }
-                    crate::action::Action::Enter => {
-                        segments.push(format!("{}: Confirm Edit", fmt_sequence(keys)));
-                    }
-                    crate::action::Action::Up => {
-                        segments.push(format!("{}: Move Up", fmt_sequence(keys)));
-                    }
-                    crate::action::Action::Down => {
-                        segments.push(format!("{}: Move Down", fmt_sequence(keys)));
-                    }
-                    crate::action::Action::ToggleInstructions => {
-                        segments.push(format!("{}: Toggle Help", fmt_sequence(keys)));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        // Handle ColumnWidthDialog specific actions
-        if let Some(dialog_bindings) = self.key_config.keybindings.0.get(&crate::config::Mode::ColumnWidthDialog) {
-            for (keys, action) in dialog_bindings {
-                match action {
-                    crate::action::Action::ToggleAutoExpand => {
-                        segments.push(format!("{}: Auto/Number", fmt_sequence(keys)));
-                    }
-                    crate::action::Action::ToggleColumnHidden => {
-                        segments.push(format!("{}: Toggle Hide", fmt_sequence(keys)));
-                    }
-                    crate::action::Action::MoveColumnUp => {
-                        segments.push(format!("{}: Reorder Up", fmt_sequence(keys)));
-                    }
-                    crate::action::Action::MoveColumnDown => {
-                        segments.push(format!("{}: Reorder Down", fmt_sequence(keys)));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        // Join segments
-        let mut out = String::new();
-        for (i, seg) in segments.iter().enumerate() {
-            if i > 0 { let _ = write!(out, "  "); }
-            let _ = write!(out, "{seg}");
-        }
-        out
+        return self.key_config.actions_to_instructions(&[
+            (Mode::ColumnWidthDialog, Action::ToggleAutoExpand),
+            (Mode::ColumnWidthDialog, Action::ToggleColumnHidden),
+            (Mode::ColumnWidthDialog, Action::MoveColumnUp),
+            (Mode::ColumnWidthDialog, Action::MoveColumnDown),
+            (Mode::Global, Action::ToggleInstructions),
+            (Mode::Global, Action::Escape),
+            (Mode::Global, Action::Enter),
+            (Mode::Global, Action::Up),
+            (Mode::Global, Action::Down)
+        ])
     }
 
     /// Render the dialog (UI skeleton)
