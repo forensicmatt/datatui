@@ -1,5 +1,5 @@
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyEvent, KeyEventKind};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, BorderType, Paragraph, Wrap};
 
@@ -17,19 +17,21 @@ pub enum ColumnOperationKind {
     Cluster,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ColumnOperationsMode {
     SelectOperation,
     Error(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ColumnOperationsDialog {
     pub mode: ColumnOperationsMode,
     pub styles: StyleConfig,
     pub show_instructions: bool,
     pub selected_index: usize,
     pub operations: Vec<ColumnOperationKind>,
+    #[serde(skip)]
+    pub config: crate::config::Config,
 }
 
 impl ColumnOperationsDialog {
@@ -44,6 +46,7 @@ impl ColumnOperationsDialog {
                 ColumnOperationKind::Pca,
                 ColumnOperationKind::Cluster,
             ],
+            config: crate::config::Config::default(),
         }
     }
 
@@ -66,13 +69,9 @@ impl ColumnOperationsDialog {
         let inner_total_area = outer_block.inner(area);
         outer_block.render(area, buf);
 
-        let instructions = match self.mode {
-            ColumnOperationsMode::SelectOperation =>
-                "Up/Down: Move  Enter: Apply  Esc: Close  Ctrl+i: Toggle Instructions",
-            ColumnOperationsMode::Error(_) => "",
-        };
-
-        let layout = split_dialog_area(inner_total_area, self.show_instructions, Some(instructions));
+        let instructions = self.build_instructions_from_config();
+        let layout = split_dialog_area(inner_total_area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
 
         match &self.mode {
@@ -116,7 +115,7 @@ impl ColumnOperationsDialog {
 
         // Render instructions area if enabled
         if self.show_instructions && let Some(instructions_area) = layout.instructions_area {
-            let instructions_paragraph = Paragraph::new(instructions)
+            let instructions_paragraph = Paragraph::new(instructions.as_str())
                 .block(Block::default().borders(Borders::ALL).title("Instructions"))
                 .style(Style::default().fg(Color::Yellow))
                 .wrap(Wrap { trim: true });
@@ -136,28 +135,52 @@ impl ColumnOperationsDialog {
         None
     }
 
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        match self.mode {
+            ColumnOperationsMode::SelectOperation => {
+                self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Global, crate::action::Action::Up),
+                    (crate::config::Mode::Global, crate::action::Action::Down),
+                    (crate::config::Mode::Global, crate::action::Action::Enter),
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                    (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+                ])
+            }
+            ColumnOperationsMode::Error(_) => String::new(),
+        }
+    }
+
     pub fn handle_key_event_internal(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if key.kind == KeyEventKind::Press {
-            use crossterm::event::KeyModifiers;
-            if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                self.show_instructions = !self.show_instructions;
-                return Ok(None);
-            }
-            match key.code {
-                KeyCode::Up => {
-                    if !self.operations.is_empty() {
-                        if self.selected_index == 0 { self.selected_index = self.operations.len() - 1; } else { self.selected_index -= 1; }
+            // First, honor config-driven Global actions
+            if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+                match global_action {
+                    Action::Escape => return Ok(Some(Action::DialogClose)),
+                    Action::Enter => {
+                        if let Some(a) = self.apply_selected() { return Ok(Some(a)); }
+                        return Ok(None);
                     }
+                    Action::Up => {
+                        if !self.operations.is_empty() {
+                            if self.selected_index == 0 { self.selected_index = self.operations.len() - 1; } else { self.selected_index -= 1; }
+                        }
+                        return Ok(None);
+                    }
+                    Action::Down => {
+                        if !self.operations.is_empty() { self.selected_index = (self.selected_index + 1) % self.operations.len(); }
+                        return Ok(None);
+                    }
+                    Action::ToggleInstructions => {
+                        self.show_instructions = !self.show_instructions;
+                        return Ok(None);
+                    }
+                    _ => {}
                 }
-                KeyCode::Down => {
-                    if !self.operations.is_empty() { self.selected_index = (self.selected_index + 1) % self.operations.len(); }
-                }
-                KeyCode::Enter => {
-                    if let Some(a) = self.apply_selected() { return Ok(Some(a)); }
-                }
-                KeyCode::Esc => { return Ok(Some(Action::DialogClose)); }
-                _ => {}
             }
+
+            // No dialog-specific actions for this simple dialog
+            // All functionality is handled by Global actions
         }
         Ok(None)
     }
@@ -171,7 +194,10 @@ impl Default for ColumnOperationsDialog {
 
 impl Component for ColumnOperationsDialog {
     fn register_action_handler(&mut self, _tx: tokio::sync::mpsc::UnboundedSender<Action>) -> Result<()> { Ok(()) }
-    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { Ok(()) }
+    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { 
+        self.config = _config; 
+        Ok(()) 
+    }
     fn init(&mut self, _area: ratatui::layout::Size) -> Result<()> { Ok(()) }
     fn handle_events(&mut self, _event: Option<crate::tui::Event>) -> Result<Option<Action>> { Ok(None) }
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> { self.handle_key_event_internal(key) }

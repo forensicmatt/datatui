@@ -57,37 +57,14 @@ fn register_config_handler(&mut self, _config: Config) -> Result<()> {
 ```rust
 /// Build instructions string from configured keybindings
 fn build_instructions_from_config(&self) -> String {
-    use std::fmt::Write as _;
-    fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
-        // [Standard key formatting function - copy from existing implementation]
-    }
-    
-    fn fmt_sequence(seq: &[crossterm::event::KeyEvent]) -> String {
-        let parts: Vec<String> = seq.iter().map(fmt_key_event).collect();
-        parts.join(", ")
-    }
-
-    let mut segments: Vec<String> = Vec::new();
-
-    // Handle Global actions (Escape, Enter, Up, Down, Left, Right, Backspace)
-    if let Some(global_bindings) = self.config.keybindings.0.get(&crate::config::Mode::Global) {
-        // Add relevant Global actions for this dialog
-    }
-
-    // Handle dialog-specific actions  
-    if let Some(dialog_bindings) = self.config.keybindings.0.get(&crate::config::Mode::[DialogMode]) {
-        // Add dialog-specific actions
-    }
-
-    // Handle different dialog modes/states if applicable
-
-    // Join segments
-    let mut out = String::new();
-    for (i, seg) in segments.iter().enumerate() {
-        if i > 0 { let _ = write!(out, "  "); }
-        let _ = write!(out, "{}", seg);
-    }
-    out
+    // For simple dialogs with one mode:
+    self.config.actions_to_instructions(&[
+        (crate::config::Mode::Global, crate::action::Action::Enter),
+        (crate::config::Mode::Global, crate::action::Action::Escape),
+        (crate::config::Mode::[DialogMode], crate::action::Action::ActionName1),
+        (crate::config::Mode::[DialogMode], crate::action::Action::ActionName2),
+        (crate::config::Mode::[DialogMode], crate::action::Action::ActionName3),
+    ])
 }
 ```
 
@@ -173,6 +150,9 @@ let layout = split_dialog_area(area, self.show_instructions,
 - Handle different dialog modes/states appropriately in both key handling and instructions
 - Test with modified keybindings to ensure instructions update correctly
 - Follow the existing pattern from SortDialog, FilterDialog, and CsvOptionsDialog
+- Use `Config.actions_to_instructions()` instead of manual key formatting
+- For simple modes with just Enter/Escape, hardcoded strings are acceptable
+- Mix config-driven and hardcoded instructions when appropriate (see FilterDialog example)
 
 ## Implementation Examples
 Reference the following completed implementations for patterns:
@@ -180,40 +160,78 @@ Reference the following completed implementations for patterns:
 - `src/dialog/filter_dialog.rs` - Complex dialog with multiple modes and file operations
 - `src/dialog/csv_options_dialog.rs` - Dialog with custom layout and instructions
 
-## Standard Key Formatting Function
-Copy this helper function for consistent key display:
+### Simple Example: CsvOptionsDialog Implementation
+For a simple dialog with one mode:
 
 ```rust
-fn fmt_key_event(key: &crossterm::event::KeyEvent) -> String {
-    use crossterm::event::{KeyCode, KeyModifiers};
-    let mut parts: Vec<&'static str> = Vec::with_capacity(3);
-    if key.modifiers.contains(KeyModifiers::CONTROL) { parts.push("Ctrl"); }
-    if key.modifiers.contains(KeyModifiers::ALT) { parts.push("Alt"); }
-    if key.modifiers.contains(KeyModifiers::SHIFT) { parts.push("Shift"); }
-    let key_part = match key.code {
-        KeyCode::Char(' ') => "Space".to_string(),
-        KeyCode::Char(c) => {
-            if key.modifiers.contains(KeyModifiers::SHIFT) { c.to_ascii_uppercase().to_string() } else { c.to_string() }
-        }
-        KeyCode::Left => "Left".to_string(),
-        KeyCode::Right => "Right".to_string(),
-        KeyCode::Up => "Up".to_string(),
-        KeyCode::Down => "Down".to_string(),
-        KeyCode::Enter => "Enter".to_string(),
-        KeyCode::Esc => "Esc".to_string(),
-        KeyCode::Tab => "Tab".to_string(),
-        KeyCode::BackTab => "BackTab".to_string(),
-        KeyCode::Delete => "Delete".to_string(),
-        KeyCode::Insert => "Insert".to_string(),
-        KeyCode::Home => "Home".to_string(),
-        KeyCode::End => "End".to_string(),
-        KeyCode::PageUp => "PageUp".to_string(),
-        KeyCode::PageDown => "PageDown".to_string(),
-        KeyCode::F(n) => format!("F{n}"),
-        _ => "?".to_string(),
-    };
-    if parts.is_empty() { key_part } else { format!("{}+{}", parts.join("+"), key_part) }
+fn build_instructions_from_config(&self) -> String {
+    self.config.actions_to_instructions(&[
+        (crate::config::Mode::Global, crate::action::Action::Up),
+        (crate::config::Mode::Global, crate::action::Action::Down),
+        (crate::config::Mode::Global, crate::action::Action::Enter),
+        (crate::config::Mode::Global, crate::action::Action::Escape),
+        (crate::config::Mode::CsvOptions, crate::action::Action::Tab),
+        (crate::config::Mode::CsvOptions, crate::action::Action::OpenFileBrowser),
+        (crate::config::Mode::CsvOptions, crate::action::Action::Paste),
+    ])
 }
 ```
+
+### Complex Example: FilterDialog Implementation
+For a dialog with multiple modes:
+
+```rust
+fn build_instructions_from_config(&self) -> String {
+    match &self.mode {
+        FilterDialogMode::List => {
+            self.config.actions_to_instructions(&[
+                (crate::config::Mode::Global, crate::action::Action::Up),
+                (crate::config::Mode::Global, crate::action::Action::Down),
+                (crate::config::Mode::Global, crate::action::Action::Left),
+                (crate::config::Mode::Global, crate::action::Action::Right),
+                (crate::config::Mode::Global, crate::action::Action::Enter),
+                (crate::config::Mode::Global, crate::action::Action::Escape),
+                (crate::config::Mode::Filter, crate::action::Action::AddFilter),
+                (crate::config::Mode::Filter, crate::action::Action::EditFilter),
+                (crate::config::Mode::Filter, crate::action::Action::DeleteFilter),
+                (crate::config::Mode::Filter, crate::action::Action::AddFilterGroup),
+                (crate::config::Mode::Filter, crate::action::Action::SaveFilter),
+                (crate::config::Mode::Filter, crate::action::Action::LoadFilter),
+                (crate::config::Mode::Filter, crate::action::Action::ResetFilters),
+            ])
+        }
+        FilterDialogMode::Add => {
+            "Enter: OK  Esc: Cancel".to_string()
+        }
+        FilterDialogMode::Edit(_) => {
+            "Enter: OK  Esc: Cancel".to_string()
+        }
+        FilterDialogMode::AddGroup => {
+            let instructions = self.config.actions_to_instructions(&[
+                (crate::config::Mode::Filter, crate::action::Action::ToggleFilterGroupType),
+                (crate::config::Mode::Global, crate::action::Action::Enter),
+                (crate::config::Mode::Global, crate::action::Action::Escape),
+            ]);
+            if instructions.is_empty() {
+                "Enter: OK  Esc: Cancel".to_string()
+            } else {
+                format!("{instructions}  Enter: OK  Esc: Cancel")
+            }
+        }
+        FilterDialogMode::FileBrowser(_) => {
+            "Enter: OK  Esc: Cancel".to_string()
+        }
+    }
+}
+```
+
+This generates instructions like: `Up: Up  Down: Down  Enter: Enter  Esc: Esc  A: Add Filter  E: Edit Filter  D: Delete Filter  G: Add Group  S: Save Filter  L: Load Filter  R: Reset Filters`
+
+## Key Benefits of Using `actions_to_instructions`
+- **Automatic key formatting**: No need to manually format key events
+- **Consistent display**: All dialogs use the same key formatting logic
+- **Dynamic updates**: Instructions automatically reflect current keybinding configuration
+- **Fallback handling**: Gracefully handles unconfigured actions
+- **Cleaner code**: Much simpler than manual key formatting and instruction building
 
 This prompt provides a complete template for implementing the keybinding configuration system while following the established patterns and ensuring consistency across all dialogs.

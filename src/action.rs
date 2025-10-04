@@ -276,6 +276,28 @@ pub enum Action {
     PasteJsonFilePath,
     ToggleNdjson,
     FinishJsonImport,
+    /// ColumnOperationOptionsDialog specific actions
+    ToggleField,
+    ToggleButtons,
+    /// DataFrameDetailsDialog specific actions
+    SwitchToNextTab,
+    SwitchToPrevTab,
+    ChangeColumnLeft,
+    ChangeColumnRight,
+    OpenSortChoice,
+    OpenCastOverlay,
+    AddFilterFromValue,
+    ExportCurrentTab,
+    NavigateHeatmapLeft,
+    NavigateHeatmapRight,
+    NavigateHeatmapUp,
+    NavigateHeatmapDown,
+    NavigateHeatmapPageUp,
+    NavigateHeatmapPageDown,
+    NavigateHeatmapHome,
+    NavigateHeatmapEnd,
+    ScrollStatsLeft,
+    ScrollStatsRight,
 }
 
 #[cfg(test)]

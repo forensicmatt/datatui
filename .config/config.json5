@@ -136,6 +136,31 @@
       "<Ctrl-b>": "OpenJsonFileBrowser",
       "<Ctrl-p>": "PasteJsonFilePath",
       "<Ctrl-n>": "ToggleNdjson"
+    },
+    "AliasEdit": {
+      "<Ctrl-d>": "ClearText"
+    },
+    "ColumnOperationOptions": {
+      "<space>": "ToggleField",
+      "<tab>": "ToggleButtons"
+    },
+    "ColumnOperations": {
+    },
+    "DataFrameDetails": {
+      "<Ctrl-left>": "SwitchToPrevTab",
+      "<Ctrl-right>": "SwitchToNextTab",
+      "<left>": "ChangeColumnLeft",
+      "<right>": "ChangeColumnRight",
+      "<Ctrl-s>": "OpenSortChoice",
+      "<Ctrl-c>": "OpenCastOverlay",
+      "<Ctrl-f>": "AddFilterFromValue",
+      "<Ctrl-e>": "ExportCurrentTab",
+      "<Ctrl-up>": "NavigateHeatmapUp",
+      "<Ctrl-down>": "NavigateHeatmapDown",
+      "<pageup>": "NavigateHeatmapPageUp",
+      "<pagedown>": "NavigateHeatmapPageDown",
+      "<home>": "NavigateHeatmapHome",
+      "<end>": "NavigateHeatmapEnd"
     }
   }
 }

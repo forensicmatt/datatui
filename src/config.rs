@@ -34,6 +34,10 @@ pub enum Mode {
     FileBrowser,
     ColumnWidthDialog,
     JsonOptionsDialog,
+    AliasEdit,
+    ColumnOperationOptions,
+    ColumnOperations,
+    DataFrameDetails,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");
@@ -236,6 +240,30 @@ impl Config {
             Action::EditColumn => "Edit Column",
             Action::DeleteColumn => "Delete Column",
             Action::ApplyTransform => "Apply",
+            
+            // ColumnOperationOptions dialog actions
+            Action::ToggleField => "Toggle Field",
+            Action::ToggleButtons => "Toggle Buttons",
+            
+            // DataFrameDetails dialog actions
+            Action::SwitchToNextTab => "Next Tab",
+            Action::SwitchToPrevTab => "Prev Tab",
+            Action::ChangeColumnLeft => "Change Column Left",
+            Action::ChangeColumnRight => "Change Column Right",
+            Action::OpenSortChoice => "Open Sort Choice",
+            Action::OpenCastOverlay => "Open Cast Overlay",
+            Action::AddFilterFromValue => "Add Filter From Value",
+            Action::ExportCurrentTab => "Export Current Tab",
+            Action::NavigateHeatmapLeft => "Heatmap Left",
+            Action::NavigateHeatmapRight => "Heatmap Right",
+            Action::NavigateHeatmapUp => "Heatmap Up",
+            Action::NavigateHeatmapDown => "Heatmap Down",
+            Action::NavigateHeatmapPageUp => "Heatmap Page Up",
+            Action::NavigateHeatmapPageDown => "Heatmap Page Down",
+            Action::NavigateHeatmapHome => "Heatmap Home",
+            Action::NavigateHeatmapEnd => "Heatmap End",
+            Action::ScrollStatsLeft => "Scroll Stats Left",
+            Action::ScrollStatsRight => "Scroll Stats Right",
             
             // Other actions
             Action::Quit => "Quit",

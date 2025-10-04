@@ -47,39 +47,50 @@ pub struct ColumnOperationConfig {
     pub options: OperationOptions,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ColumnOperationOptionsMode {
     Input,
     Error(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ColumnOperationOptionsDialog {
     pub styles: StyleConfig,
     pub show_instructions: bool,
     pub mode: ColumnOperationOptionsMode,
     pub operation: ColumnOperationKind,
     pub new_column_name: String,
+    #[serde(skip)]
     pub new_column_input: TextArea<'static>,
     pub selected_field_index: usize,
     pub model_name: String,
+    #[serde(skip)]
     pub model_name_input: TextArea<'static>,
     pub num_dimensions: usize,
+    #[serde(skip)]
     pub num_dimensions_input: TextArea<'static>,
     pub target_embedding_size: usize,
+    #[serde(skip)]
     pub target_embedding_size_input: TextArea<'static>,
     pub cluster_algorithm: ClusterAlgorithm,
     pub kmeans: KmeansOptions,
     pub dbscan: DbscanOptions,
+    #[serde(skip)]
     pub kmeans_number_of_clusters_input: TextArea<'static>,
+    #[serde(skip)]
     pub kmeans_runs_input: TextArea<'static>,
+    #[serde(skip)]
     pub kmeans_tolerance_input: TextArea<'static>,
+    #[serde(skip)]
     pub dbscan_minimum_points_input: TextArea<'static>,
+    #[serde(skip)]
     pub dbscan_tolerance_input: TextArea<'static>,
     pub buttons_mode: bool,
     pub selected_button: usize,
     pub columns: Vec<String>,
     pub selected_column_index: usize,
+    #[serde(skip)]
+    pub config: crate::config::Config,
 }
 
 impl ColumnOperationOptionsDialog {
@@ -154,6 +165,7 @@ impl ColumnOperationOptionsDialog {
             selected_button: 0,
             columns: Vec::new(),
             selected_column_index: 0,
+            config: crate::config::Config::default(),
         }
     }
 
@@ -206,12 +218,9 @@ impl ColumnOperationOptionsDialog {
         let inner_total_area = outer_block.inner(area);
         outer_block.render(area, buf);
 
-        let instructions = match self.mode {
-            ColumnOperationOptionsMode::Input =>
-                "Up/Down: Move  Left/Right: Edit/Adjust  Space: Toggle  Tab: Buttons  Enter: Activate Button  Esc: Back  Ctrl+i: Toggle Instructions  Ctrl+p: Paste  Ctrl+c: Copy  Backspace: Delete",
-            ColumnOperationOptionsMode::Error(_) => "",
-        };
-        let layout = split_dialog_area(inner_total_area, self.show_instructions, Some(instructions));
+        let instructions = self.build_instructions_from_config();
+        let layout = split_dialog_area(inner_total_area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
 
         match &self.mode {
@@ -340,6 +349,49 @@ impl ColumnOperationOptionsDialog {
         }
     }
 
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        match self.mode {
+            ColumnOperationOptionsMode::Input => {
+                let base_instructions = self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                    (crate::config::Mode::Global, crate::action::Action::Backspace),
+                    (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+                    (crate::config::Mode::Global, crate::action::Action::Paste),
+                    (crate::config::Mode::ColumnOperationOptions, crate::action::Action::ToggleField),
+                    (crate::config::Mode::ColumnOperationOptions, crate::action::Action::ToggleButtons),
+                ]);
+
+                // Add operation-specific instructions
+                let operation_instructions = match self.operation {
+                    ColumnOperationKind::GenerateEmbeddings => {
+                        "  • Model Name: Text input  • Dimensions: Numeric input"
+                    }
+                    ColumnOperationKind::Pca => {
+                        "  • Target Size: Numeric input"
+                    }
+                    ColumnOperationKind::Cluster => {
+                        match self.cluster_algorithm {
+                            ClusterAlgorithm::Kmeans => {
+                                "  • Algorithm: Space to toggle  • Clusters/Runs/Tolerance: Numeric input"
+                            }
+                            ClusterAlgorithm::Dbscan => {
+                                "  • Algorithm: Space to toggle  • Min Points/Tolerance: Numeric input"
+                            }
+                        }
+                    }
+                };
+
+                if base_instructions.is_empty() {
+                    operation_instructions.to_string()
+                } else {
+                    format!("{base_instructions}{operation_instructions}")
+                }
+            }
+            ColumnOperationOptionsMode::Error(_) => String::new(),
+        }
+    }
+
     fn apply(&self) -> Action {
         let options = match self.operation {
             ColumnOperationKind::GenerateEmbeddings => OperationOptions::GenerateEmbeddings {
@@ -373,106 +425,129 @@ impl ColumnOperationOptionsDialog {
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if key.kind != KeyEventKind::Press { return Ok(None); }
-        use crossterm::event::KeyModifiers;
-        if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.show_instructions = !self.show_instructions;
-            return Ok(None);
-        }
-        match key.code {
-            KeyCode::Up => {
-                if self.buttons_mode {
-                    // Move from buttons back to last field
-                    self.buttons_mode = false;
-                } else if self.selected_field_index > 0 {
-                    self.selected_field_index -= 1;
+        
+        // First, honor config-driven Global actions
+        if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            match global_action {
+                Action::Escape => return Ok(Some(Action::DialogClose)),
+                Action::Enter => {
+                    if self.buttons_mode {
+                        if self.selected_button == 0 {
+                            return Ok(Some(self.apply()));
+                        } else {
+                            return Ok(Some(Action::DialogClose));
+                        }
+                    }
+                    return Ok(None);
                 }
+                Action::Up => {
+                    if self.buttons_mode {
+                        // Move from buttons back to last field
+                        self.buttons_mode = false;
+                    } else if self.selected_field_index > 0 {
+                        self.selected_field_index -= 1;
+                    }
+                    return Ok(None);
+                }
+                Action::Down => {
+                    if self.buttons_mode {
+                        // Stay in buttons
+                    } else {
+                        let max_fields = self.fields_for_operation().len();
+                        if self.selected_field_index + 1 >= max_fields {
+                            // Jump to buttons
+                            self.buttons_mode = true;
+                            self.selected_button = 0;
+                        } else {
+                            self.selected_field_index = self.selected_field_index.saturating_add(1);
+                        }
+                    }
+                    return Ok(None);
+                }
+                Action::Left => {
+                    if self.buttons_mode {
+                        self.selected_button = self.selected_button.saturating_sub(1) % 2;
+                    } else {
+                        // Special case: source column (index 1) cycles columns
+                        if self.selected_field_index == 1 {
+                            if !self.columns.is_empty() {
+                                if self.selected_column_index == 0 { self.selected_column_index = self.columns.len().saturating_sub(1); } else { self.selected_column_index -= 1; }
+                            }
+                        } else if self.is_current_field_text() {
+                            // Move cursor left in TextArea
+                            self.feed_text_input_key(KeyCode::Left, false, false, false);
+                        } else {
+                            self.modify_current_field(false);
+                        }
+                    }
+                    return Ok(None);
+                }
+                Action::Right => {
+                    if self.buttons_mode {
+                        self.selected_button = (self.selected_button + 1) % 2;
+                    } else if self.selected_field_index == 1 {
+                        if !self.columns.is_empty() { self.selected_column_index = (self.selected_column_index + 1) % self.columns.len(); }
+                    } else if self.is_current_field_text() {
+                        self.feed_text_input_key(KeyCode::Right, false, false, false);
+                    } else {
+                        self.modify_current_field(true);
+                    }
+                    return Ok(None);
+                }
+                Action::Backspace => {
+                    if self.is_current_field_text() { self.backspace_in_text_field(); }
+                    else if self.current_field_kind() == "number" {
+                        // Route to TextArea for numeric fields
+                        let idx = self.selected_field_index;
+                        let inp = {
+                            use crossterm::event::{KeyEvent, KeyModifiers};
+                            let kev = KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty());
+                            tui_textarea::Input::from(kev)
+                        };
+                        let area = self.get_number_input_by_index_mut(idx);
+                        area.input(inp);
+                        // Sync numeric values from their text areas
+                        self.sync_numbers_from_inputs();
+                    }
+                    return Ok(None);
+                }
+                Action::ToggleInstructions => {
+                    self.show_instructions = !self.show_instructions;
+                    return Ok(None);
+                }
+                Action::Paste => {
+                    self.paste_from_clipboard_into_text_field();
+                    return Ok(None);
+                }
+                _ => {}
             }
-            KeyCode::Down => {
-                if self.buttons_mode {
-                    // Stay in buttons
-                } else {
-                    let max_fields = self.fields_for_operation().len();
-                    if self.selected_field_index + 1 >= max_fields {
-                        // Jump to buttons
+        }
+
+        // Next, check for dialog-specific actions
+        if let Some(dialog_action) = self.config.action_for_key(crate::config::Mode::ColumnOperationOptions, key) {
+            match dialog_action {
+                Action::ToggleField => {
+                    self.toggle_current_field();
+                    return Ok(None);
+                }
+                Action::ToggleButtons => {
+                    if self.buttons_mode {
+                        self.buttons_mode = false;
+                    } else {
                         self.buttons_mode = true;
                         self.selected_button = 0;
-                    } else {
-                        self.selected_field_index = self.selected_field_index.saturating_add(1);
                     }
+                    return Ok(None);
                 }
+                _ => {}
             }
-            KeyCode::Left => {
-                if self.buttons_mode {
-                    self.selected_button = self.selected_button.saturating_sub(1) % 2;
-                } else {
-                    // Special case: source column (index 1) cycles columns
-                    if self.selected_field_index == 1 {
-                        if !self.columns.is_empty() {
-                            if self.selected_column_index == 0 { self.selected_column_index = self.columns.len().saturating_sub(1); } else { self.selected_column_index -= 1; }
-                        }
-                    } else if self.is_current_field_text() {
-                        // Move cursor left in TextArea
-                        self.feed_text_input_key(KeyCode::Left, false, false, false);
-                    } else {
-                        self.modify_current_field(false);
-                    }
-                }
-            }
-            KeyCode::Right => {
-                if self.buttons_mode {
-                    self.selected_button = (self.selected_button + 1) % 2;
-                } else if self.selected_field_index == 1 {
-                    if !self.columns.is_empty() { self.selected_column_index = (self.selected_column_index + 1) % self.columns.len(); }
-                } else if self.is_current_field_text() {
-                    self.feed_text_input_key(KeyCode::Right, false, false, false);
-                } else {
-                    self.modify_current_field(true);
-                }
-            }
-            KeyCode::Char(' ') => {
-                self.toggle_current_field();
-            }
-            KeyCode::Enter => {
-                if self.buttons_mode {
-                    if self.selected_button == 0 {
-                        return Ok(Some(self.apply()));
-                    } else {
-                        return Ok(Some(Action::DialogClose));
-                    }
-                }
-            }
-            KeyCode::Esc => {
-                return Ok(Some(Action::DialogClose));
-            }
-            KeyCode::Tab => {
-                if self.buttons_mode {
-                    self.buttons_mode = false;
-                } else {
-                    self.buttons_mode = true;
-                    self.selected_button = 0;
-                }
-            }
-            KeyCode::Backspace => {
-                if self.is_current_field_text() { self.backspace_in_text_field(); }
-                else if self.current_field_kind() == "number" {
-                    // Route to TextArea for numeric fields
-                    let idx = self.selected_field_index;
-                    let inp = {
-                        use crossterm::event::{KeyEvent, KeyModifiers};
-                        let kev = KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty());
-                        tui_textarea::Input::from(kev)
-                    };
-                    let area = self.get_number_input_by_index_mut(idx);
-                    area.input(inp);
-                    // Sync numeric values from their text areas
-                    self.sync_numbers_from_inputs();
-                }
-            }
+        }
+
+        // Fallback for character input or other unhandled keys
+        use crossterm::event::KeyModifiers;
+        match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.copy_current_text_to_clipboard();
-            }
-            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.paste_from_clipboard_into_text_field();
             }
             KeyCode::Char(ch) => {
                 if self.is_current_field_text() { self.insert_char_into_text_field(ch); }
@@ -747,7 +822,10 @@ impl ColumnOperationOptionsDialog {
 
 impl Component for ColumnOperationOptionsDialog {
     fn register_action_handler(&mut self, _tx: tokio::sync::mpsc::UnboundedSender<Action>) -> Result<()> { Ok(()) }
-    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { Ok(()) }
+    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { 
+        self.config = _config; 
+        Ok(()) 
+    }
     fn init(&mut self, _area: ratatui::layout::Size) -> Result<()> { Ok(()) }
     fn handle_events(&mut self, _event: Option<crate::tui::Event>) -> Result<Option<Action>> { Ok(None) }
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> { self.handle_key_event(key) }

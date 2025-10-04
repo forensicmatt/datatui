@@ -15,7 +15,7 @@ use crate::components::Component;
 use crate::components::dialog_layout::split_dialog_area;
 
 /// AliasEditDialog: Simple dialog for editing a dataset alias
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AliasEditDialog {
     pub source_id: usize,
     pub dataset_id: String,
@@ -25,6 +25,8 @@ pub struct AliasEditDialog {
     pub show_instructions: bool,
     pub cursor_index: usize,
     pub cursor_visible: bool,
+    #[serde(skip)]
+    pub config: Config,
 }
 
 impl AliasEditDialog {
@@ -41,6 +43,7 @@ impl AliasEditDialog {
             show_instructions: true,
             cursor_index: initial_len,
             cursor_visible: true,
+            config: Config::default(),
         }
     }
 
@@ -57,8 +60,9 @@ impl AliasEditDialog {
         let outer_inner_area = outer_block.inner(area);
         outer_block.render(area, buf);
 
-        let instructions = "Enter: Save  Esc: Cancel  Ctrl+d: Clear";
-        let layout = split_dialog_area(outer_inner_area, self.show_instructions, Some(instructions));
+        let instructions = self.build_instructions_from_config();
+        let layout = split_dialog_area(outer_inner_area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
         
@@ -116,7 +120,7 @@ impl AliasEditDialog {
             .wrap(Wrap { trim: true });
         paragraph.render(content_inner_area, buf);
 
-        self.render_instructions(instructions, instructions_area, buf);
+        self.render_instructions(&instructions, instructions_area, buf);
     }
 
     fn render_instructions(&self, instructions: &str, instructions_area: Option<Rect>, buf: &mut Buffer) {
@@ -164,6 +168,15 @@ impl AliasEditDialog {
             Some(self.input_buffer.trim().to_string())
         }
     }
+
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Enter),
+            (crate::config::Mode::Global, crate::action::Action::Escape),
+            (crate::config::Mode::AliasEdit, crate::action::Action::ClearText),
+        ])
+    }
 }
 
 impl Component for AliasEditDialog {
@@ -171,8 +184,9 @@ impl Component for AliasEditDialog {
         Ok(())
     }
 
-    fn register_config_handler(&mut self, _config: Config) -> Result<()> {
-        Ok(())
+    fn register_config_handler(&mut self, _config: Config) -> Result<()> { 
+        self.config = _config; 
+        Ok(()) 
     }
 
     fn init(&mut self, _area: Size) -> Result<()> {
@@ -193,54 +207,72 @@ impl Component for AliasEditDialog {
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if key.kind == crossterm::event::KeyEventKind::Press {
+            // Handle Ctrl+I for instructions toggle if applicable
+            
+            // First, honor config-driven Global actions
+            if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+                match global_action {
+                    Action::Escape => return Ok(Some(Action::DialogClose)),
+                    Action::Enter => {
+                        // Save the alias
+                        let alias = self.get_alias();
+                        return Ok(Some(Action::EditDatasetAlias {
+                            source_id: self.source_id,
+                            dataset_id: self.dataset_id.clone(),
+                            alias,
+                        }));
+                    }
+                    Action::Backspace => {
+                        self.backspace();
+                        return Ok(None);
+                    }
+                    Action::Left => {
+                        if self.cursor_index > 0 {
+                            let mut new_idx = self.cursor_index - 1;
+                            while !self.input_buffer.is_char_boundary(new_idx) && new_idx > 0 {
+                                new_idx -= 1;
+                            }
+                            self.cursor_index = new_idx;
+                        }
+                        return Ok(None);
+                    }
+                    Action::Right => {
+                        if self.cursor_index < self.input_buffer.len() {
+                            let mut new_idx = self.cursor_index + 1;
+                            while new_idx < self.input_buffer.len() && !self.input_buffer.is_char_boundary(new_idx) {
+                                new_idx += 1;
+                            }
+                            self.cursor_index = new_idx.min(self.input_buffer.len());
+                        }
+                        return Ok(None);
+                    }
+                    Action::ToggleInstructions => {
+                        self.show_instructions = !self.show_instructions;
+                        return Ok(None);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Next, check for dialog-specific actions
+            if let Some(dialog_action) = self.config.action_for_key(crate::config::Mode::AliasEdit, key) {
+                match dialog_action {
+                    Action::ClearText => {
+                        self.clear();
+                        return Ok(None);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Fallback for character input or other unhandled keys
             match key.code {
-                KeyCode::Enter => {
-                    // Save the alias
-                    let alias = self.get_alias();
-                    Ok(Some(Action::EditDatasetAlias {
-                        source_id: self.source_id,
-                        dataset_id: self.dataset_id.clone(),
-                        alias,
-                    }))
-                }
-                KeyCode::Esc => {
-                    // Cancel the edit
-                    Ok(Some(Action::DialogClose))
-                }
-                KeyCode::Backspace => {
-                    self.backspace();
-                    Ok(None)
-                }
-                KeyCode::Left => {
-                    if self.cursor_index > 0 {
-                        let mut new_idx = self.cursor_index - 1;
-                        while !self.input_buffer.is_char_boundary(new_idx) && new_idx > 0 {
-                            new_idx -= 1;
-                        }
-                        self.cursor_index = new_idx;
-                    }
-                    Ok(None)
-                }
-                KeyCode::Right => {
-                    if self.cursor_index < self.input_buffer.len() {
-                        let mut new_idx = self.cursor_index + 1;
-                        while new_idx < self.input_buffer.len() && !self.input_buffer.is_char_boundary(new_idx) {
-                            new_idx += 1;
-                        }
-                        self.cursor_index = new_idx.min(self.input_buffer.len());
-                    }
-                    Ok(None)
-                }
                 KeyCode::Home => {
                     self.cursor_index = 0;
                     Ok(None)
                 }
                 KeyCode::End => {
                     self.cursor_index = self.input_buffer.len();
-                    Ok(None)
-                }
-                KeyCode::Char('d') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    self.clear();
                     Ok(None)
                 }
                 KeyCode::Char(c) => {
