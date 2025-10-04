@@ -38,6 +38,9 @@ pub enum Mode {
     ColumnOperationOptions,
     ColumnOperations,
     DataFrameDetails,
+    MessageDialog,
+    ProjectSettings,
+    TableExport,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");
@@ -264,6 +267,13 @@ impl Config {
             Action::NavigateHeatmapEnd => "Heatmap End",
             Action::ScrollStatsLeft => "Scroll Stats Left",
             Action::ScrollStatsRight => "Scroll Stats Right",
+            
+            // ProjectSettings dialog actions
+            Action::ToggleDataViewerOption => "Toggle Option",
+            
+            // TableExport dialog actions
+            Action::CopyFilePath => "Copy Path",
+            Action::ExportTable => "Export",
             
             // Other actions
             Action::Quit => "Quit",

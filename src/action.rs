@@ -298,6 +298,11 @@ pub enum Action {
     NavigateHeatmapEnd,
     ScrollStatsLeft,
     ScrollStatsRight,
+    /// ProjectSettingsDialog specific actions
+    ToggleDataViewerOption,
+    /// TableExportDialog specific actions
+    CopyFilePath,
+    ExportTable,
 }
 
 #[cfg(test)]

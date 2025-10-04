@@ -4,6 +4,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::components::dialog_layout::split_dialog_area;
 use crate::components::Component;
 use crate::action::Action;
+use crate::config::Config;
 use color_eyre::Result;
 use crossterm::event::{KeyEvent, KeyEventKind};
 use tui_textarea::TextArea;
@@ -32,6 +33,7 @@ pub struct TableExportDialog {
     pub export_button_selected: bool,
     pub file_browser: Option<FileBrowserDialog>,
     pub show_instructions: bool,
+    pub config: Config,
 }
 
 impl TableExportDialog {
@@ -56,13 +58,32 @@ impl TableExportDialog {
             export_button_selected: false,
             file_browser: None,
             show_instructions: true,
+            config: Config::default(),
         }
+    }
+
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Tab),
+            (crate::config::Mode::Global, crate::action::Action::Up),
+            (crate::config::Mode::Global, crate::action::Action::Down),
+            (crate::config::Mode::Global, crate::action::Action::Left),
+            (crate::config::Mode::Global, crate::action::Action::Right),
+            (crate::config::Mode::Global, crate::action::Action::Enter),
+            (crate::config::Mode::Global, crate::action::Action::Escape),
+            (crate::config::Mode::TableExport, crate::action::Action::OpenFileBrowser),
+            (crate::config::Mode::TableExport, crate::action::Action::Paste),
+            (crate::config::Mode::TableExport, crate::action::Action::CopyFilePath),
+            (crate::config::Mode::TableExport, crate::action::Action::ExportTable),
+        ])
     }
 
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        let instructions = "Tab: Switch  ←/→: Move  Ctrl+p:Paste  Ctrl+c:Copy  Ctrl+b:Browse  Enter:[Browse/Export]  Esc:Close";
-        let layout = split_dialog_area(area, self.show_instructions, Some(instructions));
+        let instructions = self.build_instructions_from_config();
+        let layout = split_dialog_area(area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
 
@@ -133,7 +154,7 @@ impl TableExportDialog {
         use crossterm::event::{KeyCode, KeyModifiers};
         if key.kind != KeyEventKind::Press { return None; }
 
-        // Toggle instructions
+        // Handle Ctrl+I for instructions toggle if applicable
         if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.show_instructions = !self.show_instructions;
             return None;
@@ -166,100 +187,122 @@ impl TableExportDialog {
                 None
             }
             TableExportMode::Input => {
-                match key.code {
-                    KeyCode::Tab => {
-                        if self.file_path_focused {
-                            self.file_path_focused = false;
-                            self.browse_button_selected = true;
-                            self.export_button_selected = false;
-                        } else if self.browse_button_selected {
-                            self.browse_button_selected = false;
-                            self.export_button_selected = true;
-                        } else {
-                            self.export_button_selected = false;
-                            self.file_path_focused = true;
+                // First, honor config-driven Global actions
+                if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+                    match global_action {
+                        Action::Escape => return Some(Action::DialogClose),
+                        Action::Tab => {
+                            if self.file_path_focused {
+                                self.file_path_focused = false;
+                                self.browse_button_selected = true;
+                                self.export_button_selected = false;
+                            } else if self.browse_button_selected {
+                                self.browse_button_selected = false;
+                                self.export_button_selected = true;
+                            } else {
+                                self.export_button_selected = false;
+                                self.file_path_focused = true;
+                            }
+                            return None;
                         }
-                        None
-                    }
-                    KeyCode::Right => {
-                        if self.file_path_focused {
-                            // forward to textarea
-                            use tui_textarea::Input as TuiInput;
-                            let input: TuiInput = key.into();
-                            self.file_path_input.input(input);
-                            self.sync_file_path_from_input();
-                        } else if self.browse_button_selected {
-                            self.browse_button_selected = false;
-                            self.export_button_selected = true;
+                        Action::Up => {
+                            if self.export_button_selected {
+                                self.export_button_selected = false;
+                                self.browse_button_selected = true;
+                            } else if self.browse_button_selected {
+                                self.browse_button_selected = false;
+                                self.file_path_focused = true;
+                            }
+                            return None;
                         }
-                        None
-                    }
-                    KeyCode::Left => {
-                        if self.export_button_selected {
-                            self.export_button_selected = false;
-                            self.browse_button_selected = true;
-                        } else if self.browse_button_selected {
-                            self.browse_button_selected = false;
-                            self.file_path_focused = true;
-                        } else if self.file_path_focused {
-                            use tui_textarea::Input as TuiInput;
-                            let input: TuiInput = key.into();
-                            self.file_path_input.input(input);
-                            self.sync_file_path_from_input();
+                        Action::Down => {
+                            if self.file_path_focused {
+                                self.file_path_focused = false;
+                                self.browse_button_selected = true;
+                            } else if self.browse_button_selected {
+                                self.browse_button_selected = false;
+                                self.export_button_selected = true;
+                            }
+                            return None;
                         }
-                        None
-                    }
-                    KeyCode::Up => {
-                        if self.export_button_selected {
-                            self.export_button_selected = false;
-                            self.browse_button_selected = true;
-                        } else if self.browse_button_selected {
-                            self.browse_button_selected = false;
-                            self.file_path_focused = true;
+                        Action::Left => {
+                            if self.export_button_selected {
+                                self.export_button_selected = false;
+                                self.browse_button_selected = true;
+                            } else if self.browse_button_selected {
+                                self.browse_button_selected = false;
+                                self.file_path_focused = true;
+                            } else if self.file_path_focused {
+                                use tui_textarea::Input as TuiInput;
+                                let input: TuiInput = key.into();
+                                self.file_path_input.input(input);
+                                self.sync_file_path_from_input();
+                            }
+                            return None;
                         }
-                        None
-                    }
-                    KeyCode::Down => {
-                        if self.file_path_focused {
-                            self.file_path_focused = false;
-                            self.browse_button_selected = true;
-                        } else if self.browse_button_selected {
-                            self.browse_button_selected = false;
-                            self.export_button_selected = true;
+                        Action::Right => {
+                            if self.file_path_focused {
+                                // forward to textarea
+                                use tui_textarea::Input as TuiInput;
+                                let input: TuiInput = key.into();
+                                self.file_path_input.input(input);
+                                self.sync_file_path_from_input();
+                            } else if self.browse_button_selected {
+                                self.browse_button_selected = false;
+                                self.export_button_selected = true;
+                            }
+                            return None;
                         }
-                        None
+                        Action::Enter => {
+                            if self.browse_button_selected {
+                                self.file_browser = Some(FileBrowserDialog::new(None, Some(vec!["csv"]), false, FileBrowserMode::Save));
+                                self.mode = TableExportMode::FileBrowser;
+                                return None;
+                            }
+                            if self.export_button_selected || self.file_path_focused {
+                                match self.export_to_csv() {
+                                    Ok(_) => { return Some(Action::DialogClose); }
+                                    Err(e) => { self.mode = TableExportMode::Error(format!("Failed to export: {e}")); return None; }
+                                }
+                            }
+                            return None;
+                        }
+                        _ => {}
                     }
-                    KeyCode::Enter => {
-                        if self.browse_button_selected {
+                }
+
+                // Next, check for dialog-specific actions
+                if let Some(dialog_action) = self.config.action_for_key(crate::config::Mode::TableExport, key) {
+                    match dialog_action {
+                        Action::OpenFileBrowser => {
                             self.file_browser = Some(FileBrowserDialog::new(None, Some(vec!["csv"]), false, FileBrowserMode::Save));
                             self.mode = TableExportMode::FileBrowser;
                             return None;
                         }
-                        if self.export_button_selected || self.file_path_focused {
+                        Action::Paste => {
+                            if self.file_path_focused && let Ok(mut clipboard) = Clipboard::new()
+                                && let Ok(text) = clipboard.get_text() {
+                                    let first_line = text.lines().next().unwrap_or("").to_string();
+                                    self.set_file_path(first_line);
+                                }
+                            return None;
+                        }
+                        Action::CopyFilePath => {
+                            if let Ok(mut clipboard) = Clipboard::new() { let _ = clipboard.set_text(self.file_path.clone()); }
+                            return None;
+                        }
+                        Action::ExportTable => {
                             match self.export_to_csv() {
                                 Ok(_) => { return Some(Action::DialogClose); }
                                 Err(e) => { self.mode = TableExportMode::Error(format!("Failed to export: {e}")); return None; }
                             }
                         }
-                        None
+                        _ => {}
                     }
-                    KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.file_browser = Some(FileBrowserDialog::new(None, Some(vec!["csv"]), false, FileBrowserMode::Save));
-                        self.mode = TableExportMode::FileBrowser;
-                        None
-                    }
-                    KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if self.file_path_focused && let Ok(mut clipboard) = Clipboard::new()
-                            && let Ok(text) = clipboard.get_text() {
-                                let first_line = text.lines().next().unwrap_or("").to_string();
-                                self.set_file_path(first_line);
-                            }
-                        None
-                    }
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if let Ok(mut clipboard) = Clipboard::new() { let _ = clipboard.set_text(self.file_path.clone()); }
-                        None
-                    }
+                }
+
+                // Fallback for character input or other unhandled keys
+                match key.code {
                     KeyCode::Backspace => {
                         if self.file_path_focused {
                             use tui_textarea::Input as TuiInput;
@@ -278,7 +321,6 @@ impl TableExportDialog {
                         }
                         None
                     }
-                    KeyCode::Esc => { Some(Action::DialogClose) }
                     _ => None,
                 }
             }
@@ -323,7 +365,10 @@ fn csv_escape(s: &str) -> String {
 
 impl Component for TableExportDialog {
     fn register_action_handler(&mut self, _tx: tokio::sync::mpsc::UnboundedSender<Action>) -> Result<()> { Ok(()) }
-    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { Ok(()) }
+    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { 
+        self.config = _config; 
+        Ok(()) 
+    }
     fn init(&mut self, _area: ratatui::layout::Size) -> Result<()> { Ok(()) }
     fn handle_events(&mut self, _event: Option<crate::tui::Event>) -> Result<Option<Action>> { Ok(None) }
     fn handle_key_event(&mut self, _key: KeyEvent) -> Result<Option<Action>> { Ok(None) }
