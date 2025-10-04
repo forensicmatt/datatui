@@ -58,6 +58,232 @@ impl ColumnOperationsDialog {
         }
     }
 
+    fn operation_description(op: &ColumnOperationKind) -> &'static str {
+        match op {
+            ColumnOperationKind::GenerateEmbeddings => "Convert text data into numerical vectors for machine learning",
+            ColumnOperationKind::Pca => "Reduce dimensionality while preserving most of the data variance",
+            ColumnOperationKind::Cluster => "Group similar data points together using clustering algorithms",
+        }
+    }
+
+    fn operation_requirements(op: &ColumnOperationKind) -> &'static str {
+        match op {
+            ColumnOperationKind::GenerateEmbeddings => "Requires: Text columns, OpenAI API key",
+            ColumnOperationKind::Pca => "Requires: Numerical columns only",
+            ColumnOperationKind::Cluster => "Requires: Numerical columns, specify number of clusters",
+        }
+    }
+
+    fn render_operation_selection(&self, area: Rect, buf: &mut Buffer) {
+        // Main content block
+        let block = Block::default()
+            .title("Select an operation")
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        // Render operations list with enhanced formatting
+        self.render_operations_list(inner, buf);
+        
+        // Render operation details for selected item
+        if let Some(selected_op) = self.operations.get(self.selected_index) {
+            self.render_operation_details(selected_op, inner, buf);
+        } else {
+            // Show helpful message when no operation is selected
+            self.render_no_selection_message(inner, buf);
+        }
+    }
+
+    fn render_operations_list(&self, area: Rect, buf: &mut Buffer) {
+        let list_height = (area.height.saturating_sub(8)).min(self.operations.len() as u16);
+        
+        for (i, op) in self.operations
+                .iter()
+                .enumerate()
+                .take(list_height as usize)
+        {
+            let y = area.y + i as u16;
+            if y >= area.y + list_height { break; }
+            
+            let is_selected = i == self.selected_index;
+            self.render_operation_item(op, area.x + 1, y, area.width - 2, is_selected, buf);
+        }
+    }
+
+    fn render_operation_item(&self, op: &ColumnOperationKind, x: u16, y: u16, _width: u16, is_selected: bool, buf: &mut Buffer) {
+        let marker = if is_selected { "▶" } else { " " };
+        let label = Self::operation_label(op);
+        
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(Color::White)
+        };
+
+        // Render marker and label
+        let line = format!("{marker} {label}");
+        buf.set_string(x, y, line, style);
+    }
+
+    fn render_operation_details(&self, op: &ColumnOperationKind, area: Rect, buf: &mut Buffer) {
+        // Calculate required content
+        let requirements = Self::operation_requirements(op);
+        let description = Self::operation_description(op);
+
+        // Calculate text width (accounting for borders and padding)
+        let text_width = (area.width - 4).max(20) as usize; // 2 for borders + 2 for padding
+        
+        // Calculate required height for text content
+        let desc_header = 1; // "Description:" line
+        let desc_lines = self.calculate_text_lines(&format!("  {}", description), text_width);
+        let req_header = 1; // "Requirements:" line
+        let req_lines = self.calculate_text_lines(&format!("  {}", requirements), text_width);
+        let spacing = 1; // Space between sections
+        
+        let total_content_height = desc_header + desc_lines + spacing + req_header + req_lines;
+        let details_height = (total_content_height + 2).min(10) as u16; // +2 for borders, allow a bit taller
+        
+        // Position the details box
+        let details_y = area.y + area.height.saturating_sub(details_height);
+        
+        if details_y < area.y || details_height < 3 {
+            return; // Not enough space
+        }
+
+        // Create a details box
+        let details_area = Rect::new(
+            area.x + 1,
+            details_y,
+            area.width - 2,
+            details_height
+        );
+
+        // Calculate inner area before creating the block
+        let inner_details = Rect::new(
+            details_area.x + 1,
+            details_area.y + 1,
+            details_area.width - 1,
+            details_area.height - 1
+        );
+
+        // Draw a subtle border around details
+        let details_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Plain)
+            .style(Style::default().fg(Color::DarkGray));
+        details_block.render(details_area, buf);
+        
+        // Render description section
+        let desc_style = Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
+        buf.set_string(inner_details.x, inner_details.y, "Description:", desc_style);
+        self.render_wrapped_text(
+            &format!("  {}", description),
+            inner_details.x,
+            inner_details.y + 1,
+            inner_details.width,
+            Style::default().fg(Color::Gray),
+            buf
+        );
+
+        // Render requirements section below description
+        let req_y = inner_details.y + 1 + desc_lines as u16 + spacing as u16;
+        let req_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+        buf.set_string(inner_details.x, req_y, "Requirements:", req_style);
+        self.render_wrapped_text(
+            &format!("  {}", requirements),
+            inner_details.x,
+            req_y + 1,
+            inner_details.width,
+            Style::default().fg(Color::White),
+            buf
+        );
+    }
+
+    fn calculate_text_lines(&self, text: &str, width: usize) -> usize {
+        if text.is_empty() {
+            return 0;
+        }
+        
+        let words: Vec<&str> = text.split_whitespace().collect();
+        if words.is_empty() {
+            return 1;
+        }
+        
+        let mut lines = 1;
+        let mut current_line_length = 0;
+        
+        for word in words {
+            let word_length = word.len() + 1; // +1 for space
+            if current_line_length + word_length > width {
+                lines += 1;
+                current_line_length = word.len();
+            } else {
+                current_line_length += word_length;
+            }
+        }
+        
+        lines
+    }
+
+    fn render_wrapped_text(&self, text: &str, x: u16, y: u16, width: u16, style: Style, buf: &mut Buffer) {
+        if text.is_empty() {
+            return;
+        }
+        
+        let words: Vec<&str> = text.split_whitespace().collect();
+        if words.is_empty() {
+            return;
+        }
+        
+        let mut current_y = y;
+        let mut current_line = String::new();
+        let mut current_line_length = 0;
+        let max_width = width as usize;
+        
+        for word in words {
+            let word_length = word.len() + if current_line.is_empty() { 0 } else { 1 };
+            
+            if current_line_length + word_length > max_width && !current_line.is_empty() {
+                // Render current line and start new one
+                buf.set_string(x, current_y, &current_line, style);
+                current_y += 1;
+                current_line.clear();
+                current_line_length = 0;
+            }
+            
+            if !current_line.is_empty() {
+                current_line.push(' ');
+                current_line_length += 1;
+            }
+            current_line.push_str(word);
+            current_line_length += word.len();
+        }
+        
+        // Render the last line
+        if !current_line.is_empty() {
+            buf.set_string(x, current_y, &current_line, style);
+        }
+    }
+
+    fn render_no_selection_message(&self, area: Rect, buf: &mut Buffer) {
+        let message_y = area.y + area.height.saturating_sub(4);
+        let message = "Use ↑/↓ to select an operation, then press Enter to apply";
+        let style = Style::default()
+            .fg(Color::Gray)
+            .add_modifier(Modifier::ITALIC);
+        
+        // Center the message horizontally
+        let message_x = area.x + (area.width.saturating_sub(message.len() as u16)) / 2;
+        buf.set_string(message_x, message_y, message, style);
+    }
+
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
@@ -76,36 +302,7 @@ impl ColumnOperationsDialog {
 
         match &self.mode {
             ColumnOperationsMode::SelectOperation => {
-                // Inner content block
-                let block = Block::default()
-                    .title("Select an operation")
-                    .borders(Borders::ALL);
-                let inner = block.inner(content_area);
-                block.render(content_area, buf);
-
-                // Render options list
-                for (i, op) in self.operations.iter().enumerate() {
-                    let y = inner.y + i as u16;
-                    if y >= inner.y + inner.height { break; }
-                    let label = Self::operation_label(op);
-                    let is_selected = i == self.selected_index;
-                    let marker = if is_selected { ">" } else { " " };
-                    let style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) };
-                    let line = format!("{marker} {label}");
-                    buf.set_string(inner.x + 1, y, line, style);
-                }
-
-                // Bottom-right buttons: [Apply] [Close]
-                let buttons = ["[Apply]", "[Close]"];
-                let total_len: u16 = buttons.iter().map(|b| b.len() as u16 + 1).sum();
-                let bx = inner.x + inner.width.saturating_sub(total_len + 1);
-                let by = inner.y + inner.height.saturating_sub(1);
-                let mut x = bx;
-                for (idx, b) in buttons.iter().enumerate() {
-                    let style = if idx == 0 { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::White) };
-                    buf.set_string(x, by, *b, style);
-                    x += b.len() as u16 + 1;
-                }
+                self.render_operation_selection(content_area, buf);
             }
             ColumnOperationsMode::Error(msg) => {
                 let err = ErrorDialog::with_title(msg.clone(), "Error");
@@ -205,5 +402,3 @@ impl Component for ColumnOperationsDialog {
     fn update(&mut self, _action: Action) -> Result<Option<Action>> { Ok(None) }
     fn draw(&mut self, frame: &mut ratatui::Frame, area: Rect) -> Result<()> { self.render(area, frame.buffer_mut()); Ok(()) }
 }
-
-

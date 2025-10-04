@@ -1464,6 +1464,7 @@ impl Component for DataTableContainer {
                         };
                         let selected_idx = filtered.iter().position(|n| n == &current_col_name).unwrap_or(0);
                         let mut dialog = ColumnOperationOptionsDialog::new_with_columns(op, filtered, selected_idx);
+                        dialog.register_config_handler(self.config.clone())?;
                         if dialog.columns.is_empty() {
                             dialog.mode = ColumnOperationOptionsMode::Error("No compatible columns found for this operation".to_string());
                         }

@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, BorderType};
+use ratatui::widgets::{Block, Borders, Clear, BorderType, Paragraph, Wrap};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use serde::{Deserialize, Serialize};
@@ -218,9 +218,15 @@ impl ColumnOperationOptionsDialog {
         let inner_total_area = outer_block.inner(area);
         outer_block.render(area, buf);
 
-        let instructions = self.build_instructions_from_config();
-        let layout = split_dialog_area(inner_total_area, self.show_instructions, 
-            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
+        let instructions = match self.build_instructions_from_config() {
+            s if s.trim().is_empty() => None,
+            s => Some(s),
+        };
+        let layout = split_dialog_area(
+            inner_total_area,
+            self.show_instructions, 
+            instructions.as_deref()
+        );
         let content_area = layout.content_area;
 
         match &self.mode {
@@ -240,7 +246,13 @@ impl ColumnOperationOptionsDialog {
                     if (i == 0) || (self.operation == ColumnOperationKind::GenerateEmbeddings && i == 2) {
                         // Label before input
                         let label = line.trim_end_matches(':').to_string() + ":";
-                        let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                        let label_style = if is_selected {
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default()
+                            };
                         buf.set_string(inner.x + 1, y, label.clone(), label_style);
                         let label_width = label.len() as u16 + 2; // include a space
                         let input_area = Rect {
@@ -255,7 +267,9 @@ impl ColumnOperationOptionsDialog {
                             ta.render(input_area, buf);
                         } else {
                             let mut ta = self.model_name_input.clone();
-                            if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
+                            if !is_selected {
+                                ta.set_cursor_style(Style::default().fg(Color::Gray));
+                            }
                             ta.render(input_area, buf);
                         }
                     } else if self.is_index_number_field(i) {
@@ -275,12 +289,24 @@ impl ColumnOperationOptionsDialog {
                 }
 
                 let buttons = ["[Apply]", "[Close]"];
-                let total_len: u16 = buttons.iter().map(|b| b.len() as u16 + 1).sum();
+                let total_len: u16 = buttons.iter()
+                    .map(|b| b.len() as u16 + 1)
+                    .sum();
                 let bx = inner.x + inner.width.saturating_sub(total_len + 1);
                 let by = inner.y + inner.height.saturating_sub(1);
                 let mut x = bx;
                 for (idx, b) in buttons.iter().enumerate() {
-                    let style = if self.buttons_mode && self.selected_button == idx { Style::default().fg(Color::Black).bg(Color::White) } else if idx == 0 { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::White) };
+                    let style = if self.buttons_mode && self.selected_button == idx {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::White)
+                        } else if idx == 0 {
+                            Style::default()
+                            .fg(Color::Yellow)
+                        } else {
+                            Style::default()
+                                .fg(Color::White)
+                        };
                     buf.set_string(x, by, *b, style);
                     x += b.len() as u16 + 1;
                 }
@@ -344,6 +370,19 @@ impl ColumnOperationOptionsDialog {
                     let style = if self.buttons_mode && self.selected_button == idx { Style::default().fg(Color::Black).bg(Color::White) } else if idx == 0 { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::White) };
                     buf.set_string(x, by, *b, style);
                     x += b.len() as u16 + 1;
+                }
+            }
+        }
+
+        // Render instructions area at the bottom if enabled
+        if self.show_instructions {
+            if let Some(instructions_area) = layout.instructions_area {
+                if let Some(instructions_text) = &instructions {
+                    let instructions_paragraph = Paragraph::new(instructions_text.as_str())
+                        .block(Block::default().borders(Borders::ALL).title("Instructions"))
+                        .style(Style::default().fg(Color::Yellow))
+                        .wrap(Wrap { trim: true });
+                    instructions_paragraph.render(instructions_area, buf);
                 }
             }
         }
