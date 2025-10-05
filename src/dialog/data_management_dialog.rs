@@ -15,7 +15,7 @@ use color_eyre::Result;
 use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::Frame;
 use ratatui::layout::Size;
-use tracing::info;
+use tracing::{debug, info, warn, error};
 use tokio::sync::mpsc::UnboundedSender;
 use crate::components::Component;
 use crate::data_import_types::DataImportConfig;
@@ -236,19 +236,32 @@ impl DataSource {
         self.failed_datasets = self.datasets.iter().filter(|d| d.status == DatasetStatus::Failed).count();
     }
 
-    /// Load all datasets from this data source into DataFrames
+    /// Load datasets from this data source into DataFrames, skipping failed ones and
+    /// ignoring per-dataset load errors so the caller can proceed rendering available tabs.
     pub fn load_dataframes(&self) -> Result<HashMap<String, LoadedDataset>> {
         let mut result = HashMap::new();
 
         for dataset in &self.datasets {
-            // only attempt to load datasets marked Pending or with empty cache entry
-            let df_arc = self.load_dataset(dataset)?;
-            let loaded_dataset = LoadedDataset {
-                data_source: self.clone(),
-                dataset: dataset.clone(),
-                dataframe: df_arc,
-            };
-            result.insert(dataset.id.clone(), loaded_dataset);
+            // Skip datasets that are known to have failed
+            if dataset.status == DatasetStatus::Failed {
+                continue;
+            }
+
+            match self.load_dataset(dataset) {
+                Ok(df_arc) => {
+                    let loaded_dataset = LoadedDataset {
+                        data_source: self.clone(),
+                        dataset: dataset.clone(),
+                        dataframe: df_arc,
+                    };
+                    result.insert(dataset.id.clone(), loaded_dataset);
+                }
+                Err(e) => {
+                    // Do not propagate error; just skip this dataset so UI can still close/sync
+                    warn!("Skipping dataset '{}' due to load error: {}", dataset.name, e);
+                    continue;
+                }
+            }
         }
 
         Ok(result)
@@ -650,6 +663,23 @@ pub struct DataManagementDialog {
     pub message_dialog: Option<MessageDialog>,
     #[serde(skip)]
     pub config: Config,
+    // Busy/progress overlay for queued imports
+    #[serde(skip)]
+    pub busy_active: bool,
+    #[serde(skip)]
+    pub busy_message: String,
+    #[serde(skip)]
+    pub busy_progress: f64,
+    #[serde(skip)]
+    pub queue_total: usize,
+    #[serde(skip)]
+    pub queue_done: usize,
+    #[serde(skip)]
+    pub pending_queue: Vec<(usize, String)>, // (source_id, dataset_name)
+    #[serde(skip)]
+    pub load_errors: Vec<String>,
+    #[serde(skip)]
+    pub current_loading: Option<String>,
 }
 
 impl Default for DataManagementDialog {
@@ -668,6 +698,14 @@ impl DataManagementDialog {
             alias_edit_dialog: None,
             message_dialog: None,
             config: Config::default(),
+            busy_active: false,
+            busy_message: String::new(),
+            busy_progress: 0.0,
+            queue_total: 0,
+            queue_done: 0,
+            pending_queue: Vec::new(),
+            load_errors: Vec::new(),
+            current_loading: None,
         }
     }
 
@@ -905,13 +943,102 @@ impl DataManagementDialog {
                 }
             }
         }
-        
-        // After processing, if any errors occurred, display them to the user
-        if !load_errors.is_empty() {
-            let message = load_errors.join("\n");
-            self.message_dialog = Some(MessageDialog::with_title(message, "Dataset Load Errors"));
+
+        Ok(())
+    }
+
+    /// Begin queued import of all pending datasets, showing a busy overlay and
+    /// processing one dataset per Render update.
+    pub fn begin_queued_import(&mut self) -> Result<()> {
+        // Build queue of all Pending datasets
+        self.pending_queue.clear();
+        self.load_errors.clear();
+        for data_source in &self.data_sources {
+            for dataset in &data_source.datasets {
+                if dataset.status == DatasetStatus::Pending {
+                    self.pending_queue.push((data_source.id, dataset.name.clone()));
+                }
+            }
         }
-        
+        self.queue_total = self.pending_queue.len();
+        self.queue_done = 0;
+        self.current_loading = None;
+        if self.queue_total == 0 {
+            return Ok(());
+        }
+        self.busy_active = true;
+        self.busy_message = format!("Importing datasets (0/{})", self.queue_total);
+        self.busy_progress = 0.0;
+        Ok(())
+    }
+
+    /// Process the next dataset in the queue. Should be called on Render after UI draw
+    /// so the overlay is visible while the load happens.
+    pub fn process_next_in_queue(&mut self) -> Result<()> {
+        if !self.busy_active { return Ok(()); }
+        if let Some((source_id, dataset_name)) = self.pending_queue.first().cloned() {
+            // Phase 1: show message for the current item, then return to allow a frame to render it
+            if self.current_loading.as_deref() != Some(&dataset_name) {
+                self.current_loading = Some(dataset_name.clone());
+                let display_done = self.queue_done.min(self.queue_total);
+                self.busy_message = format!("Loading '{}' ({}/{})", dataset_name, display_done + 1, self.queue_total);
+                return Ok(());
+            }
+            // Mark Processing and clear previous error
+            self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Processing);
+            self.update_dataset_error(source_id, &dataset_name, None);
+
+            // Find source and dataset snapshot
+            if let Some(ds_ref) = self.data_sources.iter().find(|s| s.id == source_id) {
+                let dataset_cloned = ds_ref.datasets.iter().find(|d| d.name == dataset_name).cloned();
+                if let Some(dataset) = dataset_cloned {
+                    match ds_ref.load_dataset(&dataset) {
+                        Ok(dataframe) => {
+                            self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Imported);
+                            let row_count = dataframe.height();
+                            let column_count = dataframe.width();
+                            self.update_dataset_data(source_id, &dataset_name, row_count, column_count);
+                        }
+                        Err(e) => {
+                            self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Failed);
+                            self.update_dataset_error(source_id, &dataset_name, Some(e.to_string()));
+                            if let Some(ds_ref_name) = self.data_sources.iter().find(|s| s.id == source_id).map(|s| s.name.clone()) {
+                                self.load_errors.push(format!("Source '{ds_ref_name}', Dataset '{dataset_name}': {e}"));
+                            } else {
+                                self.load_errors.push(format!("Dataset '{dataset_name}': {e}"));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Dequeue and update counters/message
+            let _ = self.pending_queue.remove(0);
+            self.queue_done = self.queue_done.saturating_add(1);
+            self.current_loading = None;
+            if self.queue_done < self.queue_total {
+                // Peek next item to show name if available
+                if let Some((_, next_name)) = self.pending_queue.first() {
+                    self.busy_message = format!("Loading '{}' ({}/{})", next_name, self.queue_done + 1, self.queue_total);
+                } else {
+                    self.busy_message = format!("Importing datasets ({}/{})", self.queue_done, self.queue_total);
+                }
+            } else {
+                // Completed
+                self.busy_active = false;
+                self.busy_message.clear();
+                self.busy_progress = 0.0;
+                if !self.load_errors.is_empty() {
+                    let message = self.load_errors.join("\n");
+                    error!("Dataset Load Errors: {}", message);
+
+                    let mut msg = MessageDialog::with_title(message, "Dataset Load Errors");
+                    msg.register_config_handler(self.config.clone())?;
+                    self.message_dialog = Some(msg);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -966,7 +1093,43 @@ impl DataManagementDialog {
 
         // Overlay message dialog if active
         if let Some(ref msg) = self.message_dialog {
-            msg.render(area, buf);
+            // Calculate a centered area for the message dialog, sized to fit the message content.
+            // We'll use a similar approach as MessageDialog::modal_area, but do it here for overlay.
+            let max_width = area.width.clamp(30, 60);
+            let wrap_width = max_width.saturating_sub(4) as usize;
+            let wrapped_lines = textwrap::wrap(&msg.message, wrap_width);
+            let content_lines = wrapped_lines.len() as u16;
+            let height = content_lines
+                .saturating_add(4) // borders + padding
+                .clamp(5, area.height.saturating_sub(4));
+            let width = max_width;
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let msg_area = Rect { x, y, width, height };
+            Clear.render(msg_area, buf);
+            msg.render(msg_area, buf);
+        }
+
+        // Render busy/progress overlay if active (always on top)
+        if self.busy_active {
+            use ratatui::widgets::Gauge;
+            let popup_area = Rect::new(
+                area.x + area.width / 6,
+                area.y + area.height / 2 - 2,
+                area.width - area.width / 3,
+                5,
+            );
+            Clear.render(popup_area, buf);
+            let ratio = if self.queue_total > 0 {
+                (self.queue_done as f64 / self.queue_total as f64).clamp(0.0, 1.0)
+            } else {
+                self.busy_progress.clamp(0.0, 1.0)
+            };
+            let gauge = Gauge::default()
+                .block(Block::default().title(self.busy_message.clone()).borders(Borders::ALL))
+                .ratio(ratio)
+                .label("Importing...");
+            gauge.render(popup_area, buf);
         }
     }
 
@@ -1076,7 +1239,7 @@ impl Component for DataManagementDialog {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        info!("DataManagementDialog handle_key_event: {:?}", key);
+        debug!("DataManagementDialog handle_key_event: {:?}", key);
 
         // Handle message dialog if it's open
         if let Some(ref mut msg) = self.message_dialog {
@@ -1126,18 +1289,16 @@ impl Component for DataManagementDialog {
                         // Add the data source from the import config
                         self.add_data_source(config);
                         self.data_import_dialog = None;
-                        // Auto-load all pending datasets after adding data source
-                        if let Err(e) = self.load_all_pending_datasets() {
-                            return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {e}"))));
-                        }
-                        return Ok(None);
+                    // Begin queued import; progress advances on Render updates
+                    let _ = self.begin_queued_import();
+                    return Ok(None);
                     }
                     Action::ConfirmDataImport => {
                         // Handle the confirmation action and auto-load data
                         self.data_import_dialog = None;
-                        // Auto-load all pending datasets after import
-                        if let Err(e) = self.load_all_pending_datasets() { return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {e}")))); }
-                        return Ok(Some(action));
+                    // Begin queued import; progress advances on Render updates
+                    let _ = self.begin_queued_import();
+                    return Ok(None);
                     }
                     _ => {
                         return Ok(Some(action));
@@ -1148,7 +1309,7 @@ impl Component for DataManagementDialog {
         }
         
         if let Some(nav_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
-            info!("DataManagementDialog action_for_key<Global>: {:?}", nav_action);
+            debug!("DataManagementDialog action_for_key<Global>: {:?}", nav_action);
             match nav_action {
                 Action::Escape => {
                     return Ok(Some(Action::CloseDataManagementDialog));
@@ -1173,7 +1334,7 @@ impl Component for DataManagementDialog {
         }
 
         if let Some(dm_action) = self.config.action_for_key(crate::config::Mode::DataManagement, key) {
-            info!("DataManagementDialog action_for_key<DataManagement>: {:?}", dm_action);
+            debug!("DataManagementDialog action_for_key<DataManagement>: {:?}", dm_action);
             match dm_action {
                 Action::DeleteSelectedSource => {
                     if let Some((source_id, _source, _dataset)) = self.selected_dataset() {
@@ -1219,7 +1380,39 @@ impl Component for DataManagementDialog {
     }
 
     fn update(&mut self, _action: Action) -> Result<Option<Action>> {
-        Ok(None)
+        match _action {
+            Action::Tick => {
+                if self.busy_active {
+                    self.busy_progress += 0.02;
+                    if self.busy_progress >= 1.0 { self.busy_progress = 0.0; }
+                }
+                Ok(None)
+            }
+            Action::Render => {
+                if self.busy_active {
+                    // Process the next item after the overlay has been drawn
+                    self.process_next_in_queue()?;
+                }
+                Ok(None)
+            }
+            Action::StartBlockingImport => {
+                // Run a blocking import loop that updates the gauge after each dataset
+                while self.busy_active {
+                    // Draw updated UI first
+                    // Signal outer loop to render once
+                    // Note: The main loop calls render continuously; we just process next item here
+                    self.process_next_in_queue()?;
+                    // Update progress for smoother gauge movement between items
+                    self.busy_progress += 0.2;
+                    if self.busy_progress >= 1.0 { self.busy_progress = 0.0; }
+                    // Yield to allow the terminal to draw between steps
+                    // (No true async here; small sleep to allow redraws)
+                    std::thread::sleep(std::time::Duration::from_millis(30));
+                }
+                Ok(None)
+            }
+            _ => Ok(None)
+        }
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {

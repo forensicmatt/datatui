@@ -802,6 +802,7 @@ impl Component for DataTabManagerDialog {
                         self.update_all_containers_dataframes()?;
                         return Ok(None);
                     }
+                    // No special handling; DM dialog will advance queue on Render/Tick
                     _ => {
                         return Ok(Some(action));
                     }
@@ -919,7 +920,14 @@ impl Component for DataTabManagerDialog {
     }
 
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
-        // Forward updates (Tick, Render, etc.) to the active DataTableContainer
+        // If DataManagement dialog is visible, forward updates to it (advances gauge/queue)
+        if self.show_data_management {
+            if let Some(ret) = self.data_management_dialog.update(action)? {
+                return Ok(Some(ret));
+            }
+            return Ok(None);
+        }
+        // Otherwise, forward updates (Tick, Render, etc.) to the active DataTableContainer
         if let Some(container) = self.get_active_container() && let Some(ret) = container.update(action)? {
             return Ok(Some(ret));
         }

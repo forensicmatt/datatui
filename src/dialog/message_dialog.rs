@@ -1,5 +1,5 @@
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyEvent, KeyEventKind};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, BorderType};
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use crate::config::Config;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageDialog {
     title: String,
-    message: String,
+    pub message: String,
     pub show_instructions: bool,
     #[serde(skip)]
     pub config: Config,
@@ -48,23 +48,8 @@ impl MessageDialog {
         ])
     }
 
-    fn modal_area(&self, area: Rect) -> Rect {
-        let max_width = area.width.clamp(20, 40);
-        let wrap_width = max_width.saturating_sub(4) as usize;
-        let wrapped = textwrap::wrap(&self.message, wrap_width);
-        let content_lines = wrapped.len() as u16;
-        let height = content_lines
-            .saturating_add(4) // borders + padding
-            .clamp(5, area.height.saturating_sub(4));
-        let width = max_width;
-        let x = area.x + (area.width.saturating_sub(width)) / 2;
-        let y = area.y + (area.height.saturating_sub(height)) / 2;
-        Rect { x, y, width, height }
-    }
-
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
-        // Do not clear entire area; overlay on top of underlying content
-        let modal = self.modal_area(area);
+        let modal = area;
 
         let block = Block::default()
             .title(self.title.as_str())
@@ -100,14 +85,7 @@ impl Component for MessageDialog {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        use crossterm::event::KeyModifiers;
         if key.kind == KeyEventKind::Press {
-            // Handle Ctrl+I for instructions toggle if applicable
-            if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                self.show_instructions = !self.show_instructions;
-                return Ok(None);
-            }
-            
             // First, honor config-driven Global actions
             if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
                 match global_action {

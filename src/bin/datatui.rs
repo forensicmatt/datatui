@@ -80,6 +80,16 @@ fn run_app<B: ratatui::backend::Backend>(
         })?;
         // After drawing, process queued Render work (overlay is now visible)
         let _ = tab_manager.update(Action::Render);
+        // If Data Management is visible and busy, pump a few extra render/update cycles to show progress
+        if tab_manager.show_data_management && tab_manager.data_management_dialog.busy_active {
+            for _ in 0..3 {
+                terminal.draw(|f| {
+                    let size = f.area();
+                    tab_manager.draw(f, size).unwrap();
+                })?;
+                let _ = tab_manager.update(Action::Render);
+            }
+        }
         
         // Poll for events
         if event::poll(Duration::from_millis(100))?

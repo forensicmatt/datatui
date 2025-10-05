@@ -168,6 +168,8 @@ pub enum Action {
     CloseSqliteOptionsDialog,
     /// User requested to open Parquet options dialog
     OpenParquetOptionsDialog,
+    /// Internal: start blocking import with gauge updates
+    StartBlockingImport,
     /// User requested to close Parquet options dialog
     CloseParquetOptionsDialog,
     /// User requested to open JSON options dialog
