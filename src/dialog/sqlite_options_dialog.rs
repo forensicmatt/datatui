@@ -2,6 +2,7 @@
 
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use tracing::error;
 use crate::components::dialog_layout::split_dialog_area;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -145,7 +146,8 @@ impl SqliteOptionsDialog {
             Ok(tables) => {
                 self.set_available_tables(tables);
             }
-            Err(_) => {
+            Err(error) => {
+                error!("Failed to query SQLite tables: {}", error);
                 // If polars fails, fall back to empty tables list
                 self.available_tables.clear();
                 self.sqlite_options.selected_tables.clear();

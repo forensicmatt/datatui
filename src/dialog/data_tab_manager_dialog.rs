@@ -16,7 +16,7 @@ use ratatui::Frame;
 use ratatui::layout::Size;
 use tokio::sync::mpsc::UnboundedSender;
 use polars::prelude::DataFrame;
-use tracing::info;
+use tracing::{debug, info};
 use crate::components::Component;
 use crate::components::datatable_container::DataTableContainer;
 use crate::components::datatable::DataTable;
@@ -751,9 +751,9 @@ impl Component for DataTabManagerDialog {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        info!("DataTabManagerDialog handle_key_event: {:?}", key);
+        debug!("DataTabManagerDialog handle_key_event: {:?}", key);
         if let Some(action) = self.config.action_for_key(crate::config::Mode::DataTabManager, key) {
-            info!("DataTabManagerDialog 1st action_for_key<DataTabManager>: {:?}", action);
+            debug!("DataTabManagerDialog 1st action_for_key<DataTabManager>: {:?}", action);
             match action {
                 Action::OpenProjectSettingsDialog => { self.show_project_settings = true; return Ok(None); }
                 Action::OpenDataManagementDialog => { self.show_data_management = true; return Ok(None); }
@@ -763,7 +763,7 @@ impl Component for DataTabManagerDialog {
         
         // Handle ProjectSettingsDialog first if active (overlay)
         if self.show_project_settings {
-            info!("DataTabManagerDialog handle_key_event<show_project_settings>: {:?}", key);
+            debug!("DataTabManagerDialog handle_key_event<show_project_settings>: {:?}", key);
             if let Some(Event::Key(key_event)) = Some(Event::Key(key)) {
                 let result = self.project_settings_dialog.handle_events(Some(Event::Key(key_event)))?;
                 if let Some(action) = result.clone() {
@@ -789,10 +789,10 @@ impl Component for DataTabManagerDialog {
                 return Ok(None);
             }
         } else if self.show_data_management {
-            info!("DataTabManagerDialog handle_key_event<show_data_management>: {:?}", key);
+            debug!("DataTabManagerDialog handle_key_event<show_data_management>: {:?}", key);
 
             if let Some(action) = self.data_management_dialog.handle_key_event(key)? {
-                info!("DataTabManagerDialog handle_key_event<data_management_dialog>: {:?} for key: {:?}", action, key);
+                debug!("DataTabManagerDialog handle_key_event<data_management_dialog>: {:?} for key: {:?}", action, key);
                 match action {
                     Action::CloseDataManagementDialog => {
                         self.show_data_management = false;
@@ -809,11 +809,11 @@ impl Component for DataTabManagerDialog {
             }
             return Ok(None);
         } else {
-            info!("DataTabManagerDialog handle_key_event<main>: {:?}", key);
+            debug!("DataTabManagerDialog handle_key_event<main>: {:?}", key);
 			// Handle events for main tab manager
             // First, try to resolve an action from config for DataTabManager mode
             if let Some(action) = self.config.action_for_key(crate::config::Mode::DataTabManager, key) {
-                info!("DataTabManagerDialog 2nd action_for_key<DataTabManager>: {:?}", action);
+                debug!("DataTabManagerDialog 2nd action_for_key<DataTabManager>: {:?}", action);
                 match action {
                     Action::MoveTabToFront => {
                         if !self.tabs.is_empty() && let Err(e) = self.move_tab_to_front(self.active_tab_index) {
@@ -871,7 +871,7 @@ impl Component for DataTabManagerDialog {
                     }
                 }
             } else {
-                info!("DataTabManagerDialog no action for key: {:?}", key);
+                debug!("DataTabManagerDialog no action for key: {:?}", key);
             }
 
             // Forward to active container if available
