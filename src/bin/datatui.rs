@@ -1,12 +1,12 @@
 use clap::{Parser, ValueEnum};
 use std::io;
-use crossterm::event::{self, Event as CEvent, EnableMouseCapture, DisableMouseCapture, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event as CEvent, EnableMouseCapture, DisableMouseCapture};
 use crossterm::terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::time::Duration;
-use datatui::dialog::DataTabManagerDialog;
+use datatui::dialog::{DataTabManagerDialog, KeybindingsDialog};
 use datatui::style::StyleConfig;
 use datatui::config::Config;
 use datatui::components::Component;
@@ -73,10 +73,16 @@ fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     tab_manager: &mut DataTabManagerDialog,
 ) -> anyhow::Result<()> {
+    // Optional global Keybindings dialog overlay, opened via a global shortcut
+    let mut keybindings_dialog: Option<KeybindingsDialog> = None;
     loop {
         terminal.draw(|f| {
             let size = f.area();
             tab_manager.draw(f, size).unwrap();
+            // When open, render the keybindings dialog on top
+            if let Some(dialog) = &mut keybindings_dialog {
+                let _ = dialog.draw(f, size);
+            }
         })?;
         // After drawing, process queued Render work (overlay is now visible)
         let _ = tab_manager.update(Action::Render);
@@ -94,27 +100,64 @@ fn run_app<B: ratatui::backend::Backend>(
         // Poll for events
         if event::poll(Duration::from_millis(100))?
             && let CEvent::Key(key_event) = event::read()? {
-                if let KeyCode::Char('z') = key_event.code && key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                    break;
+            if let Some(global_action) = tab_manager.config.action_for_key(datatui::config::Mode::Global, key_event){
+                match global_action {
+                    Action::Quit => {
+                        break;
+                    }
+                    Action::OpenKeybindings => {
+                        if keybindings_dialog.is_some() {
+                            keybindings_dialog = None;
+                        } else {
+                            let mut dlg = KeybindingsDialog::new();
+                            if let Err(err) = dlg.register_config_handler(tab_manager.config.clone()){
+                                error!("Error registering config handler for KeybindingsDialog: {err}");
+                            }
+                            keybindings_dialog = Some(dlg);
+                        }
+                        continue;
+                    }
+                    _ => {}
                 }
+            }
 
-                // Convert to TuiEvent and pass to handle_events
-                let tui_event = TuiEvent::Key(key_event);
-                match tab_manager.handle_events(Some(tui_event)) {
-                    Ok(Some(action)) => {
-                        // Handle global quit/suspend
-                        match action {
-                            Action::Quit | Action::Suspend => break,
-                            other => {
-                                if let Err(e) = tab_manager.update(other) {
-                                    error!("Error updating after action: {e}");
-                                }
+            // If keybindings dialog is open, it consumes events first
+            if let Some(dialog) = &mut keybindings_dialog {
+                match dialog.handle_events(Some(TuiEvent::Key(key_event))) {
+                    Ok(Some(Action::DialogClose)) => {
+                        keybindings_dialog = None;
+                    }
+                    Ok(Some(Action::SaveKeybindings)) => {
+                        let _ = tab_manager.register_config_handler(dialog.get_config());
+                        keybindings_dialog = None;
+                    }
+                    Ok(Some(Action::SaveWorkspaceState)) => {
+                        let _ = tab_manager.save_workspace_state();
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) => {}
+                    Err(e) => error!("Error handling KeybindingsDialog event: {e}"),
+                }
+                continue;
+            }
+            // Otherwise pass to tab manager
+            // Convert to TuiEvent and pass to handle_events
+            let tui_event = TuiEvent::Key(key_event);
+            match tab_manager.handle_events(Some(tui_event)) {
+                Ok(Some(action)) => {
+                    // Handle global quit/suspend
+                    match action {
+                        Action::Quit | Action::Suspend => break,
+                        other => {
+                            if let Err(e) = tab_manager.update(other) {
+                                error!("Error updating after action: {e}");
                             }
                         }
                     }
-                    Ok(None) => {}
-                    Err(e) => error!("Error handling TuiEvent: {e}"),
                 }
+                Ok(None) => {}
+                Err(e) => error!("Error handling TuiEvent: {e}"),
+            }
         }
         // Tick update (animate progress, etc.)
         if let Ok(Some(a)) = tab_manager.update(Action::Tick)

@@ -1,11 +1,5 @@
 {
   "keybindings": {
-    "Home": {
-      "<q>": "Quit", // Quit the application
-      "<Ctrl-d>": "Quit", // Another way to quit
-      "<Ctrl-c>": "Quit", // Yet another way to quit
-      "<Ctrl-z>": "Suspend" // Suspend the application
-    },
     "DataTabManager": {
       "<Alt-s>": "OpenProjectSettingsDialog",
       "<Alt-m>": "OpenDataManagementDialog",
@@ -18,6 +12,7 @@
       "<Alt-k>": "SyncTabs"
     },
     "Global": {
+      "<Ctrl-z>": "Quit",
       "<tab>": "Tab",
       "<up>": "Up",
       "<down>": "Down",
@@ -26,7 +21,8 @@
       "<esc>": "Escape",
       "<enter>": "Enter",
       "<backspace>": "Backspace",
-      "<Ctrl-i>": "ToggleInstructions"
+      "<Ctrl-i>": "ToggleInstructions",
+      "<Alt-,>": "OpenKeybindings"
     },
     "DataTableContainer": {
       "<Ctrl-s>": "OpenSortDialog",
@@ -170,6 +166,16 @@
       "<Ctrl-p>": "Paste",
       "<Ctrl-c>": "CopyFilePath",
       "<enter>": "ExportTable"
+    }
+    ,
+    "KeybindingsDialog": {
+      "<tab>": "OpenGroupingDropdown",
+      "<Ctrl-left>": "SelectPrevGrouping",
+      "<Ctrl-right>": "SelectNextGrouping",
+      "<enter>": "StartRebinding",
+      "<Ctrl-s>": "SaveKeybindings",
+      "<delete>": "ClearBinding",
+      "<esc>": "CancelRebinding"
     }
   }
 }

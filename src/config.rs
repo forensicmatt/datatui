@@ -15,7 +15,6 @@ use crate::action::Action;
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
     #[default]
-    Home,
     DataTabManager,
     Global,
     DataTableContainer,
@@ -41,6 +40,7 @@ pub enum Mode {
     MessageDialog,
     ProjectSettings,
     TableExport,
+    KeybindingsDialog,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");
@@ -274,6 +274,15 @@ impl Config {
             // TableExport dialog actions
             Action::CopyFilePath => "Copy Path",
             Action::ExportTable => "Export",
+            // KeybindingsDialog actions
+            Action::OpenGroupingDropdown => "Open Grouping",
+            Action::SelectNextGrouping => "Next Group",
+            Action::SelectPrevGrouping => "Prev Group",
+            Action::StartRebinding => "Start Rebind",
+            Action::ConfirmRebinding => "Apply Rebind",
+            Action::CancelRebinding => "Cancel Rebind",
+            Action::ClearBinding => "Clear Binding",
+            Action::SaveKeybindings => "Save Keybindings",
             
             // Other actions
             Action::Quit => "Quit",
@@ -707,21 +716,6 @@ mod tests {
     fn test_parse_color_unknown() {
         let color = parse_color("unknown");
         assert_eq!(color, None);
-    }
-
-    #[test]
-    fn test_config() -> Result<()> {
-        let c = Config::new()?;
-        assert_eq!(
-            c.keybindings
-                .0
-                .get(&Mode::Home)
-                .unwrap()
-                .get(&parse_key_sequence("<q>").unwrap_or_default())
-                .unwrap(),
-            &Action::Quit
-        );
-        Ok(())
     }
 
     #[test]

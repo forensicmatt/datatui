@@ -16,11 +16,12 @@ pub enum Action {
     Resize(u16, u16),
     Suspend,
     Resume,
-    Quit,
     ClearScreen,
     Error(String),
     Help,
     /// Global actions (configurable)
+    Quit,
+    OpenKeybindings,
     Escape,
     Enter,
     Backspace,
@@ -305,6 +306,15 @@ pub enum Action {
     /// TableExportDialog specific actions
     CopyFilePath,
     ExportTable,
+    /// KeybindingsDialog specific actions
+    OpenGroupingDropdown,
+    SelectNextGrouping,
+    SelectPrevGrouping,
+    StartRebinding,
+    ConfirmRebinding,
+    CancelRebinding,
+    ClearBinding,
+    SaveKeybindings,
 }
 
 #[cfg(test)]
