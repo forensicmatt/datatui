@@ -1,9 +1,11 @@
 //! DataExportDialog: Export current dataset to Text, Excel, JSONL, or Parquet
 
 use ratatui::prelude::*;
+use tracing::error;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::components::dialog_layout::split_dialog_area;
 use crate::components::Component;
+use crate::config::Config;
 use crate::action::Action;
 use color_eyre::Result;
 use crossterm::event::{KeyEvent, KeyEventKind, KeyCode, KeyModifiers, MouseEvent};
@@ -44,6 +46,7 @@ pub struct DataExportDialog {
     pub format_index: usize, // 0 Text, 1 Excel, 2 JSONL, 3 Parquet
     pub file_browser: Option<FileBrowserDialog>,
     pub show_instructions: bool,
+    pub config: Config
 }
 
 impl DataExportDialog {
@@ -67,6 +70,7 @@ impl DataExportDialog {
             format_index: 0,
             file_browser: None,
             show_instructions: true,
+            config: Config::default()
         }
     }
 
@@ -83,10 +87,13 @@ impl DataExportDialog {
 
         match &self.mode {
             DataExportMode::FileBrowser => {
-                if let Some(browser) = &self.file_browser { browser.render(area, buf); }
+                if let Some(browser) = &self.file_browser {
+                    browser.render(area, buf);
+                }
                 return;
             }
             DataExportMode::Error(msg) => {
+                error!("{msg}");
                 let block = Block::default()
                     .title("Export Error")
                     .borders(Borders::ALL)
@@ -174,17 +181,18 @@ impl DataExportDialog {
         match &mut self.mode {
             DataExportMode::FileBrowser => {
                 if let Some(browser) = &mut self.file_browser && let Some(action) = browser.handle_key_event(key) {
-                        match action {
-                            FileBrowserAction::Selected(path) => {
-                                self.set_file_path(path.to_string_lossy().to_string());
-                                self.mode = DataExportMode::Input;
-                                self.file_browser = None;
-                            }
-                            FileBrowserAction::Cancelled => {
-                                self.mode = DataExportMode::Input;
-                                self.file_browser = None;
-                            }
+                    browser.register_config_handler(self.config.clone());
+                    match action {
+                        FileBrowserAction::Selected(path) => {
+                            self.set_file_path(path.to_string_lossy().to_string());
+                            self.mode = DataExportMode::Input;
+                            self.file_browser = None;
                         }
+                        FileBrowserAction::Cancelled => {
+                            self.mode = DataExportMode::Input;
+                            self.file_browser = None;
+                        }
+                    }
                 }
                 None
             }
@@ -222,7 +230,13 @@ impl DataExportDialog {
                     KeyCode::Down => { if self.file_path_focused { self.file_path_focused = false; self.browse_button_selected = true; } else if self.browse_button_selected { self.browse_button_selected = false; self.export_button_selected = true; } None }
                     KeyCode::Enter => {
                         if self.browse_button_selected {
-                            self.file_browser = Some(FileBrowserDialog::new(None, Some(vec!["csv","xlsx","jsonl","ndjson","parquet"]), false, FileBrowserMode::Save));
+                            let mut dialog_file_browser = FileBrowserDialog::new(
+                                None, 
+                                Some(vec!["csv","xlsx","jsonl","ndjson","parquet"]), 
+                                false, FileBrowserMode::Save
+                            );
+                            dialog_file_browser.register_config_handler(self.config.clone());
+                            self.file_browser = Some(dialog_file_browser);
                             self.mode = DataExportMode::FileBrowser; return None;
                         }
                         if self.export_button_selected || self.file_path_focused {
@@ -318,25 +332,16 @@ impl DataExportDialog {
     }
 
     fn export_excel(&self) -> color_eyre::Result<String> {
-        // Fallback: write CSV with .xlsx suggestion not supported; use .csv for now (minimal)
-        // Could integrate xlsx-writer crate later. For now, write CSV next to desired path with .csv
-        let mut out = PathBuf::from(&self.file_path);
-        if out.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase() == "xlsx" {
-            out.set_extension("csv");
-        }
-        let cloned = self.clone_for_text(out.display().to_string());
-        cloned.export_text()
-    }
-
-    fn clone_for_text(&self, new_path: String) -> DataExportDialog {
-        let mut d = DataExportDialog::new(self.headers.clone(), self.rows.clone(), Some(new_path));
-        d.format_index = 0; d
+        unimplemented!("Writing to Excel is not yet supported.")
     }
 }
 
 impl Component for DataExportDialog {
     fn register_action_handler(&mut self, _tx: tokio::sync::mpsc::UnboundedSender<Action>) -> Result<()> { Ok(()) }
-    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { Ok(()) }
+    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> {
+        self.config = _config;
+        Ok(())
+    }
     fn init(&mut self, _area: ratatui::layout::Size) -> Result<()> { Ok(()) }
     fn handle_events(&mut self, _event: Option<crate::tui::Event>) -> Result<Option<Action>> { Ok(None) }
     fn handle_key_event(&mut self, _key: KeyEvent) -> Result<Option<Action>> { Ok(None) }

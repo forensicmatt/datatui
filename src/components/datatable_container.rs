@@ -1087,6 +1087,9 @@ impl Component for DataTableContainer {
         let _ = self.dataframe_details_dialog.register_config_handler(config.clone());
         let _ = self.jmes_dialog.register_config_handler(config.clone());
         let _ = self.column_operations_dialog.register_config_handler(config.clone());
+        if let Some(d) = &mut self.data_export_dialog {
+            d.register_config_handler(config.clone())?;
+        }
         Ok(())
     }
     /// Initialize the component with the given area size.
@@ -1915,7 +1918,9 @@ impl Component for DataTableContainer {
                         rows.push(row);
                     }
                     let suggested = Some("export.csv".to_string());
-                    self.data_export_dialog = Some(DataExportDialog::new(visible_columns, rows, suggested));
+                    let mut dialog = DataExportDialog::new(visible_columns, rows, suggested);
+                    dialog.register_config_handler(self.config.clone())?;
+                    self.data_export_dialog = Some(dialog);
                     self.data_export_dialog_active = true;
                     return Ok(None);
                 }
