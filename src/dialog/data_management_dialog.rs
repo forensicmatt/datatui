@@ -446,6 +446,7 @@ impl DataSource {
             DataImportConfig::Sqlite(sqlite_config) => {
                 use rusqlite::Connection;
                 use polars::prelude::*;
+                use rusqlite::types::ValueRef;
                 
                 // Open SQLite database connection
                 let conn = Connection::open(&sqlite_config.file_path)
@@ -497,42 +498,168 @@ impl DataSource {
                     .map(|i| stmt.column_name(i).unwrap_or("unknown").to_string())
                     .collect();
                 
-                // Fetch all rows and convert to polars DataFrame
-                let rows = stmt.query_map([], |row| {
-                    let mut values = Vec::new();
-                    for i in 0..column_count {
-                        let value: Result<String, _> = row.get(i);
-                        values.push(value.unwrap_or_else(|_| "NULL".to_string()));
-                    }
-                    Ok(values)
-                }).map_err(|e| color_eyre::eyre::eyre!("Failed to execute query: {}", e))?;
-                
-                let mut data_rows = Vec::new();
+                // Fetch all rows as typed values, infer column dtypes, and build DataFrame without string-casting
+                #[derive(Clone, Debug)]
+                enum SqlValue {
+                    Null,
+                    Integer(i64),
+                    Real(f64),
+                    Text(String),
+                    Blob(Vec<u8>),
+                }
+
+                #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+                enum ColType {
+                    Unknown,
+                    Int64,
+                    Float64,
+                    Utf8,
+                }
+
+                let rows = stmt
+                    .query_map([], |row| {
+                        let mut values: Vec<SqlValue> = Vec::with_capacity(column_count);
+                        for i in 0..column_count {
+                            let v = match row.get_ref(i)? {
+                                ValueRef::Null => SqlValue::Null,
+                                ValueRef::Integer(x) => SqlValue::Integer(x),
+                                ValueRef::Real(f) => SqlValue::Real(f),
+                                ValueRef::Text(bytes) => {
+                                    let s = std::str::from_utf8(bytes).unwrap_or("").to_string();
+                                    SqlValue::Text(s)
+                                }
+                                ValueRef::Blob(b) => SqlValue::Blob(b.to_vec()),
+                            };
+                            values.push(v);
+                        }
+                        Ok(values)
+                    })
+                    .map_err(|e| color_eyre::eyre::eyre!("Failed to execute query: {}", e))?;
+
+                let mut data_rows: Vec<Vec<SqlValue>> = Vec::new();
                 for row_result in rows {
                     let row = row_result
                         .map_err(|e| color_eyre::eyre::eyre!("Failed to read row: {}", e))?;
                     data_rows.push(row);
                 }
-                
-                // Convert to polars DataFrame
-                let mut columns = Vec::new();
-                for (i, col_name) in column_names.iter().enumerate() {
-                    let col_data: Vec<Option<String>> = data_rows.iter()
-                        .map(|row| {
-                            if i < row.len() && row[i] != "NULL" {
-                                Some(row[i].clone())
-                            } else {
-                                None
+
+                // Infer column types with simple promotion rules and boolean detection
+                let mut col_types: Vec<ColType> = vec![ColType::Unknown; column_count];
+                let mut bool_candidate: Vec<bool> = vec![true; column_count];
+                for row in &data_rows {
+                    for (i, val) in row.iter().enumerate() {
+                        match val {
+                            SqlValue::Null => {}
+                            SqlValue::Integer(x) => {
+                                match col_types[i] {
+                                    ColType::Unknown => col_types[i] = ColType::Int64,
+                                    ColType::Float64 | ColType::Utf8 | ColType::Int64 => {}
+                                }
+                                if *x != 0 && *x != 1 { bool_candidate[i] = false; }
                             }
-                        })
-                        .collect();
-                    
-                    let series = Series::new(col_name.clone().into(), col_data);
-                    columns.push(series.into());
+                            SqlValue::Real(_) => {
+                                match col_types[i] {
+                                    ColType::Unknown | ColType::Int64 => col_types[i] = ColType::Float64,
+                                    ColType::Float64 | ColType::Utf8 => {}
+                                }
+                                bool_candidate[i] = false;
+                            }
+                            SqlValue::Text(_) => {
+                                col_types[i] = ColType::Utf8;
+                                bool_candidate[i] = false;
+                            }
+                            SqlValue::Blob(_) => {
+                                // Fallback to Utf8 for blobs to avoid losing other types; encode as debug string
+                                col_types[i] = ColType::Utf8;
+                                bool_candidate[i] = false;
+                            }
+                        }
+                    }
+                }
+
+                // Default unknown columns to Utf8 (all-null becomes Utf8 with None values)
+                for ct in &mut col_types { if *ct == ColType::Unknown { *ct = ColType::Utf8; } }
+
+                // Build columns by dtype, preserving native numeric/bool types
+                let mut columns = Vec::with_capacity(column_count as usize);
+                for (i, col_name) in column_names.iter().enumerate() {
+                    match col_types[i] {
+                        ColType::Int64 if bool_candidate[i] => {
+                            let data: Vec<Option<bool>> = data_rows
+                                .iter()
+                                .map(|row| match row[i] {
+                                    SqlValue::Null => None,
+                                    SqlValue::Integer(x) => Some(x != 0),
+                                    _ => None,
+                                })
+                                .collect();
+                            let series = Series::new(col_name.clone().into(), data);
+                            columns.push(series.into());
+                        }
+                        ColType::Int64 => {
+                            let data: Vec<Option<i64>> = data_rows
+                                .iter()
+                                .map(|row| match row[i] {
+                                    SqlValue::Null => None,
+                                    SqlValue::Integer(x) => Some(x),
+                                    _ => None,
+                                })
+                                .collect();
+                            let series = Series::new(col_name.clone().into(), data);
+                            columns.push(series.into());
+                        }
+                        ColType::Float64 => {
+                            let data: Vec<Option<f64>> = data_rows
+                                .iter()
+                                .map(|row| match row[i] {
+                                    SqlValue::Null => None,
+                                    SqlValue::Integer(x) => Some(x as f64),
+                                    SqlValue::Real(f) => Some(f),
+                                    _ => None,
+                                })
+                                .collect();
+                            let series = Series::new(col_name.clone().into(), data);
+                            columns.push(series.into());
+                        }
+                        ColType::Unknown => {
+                            // All-null or unresolved columns: treat as Utf8 with None
+                            let data: Vec<Option<String>> = data_rows
+                                .iter()
+                                .map(|row| match &row[i] {
+                                    SqlValue::Null => None,
+                                    SqlValue::Integer(x) => Some(x.to_string()),
+                                    SqlValue::Real(f) => Some(f.to_string()),
+                                    SqlValue::Text(s) => Some(s.clone()),
+                                    SqlValue::Blob(b) => Some(format!("{:?}", b)),
+                                })
+                                .collect();
+                            let series = Series::new(col_name.clone().into(), data);
+                            columns.push(series.into());
+                        }
+                        ColType::Utf8 => {
+                            let data: Vec<Option<String>> = data_rows
+                                .iter()
+                                .map(|row| match &row[i] {
+                                    SqlValue::Null => None,
+                                    SqlValue::Integer(x) => Some(x.to_string()),
+                                    SqlValue::Real(f) => Some(f.to_string()),
+                                    SqlValue::Text(s) => Some(s.clone()),
+                                    SqlValue::Blob(b) => Some(format!("{:?}", b)),
+                                })
+                                .collect();
+                            let series = Series::new(col_name.clone().into(), data);
+                            columns.push(series.into());
+                        }
+                    }
                 }
                 
                 let df_sqlite = DataFrame::new(columns)
-                    .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame from SQLite table '{}': {}", table_name, e))?;
+                    .map_err(|e| {
+                        error!("Failed to build DataFrame from SQLite table '{}': {}", table_name, e);
+                        color_eyre::eyre::eyre!(
+                            "Failed to build DataFrame from SQLite table '{}': {}", table_name, e
+                        )
+                })?;
                 
                 (df_sqlite, Some(table_name.clone()))
             }

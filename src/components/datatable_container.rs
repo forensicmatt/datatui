@@ -1112,7 +1112,7 @@ impl Component for DataTableContainer {
     ///
     /// This method manages dialog activation, dialog event handling, and forwards navigation events to the DataTable.
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        info!("DataTableContainer handle_key_event: {:?}", key);
+        debug!("DataTableContainer handle_key_event: {:?}", key);
         // If busy overlay is active, consume input except maybe Esc; block cell navigation
         if self.busy_active {
             // Ignore all input while busy to prevent navigation/interaction
@@ -1489,7 +1489,7 @@ impl Component for DataTableContainer {
                             self.column_operations_dialog_active = true;
                         }
                         Action::ColumnOperationOptionsApplied(cfg) => {
-                            info!("ColumnOperationOptionsApplied: {:?}", cfg);
+                            debug!("ColumnOperationOptionsApplied: {:?}", cfg);
                             // Validate source column dtype per operation requirements
                             let df_arc = self.datatable.get_dataframe()?;
                             let df_ref = df_arc.as_ref();
@@ -1542,7 +1542,7 @@ impl Component for DataTableContainer {
                             // Apply operation
                             match cfg.operation {
                                 ColumnOperationKind::GenerateEmbeddings => {
-                                    info!("ColumnOperationOptionsApplied: GenerateEmbeddings");
+                                    debug!("ColumnOperationOptionsApplied: GenerateEmbeddings");
                                     // Extract options
                                     let (model_name, num_dims) = match &cfg.options {
                                         OperationOptions::GenerateEmbeddings {
@@ -1797,7 +1797,7 @@ impl Component for DataTableContainer {
                     Action::ColumnWidthDialogReordered(column_order) => {
                         // Reorder columns in the DataFrame
                         if let Err(e) = self.datatable.dataframe.reorder_columns(&column_order) {
-                            info!("Failed to reorder columns: {}", e);
+                            error!("Failed to reorder columns: {}", e);
                         } else {
                             // Update the dialog's column list to match the new order
                             self.column_width_dialog.set_columns(column_order);
@@ -1884,7 +1884,7 @@ impl Component for DataTableContainer {
                     if matches!(action, Action::MoveSelectedColumnLeft) && col_idx > 0 {
                         columns.swap(col_idx, col_idx - 1);
                         if let Err(e) = self.datatable.dataframe.reorder_columns(&columns) {
-                            info!("Failed to move column left: {}", e);
+                            error!("Failed to move column left: {}", e);
                         } else {
                             self.datatable.selection.col = col_idx - 1;
                             let _ = self.datatable.scroll_to_selection();
@@ -1892,7 +1892,7 @@ impl Component for DataTableContainer {
                     } else if matches!(action, Action::MoveSelectedColumnRight) && col_idx + 1 < columns.len() {
                         columns.swap(col_idx, col_idx + 1);
                         if let Err(e) = self.datatable.dataframe.reorder_columns(&columns) {
-                            info!("Failed to move column right: {}", e);
+                            error!("Failed to move column right: {}", e);
                         } else {
                             self.datatable.selection.col = col_idx + 1;
                             let _ = self.datatable.scroll_to_selection();
@@ -1954,13 +1954,13 @@ impl Component for DataTableContainer {
                     let cell_value = self.selected_cell_json_value()?;
                     let cell_value = match cell_value { Value::String(s) => s, v => v.to_string() };
                     if let Err(e) = Clipboard::new().and_then(|mut clipboard| clipboard.set_text(cell_value.clone())) {
-                        info!("Failed to copy to clipboard: {}", e);
+                        error!("Failed to copy to clipboard: {}", e);
                     }
                     return Ok(None);
                 }
                 Action::ToggleInstructions => { self.toggle_instructions(); return Ok(None); }
                 _ => {
-                    info!("DataTableContainer unhandled action: {:?} for key: {:?}", action, key);
+                    debug!("DataTableContainer unhandled action: {:?} for key: {:?}", action, key);
                 }
             }
         }
