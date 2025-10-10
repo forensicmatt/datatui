@@ -67,7 +67,7 @@ impl SqlDialog {
             (crate::config::Mode::Global, crate::action::Action::Escape),
             (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
             (crate::config::Mode::SqlDialog, crate::action::Action::RunQuery),
-            (crate::config::Mode::SqlDialog, crate::action::Action::CreateNewDataset),
+            // (crate::config::Mode::SqlDialog, crate::action::Action::CreateNewDataset),
             (crate::config::Mode::SqlDialog, crate::action::Action::SelectAllText),
             (crate::config::Mode::SqlDialog, crate::action::Action::CopyText),
             (crate::config::Mode::SqlDialog, crate::action::Action::ClearText),

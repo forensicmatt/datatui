@@ -713,6 +713,7 @@ impl DataTabManagerDialog {
         if let Some(active_tab) = self.tabs.get(self.active_tab_index)
             && let Some(container) = self.containers.get_mut(&active_tab.id()) {
                 container.additional_instructions = Some(instructions.to_string());
+
                 // Render the container in the content area
                 // Sync auto expand option from project settings to container before draw
                 container.auto_expand_value_display = self.project_settings_dialog

@@ -1054,7 +1054,7 @@ impl DataTableContainer {
         let base_instructions = self.build_instructions_from_config();
         
         if let Some(additional_instructions) = &self.additional_instructions {
-            format!("{}\n{}", additional_instructions, base_instructions)
+            format!("{}  {}", additional_instructions, base_instructions)
         } else {
             base_instructions
         }

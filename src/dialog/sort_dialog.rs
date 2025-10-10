@@ -89,6 +89,7 @@ impl SortDialog {
         match self.mode {
             SortDialogMode::List => {
                 self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Global, crate::action::Action::Enter),
                     (crate::config::Mode::Sort, crate::action::Action::ToggleSortDirection),
                     (crate::config::Mode::Sort, crate::action::Action::RemoveSortColumn),
                     (crate::config::Mode::Sort, crate::action::Action::AddSortColumn),

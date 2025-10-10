@@ -61,9 +61,9 @@
       "<esc>": "CloseCsvOptionsDialog"
     },
     "Sort": {
-      "<t>": "ToggleSortDirection",
-      "<d>": "RemoveSortColumn",
-      "<a>": "AddSortColumn"
+      "<space>": "ToggleSortDirection",
+      "<Ctrl-d>": "RemoveSortColumn",
+      "<Ctrl-a>": "AddSortColumn"
     },
     "Filter": {
       "<Ctrl-a>": "AddFilter",
@@ -166,8 +166,7 @@
       "<Ctrl-p>": "Paste",
       "<Ctrl-c>": "CopyFilePath",
       "<enter>": "ExportTable"
-    }
-    ,
+    },
     "KeybindingsDialog": {
       "<tab>": "OpenGroupingDropdown",
       "<Ctrl-left>": "SelectPrevGrouping",
