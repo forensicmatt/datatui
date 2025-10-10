@@ -752,11 +752,20 @@ impl Component for DataTabManagerDialog {
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         debug!("DataTabManagerDialog handle_key_event: {:?}", key);
-        if let Some(action) = self.config.action_for_key(crate::config::Mode::DataTabManager, key) {
+        if let Some(action) = self.config.action_for_key(
+            crate::config::Mode::DataTabManager,
+            key
+        ) {
             debug!("DataTabManagerDialog 1st action_for_key<DataTabManager>: {:?}", action);
             match action {
-                Action::OpenProjectSettingsDialog => { self.show_project_settings = true; return Ok(None); }
-                Action::OpenDataManagementDialog => { self.show_data_management = true; return Ok(None); }
+                Action::OpenProjectSettingsDialog => {
+                    self.show_project_settings = true;
+                    return Ok(None);
+                }
+                Action::OpenDataManagementDialog => { 
+                    self.show_data_management = true;
+                    return Ok(None);
+                }
                 _ => {}
             }
         }
@@ -811,9 +820,49 @@ impl Component for DataTabManagerDialog {
             return Ok(None);
         } else {
             debug!("DataTabManagerDialog handle_key_event<main>: {:?}", key);
-			// Handle events for main tab manager
+
+            // Forward to active container if available
+            let latest = self.get_available_datasets()?;
+            if let Some(container) = self.get_active_container() {
+                // Ensure container has the latest available DataFrames
+                container.set_available_datasets(latest);
+                // Forward the key event to the active container
+                if let Some(action) = container.handle_key_event(key)? {
+                    match action {
+                        Action::SqlDialogAppliedNewDataset {
+                            dataset_name,
+                            dataframe
+                        } => {
+                            // Handle new dataset creation
+                            return self.handle_new_dataset_creation(dataset_name, dataframe);
+                        }
+                        Action::SaveWorkspaceState => {
+                            // Ensure last SQL text is stored on the dataframe for capture
+                            if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
+                                let tab_id = active_tab.id();
+                                if let Some(container) = self.containers.get_mut(&tab_id) {
+                                    let sql_text = container.sql_dialog.textarea.lines().join("\n");
+                                    container.datatable.dataframe.last_sql_query = Some(sql_text);
+                                }
+                            }
+                            if self.project_settings_dialog.config.workspace_path.as_ref().is_some_and(|p| p.is_dir()) {
+                                let _ = self.save_workspace_state();
+                            }
+                            return Ok(None);
+                        }
+                        _ => {
+                            // Forward other actions up
+                            return Ok(Some(action));
+                        }
+                    }
+                }
+            }
+
+            // Handle tab navigation// Handle events for main tab manager
             // First, try to resolve an action from config for DataTabManager mode
-            if let Some(action) = self.config.action_for_key(crate::config::Mode::DataTabManager, key) {
+            if let Some(action) = self.config.action_for_key(
+                crate::config::Mode::DataTabManager, key
+            ) {
                 debug!("DataTabManagerDialog 2nd action_for_key<DataTabManager>: {:?}", action);
                 match action {
                     Action::MoveTabToFront => {
@@ -873,40 +922,6 @@ impl Component for DataTabManagerDialog {
                 }
             } else {
                 debug!("DataTabManagerDialog no action for key: {:?}", key);
-            }
-
-            // Forward to active container if available
-            let latest = self.get_available_datasets()?;
-            if let Some(container) = self.get_active_container() {
-                // Ensure container has the latest available DataFrames
-                container.set_available_datasets(latest);
-                // Forward the key event to the active container
-                if let Some(action) = container.handle_key_event(key)? {
-                    match action {
-                        Action::SqlDialogAppliedNewDataset { dataset_name, dataframe } => {
-                            // Handle new dataset creation
-                            return self.handle_new_dataset_creation(dataset_name, dataframe);
-                        }
-                        Action::SaveWorkspaceState => {
-                            // Ensure last SQL text is stored on the dataframe for capture
-                            if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
-                                let tab_id = active_tab.id();
-                                if let Some(container) = self.containers.get_mut(&tab_id) {
-                                    let sql_text = container.sql_dialog.textarea.lines().join("\n");
-                                    container.datatable.dataframe.last_sql_query = Some(sql_text);
-                                }
-                            }
-                            if self.project_settings_dialog.config.workspace_path.as_ref().is_some_and(|p| p.is_dir()) {
-                                let _ = self.save_workspace_state();
-                            }
-                            return Ok(None);
-                        }
-                        _ => {
-                            // Forward other actions up
-                            return Ok(Some(action));
-                        }
-                    }
-                }
             }
 
             return Ok(None);
