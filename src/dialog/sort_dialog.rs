@@ -89,18 +89,16 @@ impl SortDialog {
         match self.mode {
             SortDialogMode::List => {
                 self.config.actions_to_instructions(&[
-                    (crate::config::Mode::Global, crate::action::Action::Up),
-                    (crate::config::Mode::Global, crate::action::Action::Down),
-                    (crate::config::Mode::Global, crate::action::Action::Enter),
-                    (crate::config::Mode::Global, crate::action::Action::Escape),
                     (crate::config::Mode::Sort, crate::action::Action::ToggleSortDirection),
                     (crate::config::Mode::Sort, crate::action::Action::RemoveSortColumn),
                     (crate::config::Mode::Sort, crate::action::Action::AddSortColumn),
                 ])
             }
             SortDialogMode::AddColumn => {
-                // Special handling for AddColumn mode - use hardcoded strings for now
-                "Up/Down: Select  Enter: Add  Esc: Cancel".to_string()
+                self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                    (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+                ])
             }
         }
     }

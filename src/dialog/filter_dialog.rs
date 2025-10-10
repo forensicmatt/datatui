@@ -777,10 +777,6 @@ impl FilterDialog {
         match &self.mode {
             FilterDialogMode::List => {
                 self.config.actions_to_instructions(&[
-                    (crate::config::Mode::Global, crate::action::Action::Up),
-                    (crate::config::Mode::Global, crate::action::Action::Down),
-                    (crate::config::Mode::Global, crate::action::Action::Left),
-                    (crate::config::Mode::Global, crate::action::Action::Right),
                     (crate::config::Mode::Global, crate::action::Action::Enter),
                     (crate::config::Mode::Global, crate::action::Action::Escape),
                     (crate::config::Mode::Filter, crate::action::Action::AddFilter),

@@ -13,7 +13,7 @@ use datatui::components::Component;
 use datatui::tui::Event as TuiEvent;
 use datatui::action::Action;
 use color_eyre::Result;
-use tracing::error;
+use tracing::{error, info};
 
 /// Simple CLI for DataTabManagerDialog demo
 #[derive(Parser, Debug)]
@@ -100,26 +100,27 @@ fn run_app<B: ratatui::backend::Backend>(
         // Poll for events
         if event::poll(Duration::from_millis(100))?
             && let CEvent::Key(key_event) = event::read()? {
-            if let Some(global_action) = tab_manager.config.action_for_key(datatui::config::Mode::Global, key_event){
-                match global_action {
-                    Action::Quit => {
-                        break;
-                    }
-                    Action::OpenKeybindings => {
-                        if keybindings_dialog.is_some() {
-                            keybindings_dialog = None;
-                        } else {
-                            let mut dlg = KeybindingsDialog::new();
-                            if let Err(err) = dlg.register_config_handler(tab_manager.config.clone()){
-                                error!("Error registering config handler for KeybindingsDialog: {err}");
-                            }
-                            keybindings_dialog = Some(dlg);
+                if let Some(global_action) = tab_manager.config.action_for_key(datatui::config::Mode::Global, key_event){
+                    info!("Global action: {global_action}");
+                    match global_action {
+                        Action::Quit => {
+                            break;
                         }
-                        continue;
+                        Action::OpenKeybindings => {
+                            if keybindings_dialog.is_some() {
+                                keybindings_dialog = None;
+                            } else {
+                                let mut dlg = KeybindingsDialog::new();
+                                if let Err(err) = dlg.register_config_handler(tab_manager.config.clone()){
+                                    error!("Error registering config handler for KeybindingsDialog: {err}");
+                                }
+                                keybindings_dialog = Some(dlg);
+                            }
+                            continue;
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
-            }
 
             // If keybindings dialog is open, it consumes events first
             if let Some(dialog) = &mut keybindings_dialog {
