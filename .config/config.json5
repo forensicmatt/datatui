@@ -9,7 +9,8 @@
       "<Alt-r>": "MoveTabRight",
       "<Alt-left>": "PrevTab",
       "<Alt-right>": "NextTab",
-      "<Alt-k>": "SyncTabs"
+      "<Alt-k>": "SyncTabs",
+      "<Alt-e>": "OpenDataExportDialog"
     },
     "Global": {
       "<Ctrl-z>": "Quit",
@@ -31,7 +32,6 @@
       "<Shift-E>": "QuickFilterEqualsCurrentValue",
       "<Shift-Left>": "MoveSelectedColumnLeft",
       "<Shift-Right>": "MoveSelectedColumnRight",
-      "<Alt-e>": "OpenDataExportDialog",
       "<Ctrl-t>": "OpenSqlDialog",
       "<Ctrl-j>": "OpenJmesDialog",
       "<Ctrl-o>": "OpenColumnOperationsDialog",

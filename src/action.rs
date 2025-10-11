@@ -215,6 +215,8 @@ pub enum Action {
     ColumnOperationRequested(String),
     /// User applied column operation options
     ColumnOperationOptionsApplied(crate::dialog::column_operation_options_dialog::ColumnOperationConfig),
+    /// Internal container -> manager: open export dialog (alias already exists earlier)
+    OpenDataExportDialogAlias,
     /// Sort dialog specific actions
     ToggleSortDirection,
     RemoveSortColumn,
@@ -306,6 +308,12 @@ pub enum Action {
     /// TableExportDialog specific actions
     CopyFilePath,
     ExportTable,
+    /// DataExportDialog multi-dataset request
+    DataExportRequestedMulti {
+        dataset_ids: Vec<String>,
+        file_path: String,
+        format_index: usize,
+    },
     /// KeybindingsDialog specific actions
     OpenGroupingDropdown,
     SelectNextGrouping,

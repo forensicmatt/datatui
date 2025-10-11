@@ -24,13 +24,19 @@ use crate::components::dialog_layout::split_dialog_area;
 use crate::dataframe::manager::ManagedDataFrame;
 use crate::dialog::data_management_dialog::{LoadedDataset, DataManagementDialog};
 use crate::dialog::project_settings_dialog::{ProjectSettingsDialog, ProjectSettingsConfig};
+use crate::dialog::data_export_dialog::{DataExportDialog, DataExportMode};
 use crate::style::StyleConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
 use crate::data_import_types::DataImportConfig;
 use uuid::Uuid;
 use std::fs::{File, create_dir_all};
+use std::io::{Write, BufWriter};
+use std::path::PathBuf;
+use csv::WriterBuilder;
 use crate::workspace::WorkspaceState;
+use serde_json;
+use polars::prelude::IntoColumn;
 
 
 /// Represents a single tab in the DataTabManagerDialog
@@ -79,6 +85,8 @@ pub struct DataTabManagerDialog {
     pub project_settings_dialog: ProjectSettingsDialog,
     pub show_project_settings: bool,
     pub tab_order: Vec<String>, // Maintains the order of tabs for reordering functionality
+    pub data_export_dialog: Option<DataExportDialog>,
+    pub show_data_export_dialog: bool,
 }
 
 impl DataTabManagerDialog {
@@ -96,6 +104,8 @@ impl DataTabManagerDialog {
             project_settings_dialog: ProjectSettingsDialog::new(ProjectSettingsConfig::default()),
             show_project_settings: false,
             tab_order: Vec::new(),
+            data_export_dialog: None,
+            show_data_export_dialog: false,
         }
     }
     
@@ -498,6 +508,18 @@ impl DataTabManagerDialog {
                 );
                 let _ = self.project_settings_dialog.render(ps_area, frame.buffer_mut());
             }
+            // Render DataExport overlay if active
+            if self.show_data_export_dialog {
+                let margin_x = (area.width as f32 * 0.10) as u16;
+                let margin_y = (area.height as f32 * 0.10) as u16;
+                let de_area = Rect::new(
+                    area.x + margin_x,
+                    area.y + margin_y,
+                    area.width.saturating_sub(margin_x * 2),
+                    area.height.saturating_sub(margin_y * 2),
+                );
+                if let Some(d) = &mut self.data_export_dialog { d.render(de_area, frame.buffer_mut()); }
+            }
             Ok(())
         } else {
             // Render the main tab manager
@@ -546,6 +568,21 @@ impl DataTabManagerDialog {
                     area.height.saturating_sub(margin_y * 2),
                 );
                 let _ = self.project_settings_dialog.render(ps_area, frame.buffer_mut());
+            }
+
+            // Render DataExport overlay if active
+            if self.show_data_export_dialog {
+                let margin_x = (area.width as f32 * 0.10) as u16;
+                let margin_y = (area.height as f32 * 0.10) as u16;
+                let de_area = Rect::new(
+                    area.x + margin_x,
+                    area.y + margin_y,
+                    area.width.saturating_sub(margin_x * 2),
+                    area.height.saturating_sub(margin_y * 2),
+                );
+                if let Some(d) = &mut self.data_export_dialog { 
+                    d.render(de_area, frame.buffer_mut());
+                }
             }
 
             Ok(())
@@ -725,6 +762,81 @@ impl DataTabManagerDialog {
 
         Ok(())
     }
+
+    /// Export selected datasets to the given path. If multiple datasets are selected,
+    /// write separate files with dataset name suffix before extension.
+    fn export_selected_datasets(&self, dataset_ids: Vec<String>, file_path: &str, format_index: usize) -> color_eyre::Result<()> {
+        if dataset_ids.is_empty() { return Ok(()); }
+        let base = PathBuf::from(file_path);
+        let ext = match format_index { 0 => "csv", 1 => "xlsx", 2 => "jsonl", _ => "parquet" };
+        let multiple = dataset_ids.len() > 1;
+        create_dir_all(base.parent().unwrap_or_else(|| std::path::Path::new(".")))?;
+
+        for ds_id in dataset_ids {
+            let Some(container) = self.containers.get(&ds_id) else { continue; };
+            let df_arc = container.datatable.get_dataframe()?;
+            let df = df_arc.as_ref();
+            // Determine visible columns in current table
+            let visible_columns = container.datatable.get_visible_columns().unwrap_or_default();
+            // Build file path
+            let out_path = if multiple {
+                let name = self.tabs.iter().find(|t| t.loaded_dataset.dataset.id == ds_id).map(|t| t.display_name()).unwrap_or_else(|| ds_id.clone());
+                let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("export");
+                let parent = base.parent().unwrap_or_else(|| std::path::Path::new("."));
+                parent.join(format!("{}_{}.{}", stem, name, ext))
+            } else {
+                base.clone()
+            };
+
+            match format_index {
+                0 => { // CSV/Text
+                    let mut buffer: Vec<u8> = Vec::with_capacity(1024 * 8);
+                    let mut builder = WriterBuilder::new();
+                    builder.delimiter(b',');
+                    builder.flexible(true);
+                    let mut wtr = builder.from_writer(&mut buffer);
+                    // headers
+                    wtr.write_record(visible_columns.iter())?;
+                    for row_idx in 0..df.height() {
+                        let mut row: Vec<String> = Vec::with_capacity(visible_columns.len());
+                        for col in &visible_columns {
+                            let cell = df.column(col).ok().and_then(|s| s.get(row_idx).ok()).map(|v| v.str_value().to_string()).unwrap_or_default();
+                            row.push(cell);
+                        }
+                        wtr.write_record(row.iter())?;
+                    }
+                    wtr.flush()?;
+                    drop(wtr);
+                    let mut file = BufWriter::new(File::create(&out_path)?);
+                    file.write_all(&buffer)?;
+                    file.flush()?;
+                }
+                2 => { // JSONL
+                    let mut file = BufWriter::new(File::create(&out_path)?);
+                    for row_idx in 0..df.height() {
+                        let mut obj = serde_json::Map::new();
+                        for col in &visible_columns {
+                            let cell = df.column(col).ok().and_then(|s| s.get(row_idx).ok()).map(|v| v.str_value().to_string()).unwrap_or_default();
+                            obj.insert(col.clone(), serde_json::Value::String(cell));
+                        }
+                        let line = serde_json::to_string(&obj)?;
+                        writeln!(file, "{line}")?;
+                    }
+                }
+                _ => { // Parquet (Excel not supported)
+                    if format_index == 1 { return Err(color_eyre::eyre::eyre!("Excel export is not yet supported")); }
+                    // Select visible columns and write parquet
+                    let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(visible_columns.len());
+                    for col in &visible_columns {
+                        if let Ok(s) = df.column(col) { cols.push(s.clone().into_column()); }
+                    }
+                    let mut out_df = polars::prelude::DataFrame::new(cols)?;
+                    polars::prelude::ParquetWriter::new(File::create(&out_path)?).finish(&mut out_df)?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Component for DataTabManagerDialog {
@@ -798,6 +910,29 @@ impl Component for DataTabManagerDialog {
                 }
                 return Ok(None);
             }
+        } else if self.show_data_export_dialog {
+            // Route to export dialog
+            if let Some(dialog) = &mut self.data_export_dialog {
+                if let Some(action) = dialog.handle_key_event(key) {
+                    match action {
+                        Action::DialogClose => {
+                            self.show_data_export_dialog = false;
+                            self.data_export_dialog = None;
+                            return Ok(None);
+                        }
+                        Action::DataExportRequestedMulti { dataset_ids, file_path, format_index } => {
+                            if let Err(e) = self.export_selected_datasets(dataset_ids, &file_path, format_index) {
+                                if let Some(d) = &mut self.data_export_dialog { d.mode = DataExportMode::Error(format!("{e}")); }
+                            } else {
+                                if let Some(d) = &mut self.data_export_dialog { d.mode = DataExportMode::Success(format!("Export complete: {}", file_path)); }
+                            }
+                            return Ok(None);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            return Ok(None);
         } else if self.show_data_management {
             debug!("DataTabManagerDialog handle_key_event<show_data_management>: {:?}", key);
 
@@ -823,9 +958,20 @@ impl Component for DataTabManagerDialog {
             debug!("DataTabManagerDialog handle_key_event<main>: {:?}", key);
 
             // Forward to active container if available
+            if let Some(action) = self.config.action_for_key(crate::config::Mode::DataTabManager, key) {
+                if let Action::OpenDataExportDialog = action {
+                    let entries: Vec<(String, String)> = self.tabs.iter()
+                        .map(|t| (t.loaded_dataset.dataset.id.clone(), t.display_name()))
+                        .collect();
+                    let mut d = DataExportDialog::new(entries, Some("export.csv".to_string()));
+                    let _ = d.register_config_handler(self.config.clone());
+                    self.data_export_dialog = Some(d);
+                    self.show_data_export_dialog = true;
+                    return Ok(None);
+                }
+            }
             let latest = self.get_available_datasets()?;
             if let Some(container) = self.get_active_container() {
-                // Ensure container has the latest available DataFrames
                 container.set_available_datasets(latest);
                 // Forward the key event to the active container
                 if let Some(action) = container.handle_key_event(key)? {

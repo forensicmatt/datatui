@@ -1,4 +1,4 @@
-//! DataExportDialog: Export current dataset to Text, Excel, JSONL, or Parquet
+//! DataExportDialog: Export selected datasets to Text, Excel, JSONL, or Parquet
 
 use ratatui::prelude::*;
 use tracing::error;
@@ -8,15 +8,11 @@ use crate::components::Component;
 use crate::config::Config;
 use crate::action::Action;
 use color_eyre::Result;
-use crossterm::event::{KeyEvent, KeyEventKind, MouseEvent};
+use crossterm::event::{KeyEvent, KeyEventKind, MouseEvent, KeyCode};
 use tui_textarea::TextArea;
 use arboard::Clipboard;
-use std::fs::{File, create_dir_all};
-use std::io::{Write, BufWriter};
-use std::path::PathBuf;
+use std::fs::create_dir_all;
 use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserAction, FileBrowserMode};
-use polars::prelude::*;
-use csv::WriterBuilder;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataExportMode {
@@ -43,8 +39,10 @@ pub enum CsvEncoding {
 
 #[derive(Debug)]
 pub struct DataExportDialog {
-    pub headers: Vec<String>,
-    pub rows: Vec<Vec<String>>, // rows as strings, already formatted for text/CSV-like outputs
+    // Datasets available for selection: (id, display name, selected)
+    pub datasets: Vec<DatasetChoice>,
+    pub selecting_datasets: bool,
+    pub selected_dataset_index: usize,
     pub mode: DataExportMode,
     pub file_path: String,
     pub file_path_input: TextArea<'static>,
@@ -66,8 +64,16 @@ pub struct DataExportDialog {
     pub option_selected: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct DatasetChoice {
+    pub id: String,
+    pub name: String,
+    pub selected: bool,
+}
+
 impl DataExportDialog {
-    pub fn new(headers: Vec<String>, rows: Vec<Vec<String>>, suggested_path: Option<String>) -> Self {
+    /// Create a new dialog from dataset entries (id, display name)
+    pub fn new(dataset_entries: Vec<(String, String)>, suggested_path: Option<String>) -> Self {
         let mut textarea = TextArea::default();
         textarea.set_block(
             Block::default()
@@ -75,9 +81,14 @@ impl DataExportDialog {
                 .borders(Borders::ALL)
         );
         if let Some(path) = &suggested_path { textarea.insert_str(path); }
+        let datasets: Vec<DatasetChoice> = dataset_entries
+            .into_iter()
+            .map(|(id, name)| DatasetChoice { id, name, selected: false })
+            .collect();
         Self {
-            headers,
-            rows,
+            datasets,
+            selecting_datasets: true,
+            selected_dataset_index: 0,
             mode: DataExportMode::Input,
             file_path: suggested_path.unwrap_or_else(|| String::from("export.csv")),
             file_path_input: textarea,
@@ -103,12 +114,8 @@ impl DataExportDialog {
     }
 
     fn build_instructions_from_config(&self) -> String {
-        self.config.actions_to_instructions(&[
+        let mut s = self.config.actions_to_instructions(&[
             (crate::config::Mode::Global, crate::action::Action::Tab),
-            (crate::config::Mode::Global, crate::action::Action::Up),
-            (crate::config::Mode::Global, crate::action::Action::Down),
-            (crate::config::Mode::Global, crate::action::Action::Left),
-            (crate::config::Mode::Global, crate::action::Action::Right),
             (crate::config::Mode::Global, crate::action::Action::Enter),
             (crate::config::Mode::Global, crate::action::Action::Escape),
             (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
@@ -116,7 +123,10 @@ impl DataExportDialog {
             (crate::config::Mode::TableExport, crate::action::Action::Paste),
             (crate::config::Mode::TableExport, crate::action::Action::CopyFilePath),
             (crate::config::Mode::TableExport, crate::action::Action::ExportTable),
-        ])
+        ]);
+        if !s.is_empty() { s.push_str("  "); }
+        s.push_str("Space: Toggle dataset  Up/Down: Navigate datasets");
+        s
     }
 
     fn adjust_option(&mut self, delta: i32) {
@@ -239,9 +249,20 @@ impl DataExportDialog {
                 let formats = ["Text", "Excel", "JSONL", "Parquet"]; let fmt = formats[self.format_index.min(formats.len()-1)];
                 buf.set_string(inner.x + 1, fmt_y, format!("Format: {fmt} (Ctrl+F to cycle)"), Style::default());
 
+                // Dataset selection list
+                let mut list_y = fmt_y + 2;
+                buf.set_string(inner.x + 1, list_y, "Datasets:", Style::default().add_modifier(Modifier::UNDERLINED));
+                list_y = list_y.saturating_add(1);
+                for (i, ds) in self.datasets.iter().enumerate() {
+                    let checkbox = if ds.selected { "[x]" } else { "[ ]" };
+                    let text = format!("{checkbox} {}", ds.name);
+                    let style = if self.selecting_datasets && self.selected_dataset_index == i { Style::default().fg(Color::Black).bg(Color::White) } else { Style::default() };
+                    buf.set_string(inner.x + 2, list_y + i as u16, text.as_str(), style);
+                }
+
                 // CSV options (only when Text format is selected)
                 if matches!(self.current_format(), DataExportFormat::Text) {
-                    let base_y = fmt_y + 2;
+                    let base_y = list_y + self.datasets.len() as u16 + 1;
                     let enc = match self.csv_encoding { CsvEncoding::Utf8 => "UTF-8", CsvEncoding::Utf8Bom => "UTF-8 BOM", CsvEncoding::Utf16Le => "UTF-16LE" };
                     let quote_str = self.csv_quote_char.map(|c| format!("'{c}'")).unwrap_or_else(|| "None".to_string());
                     let escape_str = self.csv_escape_char.map(|c| format!("'{c}'")).unwrap_or_else(|| "None".to_string());
@@ -311,11 +332,20 @@ impl DataExportDialog {
                 None
             }
             DataExportMode::Input => {
+                // Space toggles dataset selection when focused
+                if key.code == KeyCode::Char(' ') && self.selecting_datasets && !self.datasets.is_empty() {
+                    let idx = self.selected_dataset_index.min(self.datasets.len()-1);
+                    let cur = self.datasets[idx].selected;
+                    self.datasets[idx].selected = !cur;
+                    return None;
+                }
+
                 // Global navigation/actions first
                 if let Some(action) = optional_global_action {
                     match action {
                         Action::Tab => {
-                        if self.file_path_focused { self.file_path_focused = false; self.browse_button_selected = true; self.export_button_selected = false; }
+                        if self.file_path_focused { self.file_path_focused = false; self.selecting_datasets = true; self.browse_button_selected = false; self.export_button_selected = false; }
+                        else if self.selecting_datasets { self.selecting_datasets = false; self.browse_button_selected = true; self.export_button_selected = false; }
                         else if self.browse_button_selected { self.browse_button_selected = false; self.export_button_selected = true; }
                         else { self.export_button_selected = false; self.file_path_focused = true; }
                         None
@@ -345,7 +375,9 @@ impl DataExportDialog {
                             } else { None }
                         }
                         Action::Up => {
-                        if self.export_button_selected {
+                        if self.selecting_datasets {
+                            if self.selected_dataset_index > 0 { self.selected_dataset_index -= 1; }
+                        } else if self.export_button_selected {
                             // Move up into options if Text format; otherwise to browse button
                             if matches!(self.current_format(), DataExportFormat::Text) {
                                 self.export_button_selected = false;
@@ -373,8 +405,7 @@ impl DataExportDialog {
                             // From file path, go into options if Text format; otherwise to browse
                             if matches!(self.current_format(), DataExportFormat::Text) {
                                 self.file_path_focused = false;
-                                self.options_active = true;
-                                self.option_selected = 0;
+                                self.selecting_datasets = true;
                             } else {
                                 self.file_path_focused = false;
                                 self.browse_button_selected = true;
@@ -386,6 +417,8 @@ impl DataExportDialog {
                             } else {
                                 self.option_selected = self.option_selected.saturating_add(1).min(4);
                             }
+                        } else if self.selecting_datasets {
+                            if self.selected_dataset_index + 1 < self.datasets.len() { self.selected_dataset_index += 1; }
                         } else if self.browse_button_selected {
                             self.browse_button_selected = false;
                             self.export_button_selected = true;
@@ -404,10 +437,12 @@ impl DataExportDialog {
                             self.mode = DataExportMode::FileBrowser; return None;
                         }
                         if self.export_button_selected || self.file_path_focused {
-                            match self.export_current() {
-                                Ok(msg) => { self.mode = DataExportMode::Success(msg); }
-                                Err(e) => { self.mode = DataExportMode::Error(format!("Failed to export: {e}")); }
-                            }
+                            let ids: Vec<String> = self.datasets.iter().filter(|d| d.selected).map(|d| d.id.clone()).collect();
+                            return Some(Action::DataExportRequestedMulti {
+                                dataset_ids: ids,
+                                file_path: self.file_path.clone(),
+                                format_index: self.format_index,
+                            });
                         }
                         None
                         }
@@ -421,11 +456,12 @@ impl DataExportDialog {
                     match action {
                         Action::OpenFileBrowser => { self.file_browser = Some(FileBrowserDialog::new(None, Some(vec!["csv","xlsx","jsonl","ndjson","parquet"]), false, FileBrowserMode::Save)); self.mode = DataExportMode::FileBrowser; None }
                         Action::ExportTable => {
-                            match self.export_current() {
-                                Ok(msg) => { self.mode = DataExportMode::Success(msg); }
-                                Err(e) => { self.mode = DataExportMode::Error(format!("Failed to export: {e}")); }
-                            }
-                            None
+                            let ids: Vec<String> = self.datasets.iter().filter(|d| d.selected).map(|d| d.id.clone()).collect();
+                            return Some(Action::DataExportRequestedMulti {
+                                dataset_ids: ids,
+                                file_path: self.file_path.clone(),
+                                format_index: self.format_index,
+                            });
                         }
                         _ => None,
                     }
@@ -446,100 +482,7 @@ impl DataExportDialog {
         self.file_path = self.file_path_input.lines().join("\n");
     }
 
-    fn export_current(&self) -> color_eyre::Result<String> {
-        match self.current_format() {
-            DataExportFormat::Text => self.export_text(),
-            DataExportFormat::Excel => self.export_excel(),
-            DataExportFormat::Jsonl => self.export_jsonl(),
-            DataExportFormat::Parquet => self.export_parquet(),
-        }
-    }
-
     fn ensure_parent(&self, path: &std::path::Path) -> color_eyre::Result<()> { if let Some(parent) = path.parent() && !parent.as_os_str().is_empty() { let _ = create_dir_all(parent); } Ok(()) }
-
-    fn export_text(&self) -> color_eyre::Result<String> {
-        let path = PathBuf::from(&self.file_path);
-        self.ensure_parent(path.as_path())?;
-
-        // Build CSV into UTF-8 buffer using csv::WriterBuilder
-        let mut buffer: Vec<u8> = Vec::with_capacity(1024 * 8);
-        let mut builder = WriterBuilder::new();
-        builder.delimiter(self.csv_delimiter as u8);
-        if let Some(q) = self.csv_quote_char {
-            builder.quote(q as u8);
-            builder.quote_style(csv::QuoteStyle::Necessary);
-        } else {
-            builder.quote_style(csv::QuoteStyle::Never);
-        }
-        if let Some(e) = self.csv_escape_char { builder.escape(e as u8); }
-        // Always enable flexible to allow varying row lengths without error
-        builder.flexible(true);
-        let mut wtr = builder.from_writer(&mut buffer);
-
-        if self.csv_include_header { wtr.write_record(self.headers.iter())?; }
-        for row in &self.rows { wtr.write_record(row.iter())?; }
-        wtr.flush()?;
-        drop(wtr); // ensure buffer is no longer mutably borrowed
-
-        // Write to file with desired encoding
-        let mut file = BufWriter::new(File::create(&path)?);
-        match self.csv_encoding {
-            CsvEncoding::Utf8 => {
-                file.write_all(&buffer)?;
-            }
-            CsvEncoding::Utf8Bom => {
-                file.write_all(&[0xEF, 0xBB, 0xBF])?;
-                file.write_all(&buffer)?;
-            }
-            CsvEncoding::Utf16Le => {
-                // Include BOM for UTF-16LE
-                file.write_all(&[0xFF, 0xFE])?;
-                let s = String::from_utf8(buffer).map_err(|e| color_eyre::eyre::eyre!("UTF-8 decode failed: {e}"))?;
-                for unit in s.encode_utf16() {
-                    let le = unit.to_le_bytes();
-                    file.write_all(&le)?;
-                }
-            }
-        }
-        file.flush()?;
-        Ok(format!("Exported Text to {}", path.display()))
-    }
-
-    fn export_jsonl(&self) -> color_eyre::Result<String> {
-        use serde_json::json;
-        let path = PathBuf::from(&self.file_path);
-        self.ensure_parent(path.as_path())?;
-        let mut file = BufWriter::new(File::create(&path)?);
-        for row in &self.rows {
-            let mut obj = serde_json::Map::new();
-            for (h, v) in self.headers.iter().zip(row.iter()) { obj.insert(h.clone(), json!(v)); }
-            let line = serde_json::to_string(&obj)?; writeln!(file, "{line}")?;
-        }
-        Ok(format!("Exported JSONL to {}", path.display()))
-    }
-
-    fn export_parquet(&self) -> color_eyre::Result<String> {
-        // Build a string-typed DataFrame and write parquet
-        let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(self.headers.len());
-        for (col_idx, name) in self.headers.iter().enumerate() {
-            let mut col_vals: Vec<String> = Vec::with_capacity(self.rows.len());
-            for row in &self.rows { col_vals.push(row.get(col_idx).cloned().unwrap_or_default()); }
-            let s = polars::prelude::Series::new(name.as_str().into(), col_vals);
-            cols.push(s.into());
-        }
-        let df = polars::prelude::DataFrame::new(cols)?;
-        let path = PathBuf::from(&self.file_path);
-        self.ensure_parent(path.as_path())?;
-        let file = File::create(&path)?;
-        let writer = polars::prelude::ParquetWriter::new(file);
-        let mut df_copy = df;
-        let _ = writer.finish(&mut df_copy)?;
-        Ok(format!("Exported Parquet to {}", path.display()))
-    }
-
-    fn export_excel(&self) -> color_eyre::Result<String> {
-        unimplemented!("Writing to Excel is not yet supported.")
-    }
 }
 
 impl Component for DataExportDialog {

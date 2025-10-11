@@ -93,7 +93,7 @@ use polars::prelude::{NamedFrom, IntoColumn, Series, ListChunked, PlSmallStr, Da
 use crate::providers::openai::Client as OpenAIClient;
 use crate::dialog::OperationOptions;
 use crate::dialog::{ClusterAlgorithm, KmeansOptions, DbscanOptions};
-use crate::dialog::DataExportDialog;
+// use crate::dialog::DataExportDialog; // moved to DataTabManagerDialog
 use linfa::prelude::{Fit, Predict};
 use linfa_reduction::Pca as LinfaPca;
 use ndarray::{Array2, ArrayBase, Ix2, OwnedRepr};
@@ -147,9 +147,7 @@ pub struct DataTableContainer {
     pub column_operations_dialog_active: bool,
     pub column_operation_options_dialog: Option<ColumnOperationOptionsDialog>,
     pub column_operation_options_dialog_active: bool,
-    // Data export dialog
-    pub data_export_dialog: Option<DataExportDialog>,
-    pub data_export_dialog_active: bool,
+    // Data export dialog moved to DataTabManagerDialog
     pub last_sort_dialog_area: Option<ratatui::layout::Rect>,
     pub last_sort_dialog_max_rows: Option<usize>,
     pub last_filter_dialog_area: Option<ratatui::layout::Rect>,
@@ -554,8 +552,6 @@ impl DataTableContainer {
             column_operations_dialog_active: false,
             column_operation_options_dialog: None,
             column_operation_options_dialog_active: false,
-            data_export_dialog: None,
-            data_export_dialog_active: false,
             last_sort_dialog_area: None,
             last_sort_dialog_max_rows: None,
             last_filter_dialog_area: None,
@@ -1038,7 +1034,7 @@ impl DataTableContainer {
             (Mode::DataTableContainer, Action::QuickFilterEqualsCurrentValue),
             (Mode::DataTableContainer, Action::MoveSelectedColumnLeft),
             (Mode::DataTableContainer, Action::MoveSelectedColumnRight),
-            (Mode::DataTableContainer, Action::OpenDataExportDialog),
+            // (Mode::DataTableContainer, Action::OpenDataExportDialog),
             (Mode::DataTableContainer, Action::OpenSqlDialog),
             (Mode::DataTableContainer, Action::OpenJmesDialog),
             (Mode::DataTableContainer, Action::OpenColumnOperationsDialog),
@@ -1087,9 +1083,7 @@ impl Component for DataTableContainer {
         let _ = self.dataframe_details_dialog.register_config_handler(config.clone());
         let _ = self.jmes_dialog.register_config_handler(config.clone());
         let _ = self.column_operations_dialog.register_config_handler(config.clone());
-        if let Some(d) = &mut self.data_export_dialog {
-            d.register_config_handler(config.clone())?;
-        }
+        // DataExportDialog moved to DataTabManagerDialog
         Ok(())
     }
     /// Initialize the component with the given area size.
@@ -1357,17 +1351,7 @@ impl Component for DataTableContainer {
             }
             return Ok(None);
         }
-        // Route key events to DataExportDialog if active
-        if self.data_export_dialog_active {
-            if let Some(dialog) = &mut self.data_export_dialog
-                && let Some(action) = dialog.handle_key_event(key)
-                    && action == Action::DialogClose {
-                    self.data_export_dialog_active = false;
-                    self.data_export_dialog = None;
-                    return Ok(None);
-                }
-            return Ok(None);
-        }
+        // DataExportDialog moved to DataTabManagerDialog
         // Route key events to JmesPathDialog if active
         if self.jmes_dialog_active {
             if let Some(action) = self.jmes_dialog.handle_key_event(key) {
@@ -1904,25 +1888,8 @@ impl Component for DataTableContainer {
                     return Ok(None);
                 }
                 Action::OpenDataExportDialog => {
-                    let visible_columns = self.datatable.get_visible_columns()
-                        .unwrap_or_default();
-                    let df_arc = self.datatable.get_dataframe()?;
-                    let df = df_arc.as_ref();
-                    let mut rows: Vec<Vec<String>> = Vec::with_capacity(df.height());
-                    for row_idx in 0..df.height() {
-                        let mut row: Vec<String> = Vec::with_capacity(visible_columns.len());
-                        for col in &visible_columns {
-                            let cell = df.column(col).ok().and_then(|s| s.get(row_idx).ok()).map(|v| v.str_value().to_string()).unwrap_or_default();
-                            row.push(cell);
-                        }
-                        rows.push(row);
-                    }
-                    let suggested = Some("export.csv".to_string());
-                    let mut dialog = DataExportDialog::new(visible_columns, rows, suggested);
-                    dialog.register_config_handler(self.config.clone())?;
-                    self.data_export_dialog = Some(dialog);
-                    self.data_export_dialog_active = true;
-                    return Ok(None);
+                    // Bubble up to DataTabManagerDialog to handle multi-dataset export
+                    return Ok(Some(Action::OpenDataExportDialog));
                 }
                 Action::OpenSqlDialog => { self.sql_dialog_active = true; return Ok(None); }
                 Action::OpenJmesDialog => { self.jmes_dialog_active = true; return Ok(None); }
@@ -2264,17 +2231,7 @@ impl Component for DataTableContainer {
             self.find_all_results_dialog.as_mut().unwrap().render(popup_area, frame.buffer_mut());
             self.last_find_all_results_dialog_area = Some(popup_area);
         }
-        // Render DataExportDialog as a popup overlay only if active
-        if self.data_export_dialog_active
-            && let Some(dialog) = &mut self.data_export_dialog {
-                let popup_area = ratatui::layout::Rect {
-                    x: area.x + area.width / 8,
-                    y: area.y + area.height / 8,
-                    width: area.width - area.width / 4,
-                    height: area.height - area.height / 4,
-                };
-                dialog.render(popup_area, frame.buffer_mut());
-            }
+        // DataExportDialog rendering moved to DataTabManagerDialog
         // Render DataFrameDetailsDialog as a popup overlay only if active
         if self.dataframe_details_dialog_active {
 			let popup_area = ratatui::layout::Rect {
