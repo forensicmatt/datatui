@@ -839,13 +839,11 @@ impl DataManagementDialog {
     /// Build instructions string from configured keybindings (Global + DataManagement)
     fn build_instructions_from_config(&self) -> String {
         self.config.actions_to_instructions(&[
-            (crate::config::Mode::Global, crate::action::Action::Up),
-            (crate::config::Mode::Global, crate::action::Action::Down),
+            (crate::config::Mode::Global, crate::action::Action::Escape),
             (crate::config::Mode::DataManagement, crate::action::Action::EditSelectedAlias),
             (crate::config::Mode::DataManagement, crate::action::Action::DeleteSelectedSource),
             (crate::config::Mode::DataManagement, crate::action::Action::OpenDataImportDialog),
             (crate::config::Mode::DataManagement, crate::action::Action::LoadAllPendingDatasets),
-            (crate::config::Mode::DataManagement, crate::action::Action::DialogClose),
         ])
     }
 

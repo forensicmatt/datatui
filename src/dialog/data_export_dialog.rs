@@ -8,7 +8,7 @@ use crate::components::Component;
 use crate::config::Config;
 use crate::action::Action;
 use color_eyre::Result;
-use crossterm::event::{KeyEvent, KeyEventKind, KeyCode, KeyModifiers, MouseEvent};
+use crossterm::event::{KeyEvent, KeyEventKind, MouseEvent};
 use tui_textarea::TextArea;
 use arboard::Clipboard;
 use std::fs::{File, create_dir_all};
@@ -16,6 +16,7 @@ use std::io::{Write, BufWriter};
 use std::path::PathBuf;
 use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserAction, FileBrowserMode};
 use polars::prelude::*;
+use csv::WriterBuilder;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataExportMode {
@@ -33,6 +34,13 @@ pub enum DataExportFormat {
     Parquet,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CsvEncoding {
+    Utf8,
+    Utf8Bom,
+    Utf16Le,
+}
+
 #[derive(Debug)]
 pub struct DataExportDialog {
     pub headers: Vec<String>,
@@ -46,7 +54,16 @@ pub struct DataExportDialog {
     pub format_index: usize, // 0 Text, 1 Excel, 2 JSONL, 3 Parquet
     pub file_browser: Option<FileBrowserDialog>,
     pub show_instructions: bool,
-    pub config: Config
+    pub config: Config,
+    // CSV options for Text export
+    pub csv_delimiter: char,
+    pub csv_quote_char: Option<char>,
+    pub csv_escape_char: Option<char>,
+    pub csv_include_header: bool,
+    pub csv_encoding: CsvEncoding,
+    // Options navigation state
+    pub options_active: bool,
+    pub option_selected: usize,
 }
 
 impl DataExportDialog {
@@ -70,7 +87,14 @@ impl DataExportDialog {
             format_index: 0,
             file_browser: None,
             show_instructions: true,
-            config: Config::default()
+            config: Config::default(),
+            csv_delimiter: ',',
+            csv_quote_char: Some('"'),
+            csv_escape_char: None,
+            csv_include_header: true,
+            csv_encoding: CsvEncoding::Utf8,
+            options_active: false,
+            option_selected: 0,
         }
     }
 
@@ -78,10 +102,75 @@ impl DataExportDialog {
         match self.format_index { 0 => DataExportFormat::Text, 1 => DataExportFormat::Excel, 2 => DataExportFormat::Jsonl, _ => DataExportFormat::Parquet }
     }
 
+    fn build_instructions_from_config(&self) -> String {
+        self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Tab),
+            (crate::config::Mode::Global, crate::action::Action::Up),
+            (crate::config::Mode::Global, crate::action::Action::Down),
+            (crate::config::Mode::Global, crate::action::Action::Left),
+            (crate::config::Mode::Global, crate::action::Action::Right),
+            (crate::config::Mode::Global, crate::action::Action::Enter),
+            (crate::config::Mode::Global, crate::action::Action::Escape),
+            (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+            (crate::config::Mode::TableExport, crate::action::Action::OpenFileBrowser),
+            (crate::config::Mode::TableExport, crate::action::Action::Paste),
+            (crate::config::Mode::TableExport, crate::action::Action::CopyFilePath),
+            (crate::config::Mode::TableExport, crate::action::Action::ExportTable),
+        ])
+    }
+
+    fn adjust_option(&mut self, delta: i32) {
+        if !matches!(self.current_format(), DataExportFormat::Text) { return; }
+        match self.option_selected {
+            0 => { // delimiter
+                let seq = [',', '\t', ';', '|'];
+                let pos = seq.iter().position(|&c| c == self.csv_delimiter).unwrap_or(0) as i32;
+                let new = (pos + delta).rem_euclid(seq.len() as i32) as usize;
+                self.csv_delimiter = seq[new];
+            }
+            1 => { // quote char
+                // cycle: '"' -> '\'' -> None -> '"'
+                let state = self.csv_quote_char;
+                self.csv_quote_char = match (state, delta.signum()) {
+                    (Some('"'), 1) | (Some('"'), -1) => Some('\''),
+                    (Some('\''), 1) | (Some('\''), -1) => None,
+                    (None, 1) | (None, -1) => Some('"'),
+                    _ => Some('"'),
+                };
+            }
+            2 => { // escape char
+                // set/remove with char; arrows toggle between None and '\\'
+                if self.csv_escape_char.is_some() { self.csv_escape_char = None; } else { self.csv_escape_char = Some('\\'); }
+            }
+            3 => { // header
+                self.csv_include_header = !self.csv_include_header;
+            }
+            4 => { // encoding
+                self.csv_encoding = match (self.csv_encoding, delta.signum()) {
+                    (CsvEncoding::Utf8, 1) | (CsvEncoding::Utf16Le, -1) => CsvEncoding::Utf8Bom,
+                    (CsvEncoding::Utf8Bom, 1) | (CsvEncoding::Utf8, -1) => CsvEncoding::Utf16Le,
+                    (CsvEncoding::Utf16Le, 1) | (CsvEncoding::Utf8Bom, -1) => CsvEncoding::Utf8,
+                    (other, _) => other,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn set_option_char(&mut self, c: Option<char>) {
+        if !matches!(self.current_format(), DataExportFormat::Text) { return; }
+        match self.option_selected {
+            0 => { if let Some(ch) = c { self.csv_delimiter = ch; } }
+            1 => { self.csv_quote_char = c; }
+            2 => { self.csv_escape_char = c; }
+            _ => {}
+        }
+    }
+
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        let instructions = "Tab: Switch  ←/→: Move  Ctrl+p:Paste  Ctrl+c:Copy  Ctrl+b:Browse  Enter:[Browse/Export]  Esc:Close  Ctrl+f:Format";
-        let layout = split_dialog_area(area, self.show_instructions, Some(instructions));
+        let instructions = self.build_instructions_from_config();
+        let layout = split_dialog_area(area, self.show_instructions, Some(instructions.as_str()));
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
 
@@ -150,6 +239,27 @@ impl DataExportDialog {
                 let formats = ["Text", "Excel", "JSONL", "Parquet"]; let fmt = formats[self.format_index.min(formats.len()-1)];
                 buf.set_string(inner.x + 1, fmt_y, format!("Format: {fmt} (Ctrl+F to cycle)"), Style::default());
 
+                // CSV options (only when Text format is selected)
+                if matches!(self.current_format(), DataExportFormat::Text) {
+                    let base_y = fmt_y + 2;
+                    let enc = match self.csv_encoding { CsvEncoding::Utf8 => "UTF-8", CsvEncoding::Utf8Bom => "UTF-8 BOM", CsvEncoding::Utf16Le => "UTF-16LE" };
+                    let quote_str = self.csv_quote_char.map(|c| format!("'{c}'")).unwrap_or_else(|| "None".to_string());
+                    let escape_str = self.csv_escape_char.map(|c| format!("'{c}'")).unwrap_or_else(|| "None".to_string());
+                    let header_str = if self.csv_include_header { "Yes" } else { "No" };
+
+                    let options = [
+                        format!("Delimiter: '{}'", self.csv_delimiter),
+                        format!("Quote Char: {}", quote_str),
+                        format!("Escape Char: {}", escape_str),
+                        format!("Has Header: {}", header_str),
+                        format!("Encoding: {}", enc),
+                    ];
+                    for (i, line) in options.iter().enumerate() {
+                        let style = if self.options_active && self.option_selected == i { Style::default().fg(Color::Black).bg(Color::White) } else { Style::default() };
+                        buf.set_string(inner.x + 1, base_y + i as u16, line, style);
+                    }
+                }
+
                 // Export button bottom-right
                 let export_text = "[Export]";
                 let export_x = content_area.x + content_area.width.saturating_sub(export_text.len() as u16 + 2);
@@ -172,11 +282,9 @@ impl DataExportDialog {
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
         if key.kind != KeyEventKind::Press { return None; }
 
-        // Toggle instructions
-        if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.show_instructions = !self.show_instructions;
-            return None;
-        }
+        // Resolve actions from config
+        let optional_global_action = self.config.action_for_key(crate::config::Mode::Global, key);
+        let export_action = self.config.action_for_key(crate::config::Mode::TableExport, key);
 
         match &mut self.mode {
             DataExportMode::FileBrowser => {
@@ -197,38 +305,94 @@ impl DataExportDialog {
                 None
             }
             DataExportMode::Error(_) | DataExportMode::Success(_) => {
-                match key.code {
-                    KeyCode::Esc | KeyCode::Enter => {
-                        return Some(Action::DialogClose);
-                    }
-                    _ => {}
+                if let Some(Action::Escape | Action::Enter) = &optional_global_action {
+                    return Some(Action::DialogClose);
                 }
                 None
             }
             DataExportMode::Input => {
-                match key.code {
-                    KeyCode::Tab => {
+                // Global navigation/actions first
+                if let Some(action) = optional_global_action {
+                    match action {
+                        Action::Tab => {
                         if self.file_path_focused { self.file_path_focused = false; self.browse_button_selected = true; self.export_button_selected = false; }
                         else if self.browse_button_selected { self.browse_button_selected = false; self.export_button_selected = true; }
                         else { self.export_button_selected = false; self.file_path_focused = true; }
                         None
-                    }
-                    KeyCode::Right => {
+                        }
+                        Action::Right => {
+                            if self.options_active {
+                                self.adjust_option(1);
+                                None
+                            } else if self.file_path_focused {
+                                use tui_textarea::Input as TuiInput; let input: TuiInput = key.into();
+                                self.file_path_input.input(input); self.sync_file_path_from_input();
+                                None
+                            } else if self.browse_button_selected {
+                                self.browse_button_selected = false; self.export_button_selected = true; None
+                            } else { None }
+                        }
+                        Action::Left => {
+                            if self.options_active {
+                                self.adjust_option(-1);
+                                None
+                            } else if self.export_button_selected {
+                                self.export_button_selected = false; self.browse_button_selected = true; None
+                            } else if self.browse_button_selected {
+                                self.browse_button_selected = false; self.file_path_focused = true; None
+                            } else if self.file_path_focused {
+                                use tui_textarea::Input as TuiInput; let input: TuiInput = key.into(); self.file_path_input.input(input); self.sync_file_path_from_input(); None
+                            } else { None }
+                        }
+                        Action::Up => {
+                        if self.export_button_selected {
+                            // Move up into options if Text format; otherwise to browse button
+                            if matches!(self.current_format(), DataExportFormat::Text) {
+                                self.export_button_selected = false;
+                                self.options_active = true;
+                                self.option_selected = 4; // last option
+                            } else {
+                                self.export_button_selected = false;
+                                self.browse_button_selected = true;
+                            }
+                        } else if self.options_active {
+                            if self.option_selected == 0 {
+                                self.options_active = false;
+                                self.file_path_focused = true;
+                            } else {
+                                self.option_selected = self.option_selected.saturating_sub(1);
+                            }
+                        } else if self.browse_button_selected {
+                            self.browse_button_selected = false;
+                            self.file_path_focused = true;
+                        }
+                        None
+                        }
+                        Action::Down => {
                         if self.file_path_focused {
-                            use tui_textarea::Input as TuiInput; let input: TuiInput = key.into();
-                            self.file_path_input.input(input); self.sync_file_path_from_input();
-                        } else if self.browse_button_selected { self.browse_button_selected = false; self.export_button_selected = true; }
+                            // From file path, go into options if Text format; otherwise to browse
+                            if matches!(self.current_format(), DataExportFormat::Text) {
+                                self.file_path_focused = false;
+                                self.options_active = true;
+                                self.option_selected = 0;
+                            } else {
+                                self.file_path_focused = false;
+                                self.browse_button_selected = true;
+                            }
+                        } else if self.options_active {
+                            if self.option_selected >= 4 {
+                                self.options_active = false;
+                                self.export_button_selected = true;
+                            } else {
+                                self.option_selected = self.option_selected.saturating_add(1).min(4);
+                            }
+                        } else if self.browse_button_selected {
+                            self.browse_button_selected = false;
+                            self.export_button_selected = true;
+                        }
                         None
-                    }
-                    KeyCode::Left => {
-                        if self.export_button_selected { self.export_button_selected = false; self.browse_button_selected = true; }
-                        else if self.browse_button_selected { self.browse_button_selected = false; self.file_path_focused = true; }
-                        else if self.file_path_focused { use tui_textarea::Input as TuiInput; let input: TuiInput = key.into(); self.file_path_input.input(input); self.sync_file_path_from_input(); }
-                        None
-                    }
-                    KeyCode::Up => { if self.export_button_selected { self.export_button_selected = false; self.browse_button_selected = true; } else if self.browse_button_selected { self.browse_button_selected = false; self.file_path_focused = true; } None }
-                    KeyCode::Down => { if self.file_path_focused { self.file_path_focused = false; self.browse_button_selected = true; } else if self.browse_button_selected { self.browse_button_selected = false; self.export_button_selected = true; } None }
-                    KeyCode::Enter => {
+                        }
+                        Action::Enter => {
                         if self.browse_button_selected {
                             let mut dialog_file_browser = FileBrowserDialog::new(
                                 None, 
@@ -246,23 +410,27 @@ impl DataExportDialog {
                             }
                         }
                         None
+                        }
+                        Action::Backspace => { if self.file_path_focused { use tui_textarea::Input as TuiInput; let input: TuiInput = key.into(); self.file_path_input.input(input); self.sync_file_path_from_input(); } else if self.options_active { self.set_option_char(None); } None }
+                        Action::Paste => { if self.file_path_focused && let Ok(mut clipboard) = Clipboard::new() && let Ok(text) = clipboard.get_text() { let first_line = text.lines().next().unwrap_or("").to_string(); self.set_file_path(first_line); } None }
+                        Action::CopyFilePath => { if let Ok(mut clipboard) = Clipboard::new() { let _ = clipboard.set_text(self.file_path.clone()); } None }
+                        Action::Escape => { return Some(Action::DialogClose); }
+                        _ => None,
                     }
-                    KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.file_browser = Some(FileBrowserDialog::new(None, Some(vec!["csv","xlsx","jsonl","ndjson","parquet"]), false, FileBrowserMode::Save));
-                        self.mode = DataExportMode::FileBrowser; None
+                } else if let Some(action) = export_action {
+                    match action {
+                        Action::OpenFileBrowser => { self.file_browser = Some(FileBrowserDialog::new(None, Some(vec!["csv","xlsx","jsonl","ndjson","parquet"]), false, FileBrowserMode::Save)); self.mode = DataExportMode::FileBrowser; None }
+                        Action::ExportTable => {
+                            match self.export_current() {
+                                Ok(msg) => { self.mode = DataExportMode::Success(msg); }
+                                Err(e) => { self.mode = DataExportMode::Error(format!("Failed to export: {e}")); }
+                            }
+                            None
+                        }
+                        _ => None,
                     }
-                    KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.format_index = (self.format_index + 1) % 4; None
-                    }
-                    KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if self.file_path_focused && let Ok(mut clipboard) = Clipboard::new() && let Ok(text) = clipboard.get_text() { let first_line = text.lines().next().unwrap_or("").to_string(); self.set_file_path(first_line); }
-                        None
-                    }
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => { if let Ok(mut clipboard) = Clipboard::new() { let _ = clipboard.set_text(self.file_path.clone()); } None }
-                    KeyCode::Backspace => { if self.file_path_focused { use tui_textarea::Input as TuiInput; let input: TuiInput = key.into(); self.file_path_input.input(input); self.sync_file_path_from_input(); } None }
-                    KeyCode::Char(_c) => { if self.file_path_focused { use tui_textarea::Input as TuiInput; let input: TuiInput = key.into(); self.file_path_input.input(input); self.sync_file_path_from_input(); } None }
-                    KeyCode::Esc => { Some(Action::DialogClose) }
-                    _ => None,
+                } else {
+                    None
                 }
             }
         }
@@ -292,10 +460,48 @@ impl DataExportDialog {
     fn export_text(&self) -> color_eyre::Result<String> {
         let path = PathBuf::from(&self.file_path);
         self.ensure_parent(path.as_path())?;
+
+        // Build CSV into UTF-8 buffer using csv::WriterBuilder
+        let mut buffer: Vec<u8> = Vec::with_capacity(1024 * 8);
+        let mut builder = WriterBuilder::new();
+        builder.delimiter(self.csv_delimiter as u8);
+        if let Some(q) = self.csv_quote_char {
+            builder.quote(q as u8);
+            builder.quote_style(csv::QuoteStyle::Necessary);
+        } else {
+            builder.quote_style(csv::QuoteStyle::Never);
+        }
+        if let Some(e) = self.csv_escape_char { builder.escape(e as u8); }
+        // Always enable flexible to allow varying row lengths without error
+        builder.flexible(true);
+        let mut wtr = builder.from_writer(&mut buffer);
+
+        if self.csv_include_header { wtr.write_record(self.headers.iter())?; }
+        for row in &self.rows { wtr.write_record(row.iter())?; }
+        wtr.flush()?;
+        drop(wtr); // ensure buffer is no longer mutably borrowed
+
+        // Write to file with desired encoding
         let mut file = BufWriter::new(File::create(&path)?);
-        // write header
-        writeln!(file, "{}", self.headers.join(","))?;
-        for row in &self.rows { writeln!(file, "{}", row.join(","))?; }
+        match self.csv_encoding {
+            CsvEncoding::Utf8 => {
+                file.write_all(&buffer)?;
+            }
+            CsvEncoding::Utf8Bom => {
+                file.write_all(&[0xEF, 0xBB, 0xBF])?;
+                file.write_all(&buffer)?;
+            }
+            CsvEncoding::Utf16Le => {
+                // Include BOM for UTF-16LE
+                file.write_all(&[0xFF, 0xFE])?;
+                let s = String::from_utf8(buffer).map_err(|e| color_eyre::eyre::eyre!("UTF-8 decode failed: {e}"))?;
+                for unit in s.encode_utf16() {
+                    let le = unit.to_le_bytes();
+                    file.write_all(&le)?;
+                }
+            }
+        }
+        file.flush()?;
         Ok(format!("Exported Text to {}", path.display()))
     }
 

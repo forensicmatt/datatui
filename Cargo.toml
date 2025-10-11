@@ -64,6 +64,8 @@ ndarray = "0.15"
 linfa-clustering = "0.7.1"
 linfa-nn = "0.7.1"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
+csv = "1.3.0"
+encoding_rs = "0.8.35"
 
 [build-dependencies]
 anyhow = "1.0.90"
