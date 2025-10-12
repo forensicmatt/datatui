@@ -1394,11 +1394,8 @@ impl DataFrameDetailsDialog {
         }
 
         // Fallback for character input or other unhandled keys
-        match key.code {
-            KeyCode::Char(_c) => {
-                // Handle character input if needed
-            }
-            _ => {}
+        if let KeyCode::Char(_c) = key.code {
+            // Handle character input if needed
         }
         None
     }

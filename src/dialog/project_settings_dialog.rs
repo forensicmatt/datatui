@@ -294,26 +294,20 @@ impl ProjectSettingsDialog {
         if key.kind == KeyEventKind::Press {
             // Handle Ctrl+I for instructions toggle if applicable
             if let Some(global_action) = self.keybindings_config.action_for_key(crate::config::Mode::Global, key) {
-                match global_action {
-                    Action::ToggleInstructions => {
-                        self.show_instructions = !self.show_instructions;
-                        return None;
-                    }
-                    _ => {}
+                if global_action == Action::ToggleInstructions {
+                    self.show_instructions = !self.show_instructions;
+                    return None;
                 }
             }
 
             // Check for ProjectSettings-specific actions
             if let Some(dialog_action) = self.keybindings_config.action_for_key(crate::config::Mode::ProjectSettings, key) {
-                match dialog_action {
-                    Action::ToggleDataViewerOption => {
-                        // Toggle boolean when data viewer option is selected
-                        if self.data_viewer_selected {
-                            self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
-                        }
-                        return None;
+                if dialog_action == Action::ToggleDataViewerOption {
+                    // Toggle boolean when data viewer option is selected
+                    if self.data_viewer_selected {
+                        self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
                     }
-                    _ => {}
+                    return None;
                 }
             }
         }
@@ -630,26 +624,20 @@ impl Component for ProjectSettingsDialog {
         if key.kind == KeyEventKind::Press {
             // Handle Ctrl+I for instructions toggle if applicable
             if let Some(global_action) = self.keybindings_config.action_for_key(crate::config::Mode::Global, key) {
-                match global_action {
-                    Action::ToggleInstructions => {
-                        self.show_instructions = !self.show_instructions;
-                        return Ok(None);
-                    }
-                    _ => {}
+                if global_action == Action::ToggleInstructions {
+                    self.show_instructions = !self.show_instructions;
+                    return Ok(None);
                 }
             }
 
             // Check for ProjectSettings-specific actions
             if let Some(dialog_action) = self.keybindings_config.action_for_key(crate::config::Mode::ProjectSettings, key) {
-                match dialog_action {
-                    Action::ToggleDataViewerOption => {
-                        // Toggle boolean when data viewer option is selected
-                        if self.data_viewer_selected {
-                            self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
-                        }
-                        return Ok(None);
+                if dialog_action == Action::ToggleDataViewerOption {
+                    // Toggle boolean when data viewer option is selected
+                    if self.data_viewer_selected {
+                        self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
                     }
-                    _ => {}
+                    return Ok(None);
                 }
             }
         }

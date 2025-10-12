@@ -21,14 +21,13 @@ pub struct KeybindingEntry {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[derive(Default)]
 pub enum CaptureState {
+    #[default]
     Inactive,
     Active { action_index: usize, pressed_display: String, pressed_keys: Vec<KeyEvent> },
 }
 
-impl Default for CaptureState {
-    fn default() -> Self { CaptureState::Inactive }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct KeybindingsDialog {

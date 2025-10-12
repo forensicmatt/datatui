@@ -256,12 +256,9 @@ impl Component for AliasEditDialog {
 
             // Next, check for dialog-specific actions
             if let Some(dialog_action) = self.config.action_for_key(crate::config::Mode::AliasEdit, key) {
-                match dialog_action {
-                    Action::ClearText => {
-                        self.clear();
-                        return Ok(None);
-                    }
-                    _ => {}
+                if dialog_action == Action::ClearText {
+                    self.clear();
+                    return Ok(None);
                 }
             }
 

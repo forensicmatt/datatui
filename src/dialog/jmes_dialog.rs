@@ -94,7 +94,9 @@ impl JmesPathDialog {
 
     /// Build instructions string from configured keybindings
     fn build_instructions_from_config(&self) -> String {
-        let instructions = match self.mode {
+        
+        
+        match self.mode {
             JmesDialogMode::InputTransform => {
                 let base_instructions = self.config.actions_to_instructions(&[
                     (crate::config::Mode::JmesPath, crate::action::Action::ApplyTransform),
@@ -122,10 +124,8 @@ impl JmesPathDialog {
                 ]);
                 format!("Add column entries as key/value pairs. {base_instructions}  Space:Toggle Option (when selected)")
             }
-            JmesDialogMode::Error(_) => return String::new(),
-        };
-        
-        instructions
+            JmesDialogMode::Error(_) => String::new(),
+        }
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) {

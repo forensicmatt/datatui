@@ -579,7 +579,7 @@ impl DataExportDialog {
                         Action::ToggleDataViewerOption => { if self.options_active { self.adjust_option(1); } None }
                         Action::Paste => { if self.file_path_focused && let Ok(mut clipboard) = Clipboard::new() && let Ok(text) = clipboard.get_text() { let first_line = text.lines().next().unwrap_or("").to_string(); self.set_file_path(first_line); } None }
                         Action::CopyFilePath => { if let Ok(mut clipboard) = Clipboard::new() { let _ = clipboard.set_text(self.file_path.clone()); } None }
-                        Action::Escape => { return Some(Action::DialogClose); }
+                        Action::Escape => { Some(Action::DialogClose)}
                         _ => None,
                     }
                 } else if let Some(action) = export_action {
@@ -588,11 +588,11 @@ impl DataExportDialog {
                         Action::ToggleFormat => { self.format_index = (self.format_index + 1) % 4; self.update_output_path_for_format(); None }
                         Action::ExportTable => {
                             let ids: Vec<String> = self.datasets.iter().filter(|d| d.selected).map(|d| d.id.clone()).collect();
-                            return Some(Action::DataExportRequestedMulti {
+                            Some(Action::DataExportRequestedMulti {
                                 dataset_ids: ids,
                                 file_path: self.file_path.clone(),
                                 format_index: self.format_index,
-                            });
+                            })
                         }
                         _ => None,
                     }

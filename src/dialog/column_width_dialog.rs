@@ -196,7 +196,7 @@ impl ColumnWidthDialog {
 
     /// Build instructions string from configured keybindings
     fn build_instructions_from_config(&self) -> String {
-        return self.key_config.actions_to_instructions(&[
+        self.key_config.actions_to_instructions(&[
             (Mode::ColumnWidthDialog, Action::ToggleAutoExpand),
             (Mode::ColumnWidthDialog, Action::ToggleColumnHidden),
             (Mode::ColumnWidthDialog, Action::MoveColumnUp),

@@ -1,3 +1,6 @@
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::collapsible_else_if)]
 pub mod style;
 pub mod components;
 pub mod dataframe;
