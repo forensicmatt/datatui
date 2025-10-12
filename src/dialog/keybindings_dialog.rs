@@ -126,7 +126,7 @@ impl KeybindingsDialog {
         block.render(area, buf);
         let mut x = inner.x;
         for (i, m) in modes.iter().enumerate() {
-            let name = format!("{}", serde_json::to_string(m).unwrap_or_else(|_| format!("{:?}", m)));
+            let name = serde_json::to_string(m).unwrap_or_else(|_| format!("{m:?}")).to_string();
             let mut style = Style::default();
             if i == self.selected_grouping {
                 style = style.fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD);

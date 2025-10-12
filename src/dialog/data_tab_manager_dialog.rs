@@ -783,7 +783,7 @@ impl DataTabManagerDialog {
                 let name = self.tabs.iter().find(|t| t.loaded_dataset.dataset.id == ds_id).map(|t| t.display_name()).unwrap_or_else(|| ds_id.clone());
                 let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("export");
                 let parent = base.parent().unwrap_or_else(|| std::path::Path::new("."));
-                parent.join(format!("{}_{}.{}", stem, name, ext))
+                parent.join(format!("{stem}_{name}.{ext}"))
             } else {
                 base.clone()
             };
@@ -924,7 +924,7 @@ impl Component for DataTabManagerDialog {
                             if let Err(e) = self.export_selected_datasets(dataset_ids, &file_path, format_index) {
                                 if let Some(d) = &mut self.data_export_dialog { d.mode = DataExportMode::Error(format!("{e}")); }
                             } else {
-                                if let Some(d) = &mut self.data_export_dialog { d.mode = DataExportMode::Success(format!("Export complete: {}", file_path)); }
+                                if let Some(d) = &mut self.data_export_dialog { d.mode = DataExportMode::Success(format!("Export complete: {file_path}")); }
                             }
                             return Ok(None);
                         }

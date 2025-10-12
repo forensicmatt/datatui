@@ -131,7 +131,7 @@ impl Config {
             .map(|(mode, action)| {
                 let friendly_name = self.action_to_friendly_name(action);
                 if let Some(key) = self.key_for_action(*mode, action) {
-                    format!("{}: {}", key, friendly_name)
+                    format!("{key}: {friendly_name}")
                 } else {
                     friendly_name.to_string()
                 }

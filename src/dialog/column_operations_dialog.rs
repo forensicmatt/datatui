@@ -138,9 +138,9 @@ impl ColumnOperationsDialog {
         
         // Calculate required height for text content
         let desc_header = 1; // "Description:" line
-        let desc_lines = self.calculate_text_lines(&format!("  {}", description), text_width);
+        let desc_lines = self.calculate_text_lines(&format!("  {description}"), text_width);
         let req_header = 1; // "Requirements:" line
-        let req_lines = self.calculate_text_lines(&format!("  {}", requirements), text_width);
+        let req_lines = self.calculate_text_lines(&format!("  {requirements}"), text_width);
         let spacing = 1; // Space between sections
         
         let total_content_height = desc_header + desc_lines + spacing + req_header + req_lines;
@@ -182,7 +182,7 @@ impl ColumnOperationsDialog {
             .add_modifier(Modifier::BOLD);
         buf.set_string(inner_details.x, inner_details.y, "Description:", desc_style);
         self.render_wrapped_text(
-            &format!("  {}", description),
+            &format!("  {description}"),
             inner_details.x,
             inner_details.y + 1,
             inner_details.width,
@@ -197,7 +197,7 @@ impl ColumnOperationsDialog {
             .add_modifier(Modifier::BOLD);
         buf.set_string(inner_details.x, req_y, "Requirements:", req_style);
         self.render_wrapped_text(
-            &format!("  {}", requirements),
+            &format!("  {requirements}"),
             inner_details.x,
             req_y + 1,
             inner_details.width,

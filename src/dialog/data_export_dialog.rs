@@ -310,11 +310,11 @@ impl DataExportDialog {
                     let delimiter_str = if self.csv_delimiter == '\t' { "\\t".to_string() } else { format!("'{}'", self.csv_delimiter) };
 
                     let options = [
-                        format!("Delimiter: {}", delimiter_str),
-                        format!("Quote Char: {}", quote_str),
-                        format!("Escape Char: {}", escape_str),
-                        format!("Has Header: {}", header_str),
-                        format!("Encoding: {}", enc),
+                        format!("Delimiter: {delimiter_str}"),
+                        format!("Quote Char: {quote_str}"),
+                        format!("Escape Char: {escape_str}"),
+                        format!("Has Header: {header_str}"),
+                        format!("Encoding: {enc}"),
                     ];
                     for (i, line) in options.iter().enumerate() {
                         let style = if self.options_active && self.option_selected == i { Style::default().fg(Color::Black).bg(Color::White) } else { Style::default() };

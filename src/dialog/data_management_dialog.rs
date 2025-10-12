@@ -630,7 +630,7 @@ impl DataSource {
                                     SqlValue::Integer(x) => Some(x.to_string()),
                                     SqlValue::Real(f) => Some(f.to_string()),
                                     SqlValue::Text(s) => Some(s.clone()),
-                                    SqlValue::Blob(b) => Some(format!("{:?}", b)),
+                                    SqlValue::Blob(b) => Some(format!("{b:?}")),
                                 })
                                 .collect();
                             let series = Series::new(col_name.clone().into(), data);
@@ -644,7 +644,7 @@ impl DataSource {
                                     SqlValue::Integer(x) => Some(x.to_string()),
                                     SqlValue::Real(f) => Some(f.to_string()),
                                     SqlValue::Text(s) => Some(s.clone()),
-                                    SqlValue::Blob(b) => Some(format!("{:?}", b)),
+                                    SqlValue::Blob(b) => Some(format!("{b:?}")),
                                 })
                                 .collect();
                             let series = Series::new(col_name.clone().into(), data);
