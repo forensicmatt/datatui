@@ -11,8 +11,8 @@ use color_eyre::Result;
 use crossterm::event::{KeyEvent, KeyEventKind, MouseEvent, KeyCode};
 use tui_textarea::TextArea;
 use arboard::Clipboard;
-use std::fs::create_dir_all;
 use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserAction, FileBrowserMode};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataExportMode {
@@ -123,10 +123,26 @@ impl DataExportDialog {
             (crate::config::Mode::TableExport, crate::action::Action::Paste),
             (crate::config::Mode::TableExport, crate::action::Action::CopyFilePath),
             (crate::config::Mode::TableExport, crate::action::Action::ExportTable),
+            (crate::config::Mode::TableExport, crate::action::Action::ToggleDataViewerOption),
+            (crate::config::Mode::TableExport, crate::action::Action::ToggleFormat),
         ]);
         if !s.is_empty() { s.push_str("  "); }
-        s.push_str("Space: Toggle dataset  Up/Down: Navigate datasets");
+        s.push_str("Space: Toggle dataset/option  Up/Down: Navigate datasets");
         s
+    }
+
+    fn update_output_path_for_format(&mut self) {
+        let ext = match self.current_format() {
+            DataExportFormat::Text => "csv",
+            DataExportFormat::Excel => "xlsx",
+            DataExportFormat::Jsonl => "jsonl",
+            DataExportFormat::Parquet => "parquet",
+        };
+        let mut pb = PathBuf::from(&self.file_path);
+        pb.set_extension(ext);
+        if let Some(s) = pb.to_str() {
+            self.set_file_path(s.to_string());
+        }
     }
 
     fn adjust_option(&mut self, delta: i32) {
@@ -135,7 +151,7 @@ impl DataExportDialog {
             0 => { // delimiter
                 let seq = [',', '\t', ';', '|'];
                 let pos = seq.iter().position(|&c| c == self.csv_delimiter).unwrap_or(0) as i32;
-                let new = (pos + delta).rem_euclid(seq.len() as i32) as usize;
+                let new: usize = (pos + delta).rem_euclid(seq.len() as i32) as usize;
                 self.csv_delimiter = seq[new];
             }
             1 => { // quote char
@@ -198,6 +214,8 @@ impl DataExportDialog {
                     .borders(Borders::ALL)
                     .border_type(ratatui::widgets::BorderType::Double);
                 let inner = block.inner(content_area);
+                // Shrink inner content area by one row to avoid drawing on bottom border
+                let inner = Rect { x: inner.x, y: inner.y, width: inner.width, height: inner.height.saturating_sub(1) };
                 block.render(content_area, buf);
                 let paragraph = Paragraph::new(msg.clone())
                     .wrap(Wrap { trim: true })
@@ -224,52 +242,75 @@ impl DataExportDialog {
                 let inner = block.inner(content_area);
                 block.render(content_area, buf);
 
-                // File path line with [Browse]
-                let file_path_area = Rect { x: inner.x, y: inner.y, width: inner.width, height: 3 };
+                // Usable inner area (avoid bottom border)
+                let usable = Rect { x: inner.x, y: inner.y, width: inner.width, height: inner.height.saturating_sub(1) };
+
+                // TOP: Output File Path spanning full width
+                let file_path_area = Rect { x: usable.x, y: usable.y, width: usable.width, height: 3 };
                 let outer = Block::default().title("Output File Path").borders(Borders::ALL);
                 outer.render(file_path_area, buf);
-                let inner_x = file_path_area.x.saturating_add(1);
-                let inner_y = file_path_area.y.saturating_add(1);
-                let inner_w = file_path_area.width.saturating_sub(2);
-                let inner_h = file_path_area.height.saturating_sub(2);
+                let fp_inner_x = file_path_area.x.saturating_add(1);
+                let fp_inner_y = file_path_area.y.saturating_add(1);
+                let fp_inner_w = file_path_area.width.saturating_sub(2);
+                let fp_inner_h = file_path_area.height.saturating_sub(2);
                 let browse_text = "[Browse]";
                 let reserved = (browse_text.len() as u16).saturating_add(1);
-                let input_w = inner_w.saturating_sub(reserved);
-                let input_area = Rect { x: inner_x, y: inner_y, width: input_w, height: inner_h };
+                let input_w = fp_inner_w.saturating_sub(reserved);
+                let input_area = Rect { x: fp_inner_x, y: fp_inner_y, width: input_w, height: fp_inner_h };
                 let mut ta = self.file_path_input.clone();
                 ta.set_block(Block::default());
                 if !self.file_path_focused { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
                 ta.render(input_area, buf);
-                let browse_x = inner_x.saturating_add(inner_w.saturating_sub(browse_text.len() as u16));
+                let browse_x = fp_inner_x.saturating_add(fp_inner_w.saturating_sub(browse_text.len() as u16));
                 let browse_style = if self.browse_button_selected { Style::default().fg(Color::Black).bg(Color::White) } else { Style::default().fg(Color::Gray) };
-                buf.set_string(browse_x, inner_y, browse_text, browse_style);
+                buf.set_string(browse_x, fp_inner_y, browse_text, browse_style);
 
-                // Format selection line
-                let fmt_y = inner.y + 4;
-                let formats = ["Text", "Excel", "JSONL", "Parquet"]; let fmt = formats[self.format_index.min(formats.len()-1)];
-                buf.set_string(inner.x + 1, fmt_y, format!("Format: {fmt} (Ctrl+F to cycle)"), Style::default());
+                // BELOW: split remaining height into left (datasets) and right (options)
+                let below_area = Rect { x: usable.x, y: usable.y.saturating_add(3), width: usable.width, height: usable.height.saturating_sub(3) };
+                let left_w = below_area.width / 2;
+                let right_w = below_area.width.saturating_sub(left_w);
+                let left_area = Rect { x: below_area.x, y: below_area.y, width: left_w, height: below_area.height };
+                let right_area = Rect { x: below_area.x.saturating_add(left_w), y: below_area.y, width: right_w, height: below_area.height };
 
-                // Dataset selection list
-                let mut list_y = fmt_y + 2;
-                buf.set_string(inner.x + 1, list_y, "Datasets:", Style::default().add_modifier(Modifier::UNDERLINED));
-                list_y = list_y.saturating_add(1);
-                for (i, ds) in self.datasets.iter().enumerate() {
+                // LEFT: Dataset selection list (scrollable)
+                let mut left_y = left_area.y;
+                buf.set_string(left_area.x + 1, left_y, "Datasets:", Style::default().add_modifier(Modifier::UNDERLINED));
+                left_y = left_y.saturating_add(1);
+
+                let total_datasets = self.datasets.len();
+                let max_visible_left: u16 = left_area.height.saturating_sub(2).max(1);
+                let max_visible_left_usize = max_visible_left as usize;
+                let visible_count = total_datasets.min(max_visible_left_usize);
+                let start_index = if total_datasets > max_visible_left_usize {
+                    let half = max_visible_left_usize / 2;
+                    if self.selected_dataset_index <= half { 0 }
+                    else if self.selected_dataset_index + half >= total_datasets { total_datasets - max_visible_left_usize }
+                    else { self.selected_dataset_index - half }
+                } else { 0 };
+
+                for (i, ds_index) in (start_index..start_index + visible_count).enumerate() {
+                    let ds = &self.datasets[ds_index];
                     let checkbox = if ds.selected { "[x]" } else { "[ ]" };
                     let text = format!("{checkbox} {}", ds.name);
-                    let style = if self.selecting_datasets && self.selected_dataset_index == i { Style::default().fg(Color::Black).bg(Color::White) } else { Style::default() };
-                    buf.set_string(inner.x + 2, list_y + i as u16, text.as_str(), style);
+                    let style = if self.selecting_datasets && self.selected_dataset_index == ds_index { Style::default().fg(Color::Black).bg(Color::White) } else { Style::default() };
+                    buf.set_string(left_area.x + 2, left_y + i as u16, text.as_str(), style);
                 }
 
-                // CSV options (only when Text format is selected)
+                // RIGHT: Format and CSV options
+                let fmt_y = right_area.y;
+                let formats = ["Text", "Excel", "JSONL", "Parquet"]; let fmt = formats[self.format_index.min(formats.len()-1)];
+                buf.set_string(right_area.x + 1, fmt_y, format!("Format: {fmt} (Ctrl+F to cycle)"), Style::default());
+
                 if matches!(self.current_format(), DataExportFormat::Text) {
-                    let base_y = list_y + self.datasets.len() as u16 + 1;
+                    let base_y = fmt_y + 2;
                     let enc = match self.csv_encoding { CsvEncoding::Utf8 => "UTF-8", CsvEncoding::Utf8Bom => "UTF-8 BOM", CsvEncoding::Utf16Le => "UTF-16LE" };
                     let quote_str = self.csv_quote_char.map(|c| format!("'{c}'")).unwrap_or_else(|| "None".to_string());
                     let escape_str = self.csv_escape_char.map(|c| format!("'{c}'")).unwrap_or_else(|| "None".to_string());
                     let header_str = if self.csv_include_header { "Yes" } else { "No" };
+                    let delimiter_str = if self.csv_delimiter == '\t' { "\\t".to_string() } else { format!("'{}'", self.csv_delimiter) };
 
                     let options = [
-                        format!("Delimiter: '{}'", self.csv_delimiter),
+                        format!("Delimiter: {}", delimiter_str),
                         format!("Quote Char: {}", quote_str),
                         format!("Escape Char: {}", escape_str),
                         format!("Has Header: {}", header_str),
@@ -277,14 +318,14 @@ impl DataExportDialog {
                     ];
                     for (i, line) in options.iter().enumerate() {
                         let style = if self.options_active && self.option_selected == i { Style::default().fg(Color::Black).bg(Color::White) } else { Style::default() };
-                        buf.set_string(inner.x + 1, base_y + i as u16, line, style);
+                        buf.set_string(right_area.x + 1, base_y + i as u16, line, style);
                     }
                 }
 
-                // Export button bottom-right
+                // RIGHT: Export button bottom-right of right pane
                 let export_text = "[Export]";
-                let export_x = content_area.x + content_area.width.saturating_sub(export_text.len() as u16 + 2);
-                let export_y = content_area.y + content_area.height.saturating_sub(2);
+                let export_x = right_area.x + right_area.width.saturating_sub(export_text.len() as u16 + 2);
+                let export_y = right_area.y + right_area.height.saturating_sub(1);
                 let export_style = if self.export_button_selected { Style::default().fg(Color::Black).bg(Color::White) } else { Style::default().fg(Color::Gray) };
                 buf.set_string(export_x, export_y, export_text, export_style);
             }
@@ -332,27 +373,85 @@ impl DataExportDialog {
                 None
             }
             DataExportMode::Input => {
-                // Space toggles dataset selection when focused
-                if key.code == KeyCode::Char(' ') && self.selecting_datasets && !self.datasets.is_empty() {
-                    let idx = self.selected_dataset_index.min(self.datasets.len()-1);
-                    let cur = self.datasets[idx].selected;
-                    self.datasets[idx].selected = !cur;
-                    return None;
+                // Space toggles dataset selection when focused; if options active, cycles option
+                if key.code == KeyCode::Char(' ') {
+                    if self.selecting_datasets && !self.datasets.is_empty() {
+                        let idx = self.selected_dataset_index.min(self.datasets.len()-1);
+                        let cur = self.datasets[idx].selected;
+                        self.datasets[idx].selected = !cur;
+                        return None;
+                    }
+                    if self.options_active {
+                        self.adjust_option(1);
+                        return None;
+                    }
                 }
 
                 // Global navigation/actions first
                 if let Some(action) = optional_global_action {
                     match action {
                         Action::Tab => {
-                        if self.file_path_focused { self.file_path_focused = false; self.selecting_datasets = true; self.browse_button_selected = false; self.export_button_selected = false; }
-                        else if self.selecting_datasets { self.selecting_datasets = false; self.browse_button_selected = true; self.export_button_selected = false; }
-                        else if self.browse_button_selected { self.browse_button_selected = false; self.export_button_selected = true; }
-                        else { self.export_button_selected = false; self.file_path_focused = true; }
+                        if self.file_path_focused {
+                            self.file_path_focused = false;
+                            self.selecting_datasets = true;
+                            self.options_active = false;
+                            self.browse_button_selected = false;
+                            self.export_button_selected = false;
+                        } else if self.selecting_datasets {
+                            self.selecting_datasets = false;
+                            self.file_path_focused = false;
+                            self.browse_button_selected = false;
+                            self.export_button_selected = false;
+                            if matches!(self.current_format(), DataExportFormat::Text) {
+                                self.options_active = true;
+                                self.option_selected = 0;
+                            } else {
+                                self.browse_button_selected = true;
+                            }
+                        } else if self.options_active {
+                            self.options_active = false;
+                            self.file_path_focused = false;
+                            self.selecting_datasets = false;
+                            self.export_button_selected = false;
+                            self.browse_button_selected = true;
+                        } else if self.browse_button_selected {
+                            self.browse_button_selected = false;
+                            self.file_path_focused = false;
+                            self.selecting_datasets = false;
+                            self.options_active = false;
+                            self.export_button_selected = true;
+                        } else if self.export_button_selected {
+                            self.export_button_selected = false;
+                            self.file_path_focused = true;
+                            self.selecting_datasets = false;
+                            self.options_active = false;
+                            self.browse_button_selected = false;
+                        } else {
+                            self.file_path_focused = true;
+                            self.selecting_datasets = false;
+                            self.options_active = false;
+                            self.browse_button_selected = false;
+                            self.export_button_selected = false;
+                        }
                         None
                         }
                         Action::Right => {
                             if self.options_active {
-                                self.adjust_option(1);
+                                // When an option is highlighted, Right should select a button (Export)
+                                self.options_active = false;
+                                self.export_button_selected = true;
+                                self.browse_button_selected = false;
+                                self.file_path_focused = false;
+                                None
+                            } else if self.selecting_datasets {
+                                // From dataset selection, Right moves focus to export options (or Browse if not Text)
+                                self.selecting_datasets = false;
+                                if matches!(self.current_format(), DataExportFormat::Text) {
+                                    self.options_active = true;
+                                    self.option_selected = 0;
+                                } else {
+                                    self.browse_button_selected = true;
+                                }
                                 None
                             } else if self.file_path_focused {
                                 use tui_textarea::Input as TuiInput; let input: TuiInput = key.into();
@@ -364,12 +463,35 @@ impl DataExportDialog {
                         }
                         Action::Left => {
                             if self.options_active {
-                                self.adjust_option(-1);
+                                // Left from options jumps back to dataset selection
+                                self.options_active = false;
+                                self.selecting_datasets = true;
+                                self.file_path_focused = false;
+                                self.browse_button_selected = false;
+                                self.export_button_selected = false;
                                 None
                             } else if self.export_button_selected {
-                                self.export_button_selected = false; self.browse_button_selected = true; None
+                                // When a button is active, Left should move selection to the option on the left
+                                if matches!(self.current_format(), DataExportFormat::Text) {
+                                    self.export_button_selected = false;
+                                    self.options_active = true;
+                                    if self.option_selected > 4 { self.option_selected = 4; }
+                                } else {
+                                    self.export_button_selected = false; self.browse_button_selected = true;
+                                }
+                                None
                             } else if self.browse_button_selected {
-                                self.browse_button_selected = false; self.file_path_focused = true; None
+                                self.browse_button_selected = false;
+                                if matches!(self.current_format(), DataExportFormat::Text) {
+                                    self.file_path_focused = true;
+                                } else {
+                                    // If there are no options for the format, move to datasets
+                                    self.selecting_datasets = true;
+                                    self.file_path_focused = false;
+                                    self.options_active = false;
+                                    self.export_button_selected = false;
+                                }
+                                None
                             } else if self.file_path_focused {
                                 use tui_textarea::Input as TuiInput; let input: TuiInput = key.into(); self.file_path_input.input(input); self.sync_file_path_from_input(); None
                             } else { None }
@@ -378,15 +500,12 @@ impl DataExportDialog {
                         if self.selecting_datasets {
                             if self.selected_dataset_index > 0 { self.selected_dataset_index -= 1; }
                         } else if self.export_button_selected {
-                            // Move up into options if Text format; otherwise to browse button
-                            if matches!(self.current_format(), DataExportFormat::Text) {
-                                self.export_button_selected = false;
-                                self.options_active = true;
-                                self.option_selected = 4; // last option
-                            } else {
-                                self.export_button_selected = false;
-                                self.browse_button_selected = true;
-                            }
+                            // When Export is selected, Up should select Browse and unselect everything else
+                            self.export_button_selected = false;
+                            self.browse_button_selected = true;
+                            self.file_path_focused = false;
+                            self.options_active = false;
+                            self.selecting_datasets = false;
                         } else if self.options_active {
                             if self.option_selected == 0 {
                                 self.options_active = false;
@@ -419,6 +538,16 @@ impl DataExportDialog {
                             }
                         } else if self.selecting_datasets {
                             if self.selected_dataset_index + 1 < self.datasets.len() { self.selected_dataset_index += 1; }
+                            else {
+                                // From last dataset, move to first option (Text) or to Browse (others)
+                                self.selecting_datasets = false;
+                                if matches!(self.current_format(), DataExportFormat::Text) {
+                                    self.options_active = true;
+                                    self.option_selected = 0;
+                                } else {
+                                    self.browse_button_selected = true;
+                                }
+                            }
                         } else if self.browse_button_selected {
                             self.browse_button_selected = false;
                             self.export_button_selected = true;
@@ -447,6 +576,7 @@ impl DataExportDialog {
                         None
                         }
                         Action::Backspace => { if self.file_path_focused { use tui_textarea::Input as TuiInput; let input: TuiInput = key.into(); self.file_path_input.input(input); self.sync_file_path_from_input(); } else if self.options_active { self.set_option_char(None); } None }
+                        Action::ToggleDataViewerOption => { if self.options_active { self.adjust_option(1); } None }
                         Action::Paste => { if self.file_path_focused && let Ok(mut clipboard) = Clipboard::new() && let Ok(text) = clipboard.get_text() { let first_line = text.lines().next().unwrap_or("").to_string(); self.set_file_path(first_line); } None }
                         Action::CopyFilePath => { if let Ok(mut clipboard) = Clipboard::new() { let _ = clipboard.set_text(self.file_path.clone()); } None }
                         Action::Escape => { return Some(Action::DialogClose); }
@@ -455,6 +585,7 @@ impl DataExportDialog {
                 } else if let Some(action) = export_action {
                     match action {
                         Action::OpenFileBrowser => { self.file_browser = Some(FileBrowserDialog::new(None, Some(vec!["csv","xlsx","jsonl","ndjson","parquet"]), false, FileBrowserMode::Save)); self.mode = DataExportMode::FileBrowser; None }
+                        Action::ToggleFormat => { self.format_index = (self.format_index + 1) % 4; self.update_output_path_for_format(); None }
                         Action::ExportTable => {
                             let ids: Vec<String> = self.datasets.iter().filter(|d| d.selected).map(|d| d.id.clone()).collect();
                             return Some(Action::DataExportRequestedMulti {
@@ -482,7 +613,6 @@ impl DataExportDialog {
         self.file_path = self.file_path_input.lines().join("\n");
     }
 
-    fn ensure_parent(&self, path: &std::path::Path) -> color_eyre::Result<()> { if let Some(parent) = path.parent() && !parent.as_os_str().is_empty() { let _ = create_dir_all(parent); } Ok(()) }
 }
 
 impl Component for DataExportDialog {

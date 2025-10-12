@@ -270,6 +270,8 @@ impl Config {
             
             // ProjectSettings dialog actions
             Action::ToggleDataViewerOption => "Toggle Option",
+            // DataExport dialog actions
+            Action::ToggleFormat => "Toggle Format",
             
             // TableExport dialog actions
             Action::CopyFilePath => "Copy Path",

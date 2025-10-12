@@ -165,7 +165,8 @@
       "<Ctrl-b>": "OpenFileBrowser",
       "<Ctrl-p>": "Paste",
       "<Ctrl-c>": "CopyFilePath",
-      "<enter>": "ExportTable"
+      "<enter>": "ExportTable",
+      "<Ctrl-f>": "ToggleFormat"
     },
     "KeybindingsDialog": {
       "<tab>": "OpenGroupingDropdown",

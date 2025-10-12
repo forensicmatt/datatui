@@ -305,6 +305,8 @@ pub enum Action {
     ScrollStatsRight,
     /// ProjectSettingsDialog specific actions
     ToggleDataViewerOption,
+    /// DataExportDialog specific actions
+    ToggleFormat,
     /// TableExportDialog specific actions
     CopyFilePath,
     ExportTable,

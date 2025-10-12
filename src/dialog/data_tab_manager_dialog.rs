@@ -964,6 +964,14 @@ impl Component for DataTabManagerDialog {
                         .map(|t| (t.loaded_dataset.dataset.id.clone(), t.display_name()))
                         .collect();
                     let mut d = DataExportDialog::new(entries, Some("export.csv".to_string()));
+                    // Preselect the current tab's dataset in the export dialog
+                    if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
+                        let current_id = active_tab.loaded_dataset.dataset.id.clone();
+                        if let Some(pos) = d.datasets.iter().position(|ds| ds.id == current_id) {
+                            d.datasets[pos].selected = true;
+                            d.selected_dataset_index = pos;
+                        }
+                    }
                     let _ = d.register_config_handler(self.config.clone());
                     self.data_export_dialog = Some(d);
                     self.show_data_export_dialog = true;
