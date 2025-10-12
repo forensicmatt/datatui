@@ -1,4 +1,5 @@
 use clap::{Parser, ValueEnum};
+use std::path::PathBuf;
 use std::io;
 use crossterm::event::{self, Event as CEvent, EnableMouseCapture, DisableMouseCapture};
 use crossterm::terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
@@ -22,6 +23,9 @@ struct Args {
     /// Enable file logging at the given level (overrides RUST_LOG)
     #[arg(long = "logging", value_enum)]
     logging: Option<LogLevel>,
+    /// Path to a config file (overrides default config discovery)
+    #[arg(long = "config", value_name = "PATH")]
+    config: Option<PathBuf>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -46,7 +50,7 @@ fn main() -> Result<()> {
     // Load Config and create DataTabManagerDialog
     let style = StyleConfig::default();
     let mut tab_manager = DataTabManagerDialog::new(style);
-    if let Ok(cfg) = Config::new() {
+    if let Ok(cfg) = Config::from_path(args.config.as_ref()) {
         let _ = tab_manager.register_config_handler(cfg);
     }
     

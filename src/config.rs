@@ -1,6 +1,6 @@
 #![allow(dead_code)] // Remove this once you start using the code
 
-use std::{collections::HashMap, env, path::PathBuf};
+use std::{collections::HashMap, env, fs, path::PathBuf};
 
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -8,7 +8,8 @@ use derive_deref::{Deref, DerefMut};
 use lazy_static::lazy_static;
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize, de::Deserializer};
-use tracing::error;
+ 
+use directories::BaseDirs;
 
 use crate::action::Action;
 
@@ -76,7 +77,7 @@ lazy_static! {
 }
 
 impl Config {
-    pub fn new() -> Result<Self, config::ConfigError> {
+    pub fn from_path(config_path: Option<&PathBuf>) -> Result<Self, config::ConfigError> {
         let default_config: Config = json5::from_str(CONFIG).unwrap();
         let data_dir = get_data_dir();
         let config_dir = get_config_dir();
@@ -84,26 +85,23 @@ impl Config {
             .set_default("data_dir", data_dir.to_str().unwrap())?
             .set_default("config_dir", config_dir.to_str().unwrap())?;
 
-        let config_files = [
-            ("config.json5", config::FileFormat::Json5),
-            ("config.json", config::FileFormat::Json),
-            ("config.yaml", config::FileFormat::Yaml),
-            ("config.toml", config::FileFormat::Toml),
-            ("config.ini", config::FileFormat::Ini),
-        ];
-        let mut found_config = false;
-        for (file, format) in &config_files {
-            let source = config::File::from(config_dir.join(file))
-                .format(*format)
-                .required(false);
-            builder = builder.add_source(source);
-            if config_dir.join(file).exists() {
-                found_config = true
+        // Determine primary config file path
+        let home_cfg = default_home_config_path();
+        let selected_path = if let Some(p) = config_path {
+            expand_tilde(p)
+        } else {
+            // Ensure default file exists at ~/.datatui-config.json5
+            if !home_cfg.exists() {
+                // Write embedded defaults
+                if let Some(parent) = home_cfg.parent() { let _ = fs::create_dir_all(parent); }
+                let _ = fs::write(&home_cfg, CONFIG);
             }
-        }
-        if !found_config {
-            error!("No configuration file found. Application may not behave as expected");
-        }
+            home_cfg
+        };
+
+        builder = builder.add_source(
+            config::File::from(selected_path).format(config::FileFormat::Json5).required(true),
+        );
 
         let mut cfg: Self = builder.build()?.try_deserialize()?;
 
@@ -324,6 +322,22 @@ impl Config {
         }
         None
     }
+}
+
+fn expand_tilde(path: &PathBuf) -> PathBuf {
+    if let Some(s) = path.to_str() {
+        if s.starts_with("~") {
+            if let Some(base) = BaseDirs::new() { return PathBuf::from(s.replacen("~", base.home_dir().to_str().unwrap_or(""), 1)); }
+        }
+    }
+    path.clone()
+}
+
+fn default_home_config_path() -> PathBuf {
+    if let Some(base) = BaseDirs::new() {
+        return base.home_dir().join(".datatui-config.json5");
+    }
+    PathBuf::from(".datatui-config.json5")
 }
 
 pub fn get_data_dir() -> PathBuf {
