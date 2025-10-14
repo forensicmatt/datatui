@@ -325,6 +325,10 @@ pub enum Action {
     CancelRebinding,
     ClearBinding,
     SaveKeybindings,
+    /// Reset all keybindings to defaults
+    ResetKeybindings,
+    /// Save keybindings to a chosen file path
+    SaveKeybindingsAs,
 }
 
 #[cfg(test)]

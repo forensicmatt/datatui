@@ -11,6 +11,8 @@ use crate::components::Component;
 use crate::config::{Config, Mode};
 use crate::style::StyleConfig;
 use crate::components::dialog_layout::split_dialog_area;
+use crate::dialog::KeybindingCaptureDialog;
+use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserAction, FileBrowserMode};
 
 // No explicit focus enum for now; dropdown and list are navigated via configured keys
 
@@ -20,13 +22,7 @@ pub struct KeybindingEntry {
     pub key_display: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
-pub enum CaptureState {
-    #[default]
-    Inactive,
-    Active { action_index: usize, pressed_display: String, pressed_keys: Vec<KeyEvent> },
-}
+// capture handled by a separate dialog now
 
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -39,7 +35,11 @@ pub struct KeybindingsDialog {
     pub selected_index: usize,
     pub scroll_offset: usize,
     #[serde(skip)]
-    capture_state: CaptureState,
+    capture_dialog: Option<KeybindingCaptureDialog>,
+    #[serde(skip)]
+    pending_rebind_index: Option<usize>,
+    #[serde(skip)]
+    file_browser: Option<FileBrowserDialog>,
 }
 
 impl Default for KeybindingsDialog {
@@ -55,7 +55,9 @@ impl KeybindingsDialog {
             selected_grouping: 0,
             selected_index: 0,
             scroll_offset: 0,
-            capture_state: CaptureState::Inactive,
+            capture_dialog: None,
+            pending_rebind_index: None,
+            file_browser: None,
         }
     }
 
@@ -114,6 +116,8 @@ impl KeybindingsDialog {
             (Mode::KeybindingsDialog, Action::OpenGroupingDropdown),
             (Mode::KeybindingsDialog, Action::StartRebinding),
             (Mode::KeybindingsDialog, Action::SaveKeybindings),
+            (Mode::KeybindingsDialog, Action::SaveKeybindingsAs),
+            (Mode::KeybindingsDialog, Action::ResetKeybindings),
         ])
     }
 
@@ -302,39 +306,21 @@ impl KeybindingsDialog {
         }
     }
 
-    fn render_capture_overlay(&self, area: Rect, buf: &mut Buffer) {
-        if let CaptureState::Active { action_index: _, pressed_display, .. } = &self.capture_state {
-            let overlay_block = Block::default()
-                .title("Press new keybinding, Enter to apply, Esc to cancel")
-                .borders(Borders::ALL)
-                .border_type(BorderType::Double)
-                .style(self.styles.dialog);
-            let inner = overlay_block.inner(area);
-            overlay_block.render(area, buf);
-            let p = Paragraph::new(pressed_display.as_str()).wrap(Wrap { trim: true });
-            p.render(inner, buf);
-        }
-    }
-
-    fn commit_capture(&mut self) {
+    fn commit_rebind(&mut self, pressed_keys: Vec<KeyEvent>) {
+        let Some(action_index) = self.pending_rebind_index.take() else { return; };
         let mode = self.current_mode();
-        let (action_index_opt, pressed_keys_opt) = match &self.capture_state {
-            CaptureState::Active { action_index, pressed_keys, .. } => (Some(*action_index), Some(pressed_keys.clone())),
-            _ => (None, None),
-        };
         let entries_vec = self.entries_for_mode(mode);
-        let action_to_set = action_index_opt
-            .and_then(|idx| entries_vec.get(idx).map(|e| e.action.clone()));
-        if let (Some(pressed_keys), Some(action)) = (pressed_keys_opt, action_to_set) {
+        let action_to_set = entries_vec.get(action_index).map(|e| e.action.clone());
+        if let Some(action) = action_to_set {
             if let Some(entries) = self.config.keybindings.0.get_mut(&mode) {
-                let to_remove: Vec<Vec<KeyEvent>> = entries.iter()
+                let to_remove: Vec<Vec<KeyEvent>> = entries
+                    .iter()
                     .filter_map(|(keys, act)| if act == &action { Some(keys.clone()) } else { None })
                     .collect();
                 for k in to_remove { entries.remove(&k); }
                 entries.insert(pressed_keys, action);
             }
         }
-        self.capture_state = CaptureState::Inactive;
     }
 }
 
@@ -347,21 +333,57 @@ impl Component for KeybindingsDialog {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if key.kind != KeyEventKind::Press { return Ok(None); }
 
+        // If capture dialog is active, forward events to it first
+        if let Some(ref mut dialog) = self.capture_dialog {
+            if let Some(a) = Component::handle_key_event(dialog, key)? {
+                match a {
+                    Action::ConfirmRebinding => {
+                        let pressed = dialog.pressed_keys.clone();
+                        if pressed.is_empty() {
+                            // Ignore confirm with no key chosen
+                            self.capture_dialog = None;
+                            self.pending_rebind_index = None;
+                            return Ok(None);
+                        }
+                        self.capture_dialog = None;
+                        self.commit_rebind(pressed);
+                        return Ok(None);
+                    }
+                    Action::CancelRebinding => {
+                        self.capture_dialog = None;
+                        self.pending_rebind_index = None;
+                        return Ok(None);
+                    }
+                    _ => return Ok(Some(a)),
+                }
+            }
+            return Ok(None);
+        }
+
+        // If file browser is active (Save As), forward events to it first
+        if let Some(ref mut browser) = self.file_browser {
+            if let Some(action) = browser.handle_key_event(key) {
+                browser.register_config_handler(self.config.clone());
+                match action {
+                    FileBrowserAction::Selected(path) => {
+                        let serialized = self.config.keybindings_to_json5();
+                        let _ = std::fs::write(&path, serialized);
+                        self.file_browser = None;
+                        return Ok(None);
+                    }
+                    FileBrowserAction::Cancelled => {
+                        self.file_browser = None;
+                        return Ok(None);
+                    }
+                }
+            }
+            return Ok(None);
+        }
+
         // Global first
         if let Some(a) = self.config.action_for_key(Mode::Global, key) {
             match a {
-                Action::Escape => {
-                    if matches!(self.capture_state, CaptureState::Active { .. }) {
-                        self.capture_state = CaptureState::Inactive;
-                        return Ok(None);
-                    }
-                    return Ok(Some(Action::DialogClose));
-                }
-                Action::Enter => {
-                    if let CaptureState::Active { .. } = &self.capture_state {
-                        // Confirm via dialog action below
-                    }
-                }
+                Action::Escape => { return Ok(Some(Action::DialogClose)); }
                 Action::Up => {
                     if self.selected_index > 0 { self.selected_index -= 1; }
                     if self.selected_index < self.scroll_offset { self.scroll_offset = self.selected_index; }
@@ -392,11 +414,12 @@ impl Component for KeybindingsDialog {
                     return Ok(None);
                 }
                 Action::StartRebinding => {
-                    self.capture_state = CaptureState::Active { action_index: self.selected_index, pressed_display: String::new(), pressed_keys: vec![] };
+                    let mut dlg = KeybindingCaptureDialog::new();
+                    let _ = dlg.register_config_handler(self.config.clone());
+                    self.capture_dialog = Some(dlg);
+                    self.pending_rebind_index = Some(self.selected_index);
                     return Ok(None);
                 }
-                Action::ConfirmRebinding => { self.commit_capture(); return Ok(None); }
-                Action::CancelRebinding => { self.capture_state = CaptureState::Inactive; return Ok(None); }
                 Action::ClearBinding => {
                     let mode = self.current_mode();
                     let entries_vec = self.entries_for_mode(mode);
@@ -418,20 +441,26 @@ impl Component for KeybindingsDialog {
                     // For now, signal caller to save workspace (reuse existing action)
                     return Ok(Some(Action::SaveWorkspaceState));
                 }
+                Action::SaveKeybindingsAs => {
+                    // Open file browser in Save mode with json/json5 filters
+                    let mut browser = FileBrowserDialog::new(None, Some(vec!["json5", "json"]), false, FileBrowserMode::Save);
+                    browser.register_config_handler(self.config.clone());
+                    browser.filename_input = ".datatui-config.json5".to_string();
+                    browser.filename_cursor = browser.filename_input.len();
+                    browser.filename_active = true;
+                    self.file_browser = Some(browser);
+                    return Ok(None);
+                }
+                Action::ResetKeybindings => {
+                    // Restore defaults
+                    self.config.reset_keybindings_to_default();
+                    // Reset selection and scroll for safety
+                    self.selected_index = 0;
+                    self.scroll_offset = 0;
+                    return Ok(None);
+                }
                 _ => {}
             }
-        }
-
-        // If capturing, record key sequence and update display
-        if let CaptureState::Active { pressed_display, pressed_keys, .. } = &mut self.capture_state {
-            pressed_keys.push(key);
-            let key_strs: Vec<String> = pressed_keys.iter().map(crate::config::key_event_to_string).collect();
-            *pressed_display = key_strs.join(" ");
-            if let Some(global) = self.config.action_for_key(Mode::Global, key) {
-                if matches!(global, Action::Enter) { self.commit_capture(); return Ok(None); }
-                if matches!(global, Action::Escape) { self.capture_state = CaptureState::Inactive; return Ok(None); }
-            }
-            return Ok(None);
         }
 
         Ok(None)
@@ -482,9 +511,14 @@ impl Component for KeybindingsDialog {
             }
         }
 
-        // Capture overlay takes over entire content when active
-        if matches!(self.capture_state, CaptureState::Active { .. }) {
-            self.render_capture_overlay(content, frame.buffer_mut());
+        // Capture dialog overlay
+        if let Some(ref mut dlg) = self.capture_dialog {
+            let _ = dlg.draw(frame, content);
+        }
+
+        // File browser overlay for Save As
+        if let Some(ref mut browser) = self.file_browser {
+            browser.render(content, frame.buffer_mut());
         }
 
         Ok(())

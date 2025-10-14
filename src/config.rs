@@ -283,6 +283,8 @@ impl Config {
             Action::CancelRebinding => "Cancel Rebind",
             Action::ClearBinding => "Clear Binding",
             Action::SaveKeybindings => "Save Keybindings",
+            Action::ResetKeybindings => "Reset Keybindings",
+            Action::SaveKeybindingsAs => "Save As",
             
             // Other actions
             Action::Quit => "Quit",
@@ -321,6 +323,33 @@ impl Config {
             }
         }
         None
+    }
+
+    /// Reset keybindings back to application defaults
+    pub fn reset_keybindings_to_default(&mut self) {
+        if let Ok(default_cfg) = json5::from_str::<Config>(CONFIG) {
+            self.keybindings = default_cfg.keybindings;
+        }
+    }
+
+    /// Serialize only the keybindings portion to JSON5 compatible with the app config format
+    pub fn keybindings_to_json5(&self) -> String {
+        let mut out: HashMap<Mode, HashMap<String, Action>> = HashMap::new();
+        for (mode, inner) in self.keybindings.0.iter() {
+            let mut m: HashMap<String, Action> = HashMap::new();
+            for (seq, action) in inner.iter() {
+                let parts: Vec<String> = seq.iter().map(key_event_to_string).collect();
+                let key = format!("<{}>", parts.join("><"));
+                m.insert(key, action.clone());
+            }
+            out.insert(*mode, m);
+        }
+        #[derive(Serialize)]
+        struct KeybindingsExport<'a> {
+            keybindings: &'a HashMap<Mode, HashMap<String, Action>>,
+        }
+        let wrapper = KeybindingsExport { keybindings: &out };
+        json5::to_string(&wrapper).unwrap_or_else(|_| "{ keybindings: {} }".to_string())
     }
 }
 
