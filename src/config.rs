@@ -349,7 +349,15 @@ impl Config {
             keybindings: &'a HashMap<Mode, HashMap<String, Action>>,
         }
         let wrapper = KeybindingsExport { keybindings: &out };
-        json5::to_string(&wrapper).unwrap_or_else(|_| "{ keybindings: {} }".to_string())
+        // Pretty print with two-space indentation using serde_json (valid JSON5)
+        let mut buf = Vec::new();
+        let formatter = serde_json::ser::PrettyFormatter::with_indent(b"  ");
+        let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
+        if wrapper.serialize(&mut ser).is_ok() {
+            String::from_utf8(buf).unwrap_or_else(|_| "{\n  \"keybindings\": {}\n}".to_string())
+        } else {
+            "{\n  \"keybindings\": {}\n}".to_string()
+        }
     }
 }
 

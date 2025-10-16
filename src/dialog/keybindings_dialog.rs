@@ -518,11 +518,15 @@ impl Component for KeybindingsDialog {
 
         // File browser overlay for Save As
         if let Some(ref mut browser) = self.file_browser {
-            browser.render(content, frame.buffer_mut());
+            let browser_area = Rect {
+                x: content.x + content.width / 20,
+                y: content.y + content.height / 20,
+                width: content.width.saturating_sub(content.width / 10),
+                height: content.height.saturating_sub(content.height / 10),
+            };
+            browser.render(browser_area, frame.buffer_mut());
         }
 
         Ok(())
     }
 }
-
-
