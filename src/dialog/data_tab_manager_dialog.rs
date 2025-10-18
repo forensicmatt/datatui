@@ -115,7 +115,6 @@ impl DataTabManagerDialog {
             (crate::config::Mode::Global, crate::action::Action::OpenKeybindings),
             (crate::config::Mode::DataTabManager, crate::action::Action::OpenDataManagementDialog),
             (crate::config::Mode::DataTabManager, crate::action::Action::OpenProjectSettingsDialog),
-            (crate::config::Mode::DataTabManager, crate::action::Action::SyncTabs),
             (crate::config::Mode::DataTabManager, crate::action::Action::MoveTabToFront),
             (crate::config::Mode::DataTabManager, crate::action::Action::MoveTabToBack),
             (crate::config::Mode::DataTabManager, crate::action::Action::MoveTabLeft),
