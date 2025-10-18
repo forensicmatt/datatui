@@ -117,14 +117,18 @@ impl FileBrowserDialog {
             (crate::config::Mode::FileBrowser, crate::action::Action::FileBrowserPageUp),
             (crate::config::Mode::FileBrowser, crate::action::Action::FileBrowserPageDown),
             (crate::config::Mode::FileBrowser, crate::action::Action::NavigateToParent),
-            (crate::config::Mode::FileBrowser, crate::action::Action::ConfirmOverwrite),
-            (crate::config::Mode::FileBrowser, crate::action::Action::DenyOverwrite),
         ])
     }
 
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        let instructions = self.build_instructions_from_config();
+        let mut instructions = self.build_instructions_from_config();
+        if self.mode == FileBrowserMode::Save {
+            if !instructions.is_empty() {
+                instructions.push('\n');
+            }
+            instructions.push_str("Enter on File Name to save file");
+        }
         let layout = split_dialog_area(area, self.show_instructions, 
             if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let mut content_area = layout.content_area;
@@ -391,6 +395,11 @@ impl FileBrowserDialog {
                         self.filename_active = false;
                         return None;
                     }
+                            crate::action::Action::Up => {
+                                // Move focus from filename input back to file list
+                                self.filename_active = false;
+                                return None;
+                            }
                     crate::action::Action::Enter => {
                         if !self.filename_input.is_empty() {
                             return Some(FileBrowserAction::Selected(self.current_dir.join(&self.filename_input)));

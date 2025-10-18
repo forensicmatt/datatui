@@ -13,6 +13,7 @@ use crate::style::StyleConfig;
 use crate::components::dialog_layout::split_dialog_area;
 use crate::dialog::KeybindingCaptureDialog;
 use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserAction, FileBrowserMode};
+use crate::dialog::MessageDialog;
 
 // No explicit focus enum for now; dropdown and list are navigated via configured keys
 
@@ -40,6 +41,8 @@ pub struct KeybindingsDialog {
     pending_rebind_index: Option<usize>,
     #[serde(skip)]
     file_browser: Option<FileBrowserDialog>,
+    #[serde(skip)]
+    message_dialog: Option<MessageDialog>,
 }
 
 impl Default for KeybindingsDialog {
@@ -58,6 +61,7 @@ impl KeybindingsDialog {
             capture_dialog: None,
             pending_rebind_index: None,
             file_browser: None,
+            message_dialog: None,
         }
     }
 
@@ -333,6 +337,20 @@ impl Component for KeybindingsDialog {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if key.kind != KeyEventKind::Press { return Ok(None); }
 
+        // If message dialog is active, handle it first and block other events
+        if let Some(ref mut msg) = self.message_dialog {
+            if let Some(a) = Component::handle_key_event(msg, key)? {
+                match a {
+                    Action::DialogClose => {
+                        self.message_dialog = None;
+                        return Ok(None);
+                    }
+                    _ => {}
+                }
+            }
+            return Ok(None);
+        }
+
         // If capture dialog is active, forward events to it first
         if let Some(ref mut dialog) = self.capture_dialog {
             if let Some(a) = Component::handle_key_event(dialog, key)? {
@@ -369,6 +387,11 @@ impl Component for KeybindingsDialog {
                         let serialized = self.config.keybindings_to_json5();
                         let _ = std::fs::write(&path, serialized);
                         self.file_browser = None;
+                        // Show success message with saved path
+                        let message = format!("Saved keybindings to {}", path.display());
+                        let mut dlg = MessageDialog::with_title(message, "Saved");
+                        let _ = dlg.register_config_handler(self.config.clone());
+                        self.message_dialog = Some(dlg);
                         return Ok(None);
                     }
                     FileBrowserAction::Cancelled => {
@@ -525,6 +548,19 @@ impl Component for KeybindingsDialog {
                 height: content.height.saturating_sub(content.height / 10),
             };
             browser.render(browser_area, frame.buffer_mut());
+        }
+
+        // Message dialog overlay (centered, smaller)
+        if let Some(ref mut msg) = self.message_dialog {
+            let dialog_width = 60.min(content.width.saturating_sub(4));
+            let dialog_height = 7.min(content.height.saturating_sub(4));
+            let area = Rect {
+                x: content.x + (content.width.saturating_sub(dialog_width)) / 2,
+                y: content.y + (content.height.saturating_sub(dialog_height)) / 2,
+                width: dialog_width,
+                height: dialog_height,
+            };
+            msg.render(area, frame.buffer_mut());
         }
 
         Ok(())
