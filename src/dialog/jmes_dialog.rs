@@ -100,11 +100,6 @@ impl JmesPathDialog {
             JmesDialogMode::InputTransform => {
                 let base_instructions = self.config.actions_to_instructions(&[
                     (crate::config::Mode::JmesPath, crate::action::Action::ApplyTransform),
-                    (crate::config::Mode::Global, crate::action::Action::Up),
-                    (crate::config::Mode::Global, crate::action::Action::Down),
-                    (crate::config::Mode::Global, crate::action::Action::Left),
-                    (crate::config::Mode::Global, crate::action::Action::Right),
-                    (crate::config::Mode::Global, crate::action::Action::Escape),
                     (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
                 ]);
                 format!("Enter JMESPath expression. {base_instructions}  Space:Toggle Option")
@@ -214,19 +209,32 @@ impl JmesPathDialog {
 
         match &self.mode {
             JmesDialogMode::InputTransform => {
-                self.textarea.set_block(
+                let block = if self.focus == FocusArea::Body {
                     Block::default()
                         .title("JMESPath Transform".to_string())
                         .borders(Borders::ALL)
-                );
+                        .border_style(Style::default().fg(Color::Yellow))
+                } else {
+                    Block::default()
+                        .title("JMESPath Transform".to_string())
+                        .borders(Borders::ALL)
+                };
+                self.textarea.set_block(block);
                 self.textarea.set_line_number_style(Style::default().bg(Color::DarkGray));
                 ratatui::widgets::Widget::render(&self.textarea, body_area, buf);
             }
             JmesDialogMode::InputAddColumns => {
-                let block = Block::default()
-                    .title("JMESPath Add Columns".to_string())
-                    .borders(Borders::ALL)
-                    .border_style(self.styles.table_border);
+                let block = if self.focus == FocusArea::Body {
+                    Block::default()
+                        .title("JMESPath Add Columns".to_string())
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Yellow))
+                } else {
+                    Block::default()
+                        .title("JMESPath Add Columns".to_string())
+                        .borders(Borders::ALL)
+                        .border_style(self.styles.table_border)
+                };
                 let inner = block.inner(body_area);
                 block.render(body_area, buf);
 
@@ -290,7 +298,11 @@ impl JmesPathDialog {
                     };
 
                     Clear.render(overlay, buf);
-                    let overlay_title = if self.add_pair_edit_index.is_some() { " Edit Column " } else { " Add Column " };
+                    let overlay_title = if self.add_pair_edit_index.is_some() {
+                        " Edit Column "
+                    } else {
+                        " Add Column "
+                    };
                     let block = Block::default()
                         .title(overlay_title)
                         .borders(Borders::ALL)
@@ -382,7 +394,18 @@ impl JmesPathDialog {
             // Handle Global actions first
             if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
                 match global_action {
-                    Action::Escape => return Some(Action::DialogClose),
+                    Action::Escape => {
+                        // If the Add Column overlay is open, close it instead of closing the dialog
+                        if self.add_pair_open {
+                            self.add_pair_open = false;
+                            self.add_pair_edit_index = None;
+                            return None;
+                        }
+                        return Some(Action::DialogClose);
+                    },
+                    // When Add Column overlay is open, ignore other global actions at this level
+                    // but do not consume the event so the overlay-specific handlers can process it
+                    _ if self.add_pair_open => { /* no-op, let overlay handle below */ }
                     Action::ToggleInstructions => {
                         self.show_instructions = !self.show_instructions;
                         return None;
@@ -482,12 +505,45 @@ impl JmesPathDialog {
             }
 
             // Handle Space for toggle
-            if key.code == KeyCode::Char(' ') && self.focus == FocusArea::Scope && self.selected_option == 0 {
+            if !self.add_pair_open && key.code == KeyCode::Char(' ') && self.focus == FocusArea::Scope && self.selected_option == 0 {
                 self.scope = match self.scope { 
                     TransformScope::Current => TransformScope::Original,
                     TransformScope::Original => TransformScope::Current
                 };
                 return None;
+            }
+
+            // Treat Tab/BackTab like arrow navigation with rotation
+            match key.code {
+                KeyCode::Tab if !self.add_pair_open => {
+                    match self.focus {
+                        FocusArea::Scope => { self.focus = FocusArea::Tabs; }
+                        FocusArea::Tabs => {
+                            self.mode = match self.mode {
+                                JmesDialogMode::InputTransform => JmesDialogMode::InputAddColumns,
+                                JmesDialogMode::InputAddColumns => JmesDialogMode::InputTransform,
+                                JmesDialogMode::Error(_) => JmesDialogMode::InputTransform,
+                            };
+                        }
+                        FocusArea::Body => { self.focus = FocusArea::Scope; }
+                    }
+                    return None;
+                }
+                KeyCode::BackTab if !self.add_pair_open => {
+                    match self.focus {
+                        FocusArea::Scope => { self.focus = FocusArea::Body; }
+                        FocusArea::Tabs => {
+                            self.mode = match self.mode {
+                                JmesDialogMode::InputTransform => JmesDialogMode::InputAddColumns,
+                                JmesDialogMode::InputAddColumns => JmesDialogMode::InputTransform,
+                                JmesDialogMode::Error(_) => JmesDialogMode::InputTransform,
+                            };
+                        }
+                        FocusArea::Body => { self.focus = FocusArea::Tabs; }
+                    }
+                    return None;
+                }
+                _ => {}
             }
             match &mut self.mode {
                 JmesDialogMode::InputTransform => {

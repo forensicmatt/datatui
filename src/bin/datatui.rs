@@ -14,7 +14,7 @@ use datatui::components::Component;
 use datatui::tui::Event as TuiEvent;
 use datatui::action::Action;
 use color_eyre::Result;
-use tracing::{error, info};
+use tracing::{error, debug};
 
 /// Simple CLI for DataTabManagerDialog demo
 #[derive(Parser, Debug)]
@@ -105,7 +105,7 @@ fn run_app<B: ratatui::backend::Backend>(
         if event::poll(Duration::from_millis(100))?
             && let CEvent::Key(key_event) = event::read()? {
                 if let Some(global_action) = tab_manager.config.action_for_key(datatui::config::Mode::Global, key_event){
-                    info!("Global action: {global_action}");
+                    debug!("Global action: {global_action}");
                     match global_action {
                         Action::Quit => {
                             break;
