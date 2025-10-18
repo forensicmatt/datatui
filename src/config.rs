@@ -152,7 +152,8 @@ impl Config {
             Action::Tab => "Tab",
             Action::Paste => "Paste",
             Action::ToggleInstructions => "Toggle Instructions",
-            
+            Action::OpenKeybindings => "Key Bindings",
+
             // DataTableContainer actions
             Action::OpenSortDialog => "Sort",
             Action::QuickSortCurrentColumn => "Quick Sort",
@@ -286,6 +287,25 @@ impl Config {
             Action::ResetKeybindings => "Reset Keybindings",
             Action::SaveKeybindingsAs => "Save As",
             
+            // XlsxOptionsDialog actions
+            Action::OpenXlsxFileBrowser => "Open Xlsx File Browser",
+            Action::PasteFilePath => "Paste File Path",
+            Action::ToggleWorksheetLoad => "Toggle Worksheet Load",
+
+            // ParquetOptionsDialog actions
+            Action::OpenParquetFileBrowser => "Open Parquet File Browser",
+            Action::PasteParquetFilePath => "Paste Parquet File Path",
+            
+            // SqliteOptionsDialog actions
+            Action::OpenSqliteFileBrowser => "Open Sqlite File Browser",
+            Action::ToggleTableSelection => "Toggle Table Selection",
+            
+            // JsonOptionsDialog actions
+            Action::OpenJsonFileBrowser => "Open Json File Browser",
+            Action::PasteJsonFilePath => "Paste Json File Path",
+            Action::ToggleNdjson => "Toggle Ndjson",
+            Action::FinishJsonImport => "Finish Json Import",
+
             // Other actions
             Action::Quit => "Quit",
             Action::Suspend => "Suspend",

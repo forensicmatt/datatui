@@ -42,7 +42,6 @@
       "<Ctrl-i>": "ToggleInstructions"
     },
     "DataManagement": {
-      "<esc>": "CloseDataManagementDialog",
       "<Ctrl-d>": "DeleteSelectedSource",
       "<Ctrl-a>": "OpenDataImportDialog",
       "<Ctrl-l>": "LoadAllPendingDatasets",
@@ -52,13 +51,11 @@
       "<enter>": "DataImportSelect",
       "<y>": "ConfirmDataImport",
       "<n>": "DataImportBack",
-      "<esc>": "CloseDataImportDialog"
     },
     "CsvOptions": {
       "<tab>": "Tab",
       "<Ctrl-b>": "OpenFileBrowser",
-      "<Ctrl-p>": "Paste",
-      "<esc>": "CloseCsvOptionsDialog"
+      "<Ctrl-p>": "Paste"
     },
     "Sort": {
       "<space>": "ToggleSortDirection",
@@ -139,8 +136,6 @@
     "ColumnOperationOptions": {
       "<space>": "ToggleField",
       "<tab>": "ToggleButtons"
-    },
-    "ColumnOperations": {
     },
     "DataFrameDetails": {
       "<Ctrl-left>": "SwitchToPrevTab",

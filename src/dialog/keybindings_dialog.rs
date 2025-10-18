@@ -35,6 +35,8 @@ pub struct KeybindingsDialog {
     pub selected_grouping: usize,
     pub selected_index: usize,
     pub scroll_offset: usize,
+	#[serde(skip)]
+	pub groupings_scroll_start: usize,
     #[serde(skip)]
     capture_dialog: Option<KeybindingCaptureDialog>,
     #[serde(skip)]
@@ -58,6 +60,7 @@ impl KeybindingsDialog {
             selected_grouping: 0,
             selected_index: 0,
             scroll_offset: 0,
+			groupings_scroll_start: 0,
             capture_dialog: None,
             pending_rebind_index: None,
             file_browser: None,
@@ -125,10 +128,11 @@ impl KeybindingsDialog {
         ])
     }
 
-    fn render_dropdown(&self, area: Rect, buf: &mut Buffer, focused: bool) {
+	fn render_dropdown(&mut self, area: Rect, buf: &mut Buffer, focused: bool) {
         let modes = self.groupings();
         let title = "Select Grouping";
-        let block = Block::default().borders(Borders::ALL).title(title);
+        let block = Block::default()
+            .borders(Borders::ALL).title(title);
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -139,13 +143,13 @@ impl KeybindingsDialog {
             serde_json::to_string(m).unwrap_or_else(|_| format!("{m:?}")).trim_matches('"').to_string()
         }).collect();
 
-        // Measure available width, reserving space for scroll indicators when overflowed
-        let available_width_total = inner.width as usize;
+		// Measure available width, reserving space for scroll indicators when overflowed
+		let available_width_total = inner.width as usize;
         let total_tabs = titles.len();
         let divider_width = 2usize; // spaces between tabs
-        let total_text_width: usize = titles.iter().map(|t| t.len()).sum();
+		let total_text_width: usize = titles.iter().map(|t| t.len()).sum();
         let total_dividers_width = if total_tabs > 1 { (total_tabs - 1) * divider_width } else { 0 };
-        let total_required_width = total_text_width + total_dividers_width;
+		let total_required_width = total_text_width + total_dividers_width;
 
         // Determine overflow precisely based on actual required width vs available
         let overflow = total_required_width > available_width_total.saturating_sub(1);
@@ -173,72 +177,176 @@ impl KeybindingsDialog {
             return;
         }
 
-        // Dynamically compute visible range around the selected tab based on actual widths
-        let selected = self.selected_grouping.min(total_tabs - 1);
-        let mut start_index = selected;
-        let mut end_index = selected + 1;
-        let mut used_width: usize = titles[selected].len();
-        // Start conservatively: reserve 1 col right margin, and both arrows initially
-        let mut cap = inner.width as usize;
-        cap = cap
-            .saturating_sub(1) // right margin from border
-            .saturating_sub(1) // left arrow
-            .saturating_sub(1); // right arrow
-        // Expand to the right as much as possible within cap
-        while end_index < total_tabs {
-            let next_w = titles[end_index].len();
-            let needed = used_width + divider_width + next_w;
-            if needed > cap { break; }
-            used_width = needed;
-            end_index += 1;
-        }
-        // Then expand to the left with remaining space
-        while start_index > 0 {
-            let next_w = titles[start_index - 1].len();
-            let needed = used_width + divider_width + next_w;
-            if needed > cap { break; }
-            used_width = needed;
-            start_index -= 1;
-        }
-        // Determine which arrows are actually needed
-        let mut has_left = start_index > 0;
-        let mut has_right = end_index < total_tabs;
-        // Recompute capacity with only necessary arrows and try to expand again
-        let mut new_cap = inner.width as usize;
-        new_cap = new_cap
-            .saturating_sub(1) // right margin
-            .saturating_sub(if has_left { 1 } else { 0 })
-            .saturating_sub(if has_right { 1 } else { 0 });
-        if new_cap > cap {
-            cap = new_cap;
-            // Try to expand to the right
-            while end_index < total_tabs {
-                let next_w = titles[end_index].len();
-                let needed = used_width + divider_width + next_w;
-                if needed > cap { break; }
-                used_width = needed;
-                end_index += 1;
-            }
-            // Then to the left
-            while start_index > 0 {
-                let next_w = titles[start_index - 1].len();
-                let needed = used_width + divider_width + next_w;
-                if needed > cap { break; }
-                used_width = needed;
-                start_index -= 1;
-            }
-            has_left = start_index > 0;
-            has_right = end_index < total_tabs;
-        }
+		// Maintain a stable visible window using a persistent scroll start
+		let selected = self.selected_grouping.min(total_tabs - 1);
+		let mut start_index = self.groupings_scroll_start.min(total_tabs.saturating_sub(1));
+		let mut used_width: usize = 0;
+		// Provisional capacity: keep 1 right margin and assume both arrows
+		let mut cap = inner.width as usize;
+		cap = cap
+			.saturating_sub(1) // right margin from border
+			.saturating_sub(if start_index > 0 { 1 } else { 0 })
+			.saturating_sub(1); // tentatively reserve right arrow
+		let mut end_index = start_index;
+		while end_index < total_tabs {
+			let w = titles[end_index].len();
+			let needed = if end_index == start_index { w } else { used_width + divider_width + w };
+			if needed > cap { break; }
+			used_width = needed;
+			end_index += 1;
+		}
+		let mut has_left = start_index > 0;
+		let mut has_right = end_index < total_tabs;
+		// If no right overflow, reclaim the tentative arrow space and try to fit more
+		if !has_right {
+			let mut new_cap = inner.width as usize;
+			new_cap = new_cap
+				.saturating_sub(1)
+				.saturating_sub(if has_left { 1 } else { 0 });
+			if new_cap > cap {
+				cap = new_cap;
+				used_width = 0;
+				end_index = start_index;
+				while end_index < total_tabs {
+					let w = titles[end_index].len();
+					let needed = if end_index == start_index { w } else { used_width + divider_width + w };
+					if needed > cap { break; }
+					used_width = needed;
+					end_index += 1;
+				}
+			}
+		}
+		// New behavior: if the selected tab is the last visible (and there is more to the right),
+		// advance the window by one so we reveal the next tab; likewise for left edge.
+		if has_right && end_index > start_index && selected + 1 == end_index {
+			start_index = start_index.saturating_add(1);
+			// recompute fit from new start_index
+			used_width = 0;
+			cap = inner.width as usize;
+			cap = cap
+				.saturating_sub(1)
+				.saturating_sub(if start_index > 0 { 1 } else { 0 })
+				.saturating_sub(1);
+			end_index = start_index;
+			while end_index < total_tabs {
+				let w = titles[end_index].len();
+				let needed = if end_index == start_index { w } else { used_width + divider_width + w };
+				if needed > cap { break; }
+				used_width = needed;
+				end_index += 1;
+			}
+			has_left = start_index > 0;
+			has_right = end_index < total_tabs;
+		}
+		if has_left && selected == start_index {
+			start_index = start_index.saturating_sub(1);
+			// recompute fit from new start_index
+			used_width = 0;
+			cap = inner.width as usize;
+			cap = cap
+				.saturating_sub(1)
+				.saturating_sub(if start_index > 0 { 1 } else { 0 })
+				.saturating_sub(1);
+			end_index = start_index;
+			while end_index < total_tabs {
+				let w = titles[end_index].len();
+				let needed = if end_index == start_index { w } else { used_width + divider_width + w };
+				if needed > cap { break; }
+				used_width = needed;
+				end_index += 1;
+			}
+			has_left = start_index > 0;
+			has_right = end_index < total_tabs;
+		}
+		// Ensure selection is within the visible window; if it's beyond the right edge,
+		// shift start to the right until it becomes visible. Likewise for left edge.
+		while selected >= end_index && start_index < total_tabs.saturating_sub(1) {
+			start_index += 1;
+			// recompute fit from new start_index
+			used_width = 0;
+			cap = inner.width as usize;
+			cap = cap
+				.saturating_sub(1)
+				.saturating_sub(if start_index > 0 { 1 } else { 0 })
+				.saturating_sub(1);
+			end_index = start_index;
+			while end_index < total_tabs {
+				let w = titles[end_index].len();
+				let needed = if end_index == start_index { w } else { used_width + divider_width + w };
+				if needed > cap { break; }
+				used_width = needed;
+				end_index += 1;
+			}
+			has_left = start_index > 0;
+			has_right = end_index < total_tabs;
+			if !has_right {
+				let mut new_cap = inner.width as usize;
+				new_cap = new_cap
+					.saturating_sub(1)
+					.saturating_sub(if has_left { 1 } else { 0 });
+				if new_cap > cap {
+					cap = new_cap;
+					used_width = 0;
+					end_index = start_index;
+					while end_index < total_tabs {
+						let w = titles[end_index].len();
+						let needed = if end_index == start_index { w } else { used_width + divider_width + w };
+						if needed > cap { break; }
+						used_width = needed;
+						end_index += 1;
+					}
+				}
+			}
+		}
+		while selected < start_index {
+			if start_index == 0 { break; }
+			start_index -= 1;
+			used_width = 0;
+			cap = inner.width as usize;
+			cap = cap
+				.saturating_sub(1)
+				.saturating_sub(if start_index > 0 { 1 } else { 0 })
+				.saturating_sub(1);
+			end_index = start_index;
+			while end_index < total_tabs {
+				let w = titles[end_index].len();
+				let needed = if end_index == start_index { w } else { used_width + divider_width + w };
+				if needed > cap { break; }
+				used_width = needed;
+				end_index += 1;
+			}
+			has_left = start_index > 0;
+			has_right = end_index < total_tabs;
+			if !has_right {
+				let mut new_cap = inner.width as usize;
+				new_cap = new_cap
+					.saturating_sub(1)
+					.saturating_sub(if has_left { 1 } else { 0 });
+				if new_cap > cap {
+					cap = new_cap;
+					used_width = 0;
+					end_index = start_index;
+					while end_index < total_tabs {
+						let w = titles[end_index].len();
+						let needed = if end_index == start_index { w } else { used_width + divider_width + w };
+						if needed > cap { break; }
+						used_width = needed;
+						end_index += 1;
+					}
+				}
+			}
+		}
+		// Persist updated start index
+		self.groupings_scroll_start = start_index;
 
-        // Draw left/right indicators
-        if has_left {
-            buf.set_string(inner.x, inner.y, "◀", Style::default().fg(Color::Yellow));
-        }
-        if has_right {
-            let x = inner.x + inner.width.saturating_sub(1);
-            buf.set_string(x, inner.y, "▶", Style::default().fg(Color::Yellow));
-        }
+		// Draw left/right indicators
+		if has_left {
+			buf.set_string(inner.x, inner.y, "◀", Style::default().fg(Color::Yellow));
+		}
+		if has_right {
+			let x = inner.x + inner.width.saturating_sub(1);
+			buf.set_string(x, inner.y, "▶", Style::default().fg(Color::Yellow));
+		}
 
         // Render visible titles, shifted if indicators are shown
         let mut x = inner.x + if has_left { 1 } else { 0 };
@@ -246,7 +354,7 @@ impl KeybindingsDialog {
             .saturating_add(inner.width)
             .saturating_sub(1) // margin from border
             .saturating_sub(if has_right { 1 } else { 0 }); // space for right indicator
-        for i in start_index..end_index {
+		for i in start_index..end_index {
             if x >= end_exclusive { break; }
             let title = &titles[i];
             let remaining = end_exclusive.saturating_sub(x) as usize;
@@ -261,7 +369,7 @@ impl KeybindingsDialog {
             if focused { style = style.add_modifier(Modifier::UNDERLINED); }
 
             buf.set_string(x, inner.y, to_draw, style);
-            x = x.saturating_add(draw_len as u16 + divider_width as u16);
+			x = x.saturating_add(draw_len as u16 + divider_width as u16);
         }
     }
 
