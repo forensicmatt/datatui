@@ -1001,6 +1001,7 @@ dependencies = [
  "directories",
  "encoding_rs",
  "futures",
+ "glob",
  "human-panic",
  "jmespath",
  "json5",
