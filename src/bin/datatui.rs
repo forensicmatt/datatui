@@ -229,63 +229,6 @@ fn materialize_and_add_loads(specs: &[String], tab_manager: &mut DataTabManagerD
     Ok(added)
 }
 
-// Concatenate multiple text files into a single temporary CSV/TSV/PSV according to options.
-// DUPLICATE (earlier) - remove this definition
-/* fn create_merged_text_tmp(paths: &[PathBuf], opts: &CsvImportOptions) -> color_eyre::Result<PathBuf> {
-    if paths.is_empty() { return Err(color_eyre::eyre::eyre!("No files to merge")); }
-    let ext = match opts.delimiter {
-        '\t' => "tsv",
-        '|' => "psv",
-        _ => "csv",
-    };
-    let tmp = std::env::temp_dir().join(format!("datatui_merge_{}.{}", Uuid::new_v4(), ext));
-    let mut out = BufWriter::new(std::fs::File::create(&tmp)?);
-
-    let mut _wrote_header = false;
-    for (idx, p) in paths.iter().enumerate() {
-        let file = std::fs::File::open(p)?;
-        let reader = BufReader::new(file);
-        for (line_idx, line_res) in reader.lines().enumerate() {
-            let line = line_res?;
-            if line_idx == 0 && opts.has_header {
-                if idx == 0 {
-                    out.write_all(line.as_bytes())?;
-                    out.write_all(b"\n")?;
-                    _wrote_header = true;
-                } else {
-                    // skip subsequent headers
-                }
-            } else {
-                out.write_all(line.as_bytes())?;
-                out.write_all(b"\n")?;
-            }
-        }
-    }
-    out.flush()?;
-    // If user requested header=false but files had headers, we didn't alter; that's acceptable.
-    Ok(tmp)
-} */
-
-// Concatenate multiple NDJSON files into a single temporary NDJSON.
-// DUPLICATE (earlier) - remove this definition
-/* fn create_merged_ndjson_tmp(paths: &[PathBuf]) -> color_eyre::Result<PathBuf> {
-    if paths.is_empty() { return Err(color_eyre::eyre::eyre!("No files to merge")); }
-    let tmp = std::env::temp_dir().join(format!("datatui_merge_{}.jsonl", Uuid::new_v4()));
-    let mut out = BufWriter::new(std::fs::File::create(&tmp)?);
-    for p in paths {
-        let file = std::fs::File::open(p)?;
-        let reader = BufReader::new(file);
-        for line_res in reader.lines() {
-            let line = line_res?;
-            if line.trim().is_empty() { continue; }
-            out.write_all(line.as_bytes())?;
-            out.write_all(b"\n")?;
-        }
-    }
-    out.flush()?;
-    Ok(tmp)
-} */
-
 // Returns one or multiple DataImportConfig values for a single spec (e.g., xlsx sheets can expand).
 fn parse_load_spec(spec: &str) -> color_eyre::Result<Vec<DataImportConfig>> {
     // Split on the first ':' into kind and the rest

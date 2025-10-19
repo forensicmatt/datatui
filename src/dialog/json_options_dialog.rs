@@ -74,7 +74,7 @@ impl JsonOptionsDialog {
                 .borders(Borders::ALL)
         );
         records_expr_input.insert_str(&json_options.records_expr);
-        
+
         Self {
             file_path,
             json_options,
