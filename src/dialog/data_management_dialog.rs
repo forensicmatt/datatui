@@ -700,23 +700,41 @@ impl DataSource {
                     let mut buf = String::new();
                     file.read_to_string(&mut buf)
                         .map_err(|e| color_eyre::eyre::eyre!("Failed to read JSON file: {e}"))?;
-                    let val: JsonValue = serde_json::from_str(&buf)
+                    let root_val: JsonValue = serde_json::from_str(&buf)
                         .map_err(|e| color_eyre::eyre::eyre!("Failed to parse JSON: {e}"))?;
-                    match val {
+
+                    // Apply JMESPath records expression (default '@') to select records
+                    let records_expr = json_config.options.records_expr.clone();
+                    let rt = crate::jmes::new_runtime();
+                    let expr = rt.compile(&records_expr)
+                        .map_err(|e| color_eyre::eyre::eyre!(format!("JMESPath compile error for records_expr '{}': {}", records_expr, e)))?;
+                    let var = jmespath::Variable::try_from(root_val)
+                        .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to convert JSON to JMES variable: {}", e)))?;
+                    let result = expr.search(&var)
+                        .map_err(|e| color_eyre::eyre::eyre!(format!("JMESPath search error for records_expr: {}", e)))?;
+
+                    // Convert JMES result to serde_json::Value via its JSON string representation
+                    let selected_json: JsonValue = serde_json::from_str(&result.to_string())
+                        .unwrap_or(JsonValue::Null);
+
+                    match selected_json {
                         JsonValue::Array(arr) => {
                             for v in arr {
                                 if let JsonValue::Object(map) = v {
                                     objects.push(map);
                                 } else {
-                                    return Err(color_eyre::eyre::eyre!("JSON array elements must be objects"));
+                                    return Err(color_eyre::eyre::eyre!("JMESPath result array must contain only objects"));
                                 }
                             }
                         }
                         JsonValue::Object(map) => {
                             objects.push(map);
                         }
+                        JsonValue::Null => {
+                            // No records found -> empty
+                        }
                         _ => {
-                            return Err(color_eyre::eyre::eyre!("Top-level JSON must be object or array of objects"));
+                            return Err(color_eyre::eyre::eyre!("JMESPath result must be an object or array of objects"));
                         }
                     }
                 }

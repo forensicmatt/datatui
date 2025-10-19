@@ -280,6 +280,7 @@ pub enum Action {
     OpenJsonFileBrowser,
     PasteJsonFilePath,
     ToggleNdjson,
+    ToggleJsonAutodetect,
     FinishJsonImport,
     /// ColumnOperationOptionsDialog specific actions
     ToggleField,

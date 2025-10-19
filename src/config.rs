@@ -304,6 +304,7 @@ impl Config {
             Action::OpenJsonFileBrowser => "Open Json File Browser",
             Action::PasteJsonFilePath => "Paste Json File Path",
             Action::ToggleNdjson => "Toggle Ndjson",
+            Action::ToggleJsonAutodetect => "Toggle Autodetect",
             Action::FinishJsonImport => "Finish Json Import",
 
             // Other actions

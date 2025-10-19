@@ -17,12 +17,21 @@ use crate::components::dialog_layout::split_dialog_area;
 use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserMode};
 use tui_textarea::TextArea;
 use arboard::Clipboard;
+use tracing::info;
 
 /// JSON import options
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JsonImportOptions {
-    /// If true, treat file as NDJSON (each line is a JSON object); otherwise expect a JSON array of objects
+    /// If true, treat file as NDJSON (each line is a JSON object); otherwise expect a JSON array/object
     pub ndjson: bool,
+    /// JMESPath expression that yields the records to load (default: "@")
+    pub records_expr: String,
+}
+
+impl Default for JsonImportOptions {
+    fn default() -> Self {
+        Self { ndjson: false, records_expr: "@".to_string() }
+    }
 }
 
 /// JsonOptionsDialog: Dialog for selecting a JSON file and format
@@ -31,6 +40,8 @@ pub struct JsonOptionsDialog {
     pub file_path: String,
     pub json_options: JsonImportOptions,
     pub file_path_focused: bool,
+    pub records_expr_focused: bool,
+    pub ndjson_option_selected: bool,
     pub browse_button_selected: bool,
     pub finish_button_selected: bool,
     pub file_browser_mode: bool, // Whether the file browser is currently active
@@ -38,6 +49,8 @@ pub struct JsonOptionsDialog {
     pub show_instructions: bool,
     #[serde(skip)]
     pub file_path_input: TextArea<'static>,
+    #[serde(skip)]
+    pub records_expr_input: TextArea<'static>,
     #[serde(skip)]
     pub file_browser: Option<FileBrowserDialog>,
     #[serde(skip)]
@@ -54,17 +67,27 @@ impl JsonOptionsDialog {
                 .borders(Borders::ALL)
         );
         file_path_input.insert_str(&file_path);
+        let mut records_expr_input = TextArea::default();
+        records_expr_input.set_block(
+            Block::default()
+                .title("JMESPath Records Expression (default: @)")
+                .borders(Borders::ALL)
+        );
+        records_expr_input.insert_str(&json_options.records_expr);
         
         Self {
             file_path,
             json_options,
             file_path_focused: true,
+            records_expr_focused: false,
+            ndjson_option_selected: false,
             browse_button_selected: false,
             finish_button_selected: false,
             file_browser_mode: false,
             file_browser_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             show_instructions: true,
             file_path_input,
+            records_expr_input,
             file_browser: None,
             key_config: Config::default(),
         }
@@ -88,16 +111,89 @@ impl JsonOptionsDialog {
             (crate::config::Mode::Global, crate::action::Action::Escape),
             (crate::config::Mode::Global, crate::action::Action::Enter),
             (crate::config::Mode::Global, crate::action::Action::Tab),
-            (crate::config::Mode::Global, crate::action::Action::Up),
-            (crate::config::Mode::Global, crate::action::Action::Down),
-            (crate::config::Mode::Global, crate::action::Action::Left),
-            (crate::config::Mode::Global, crate::action::Action::Right),
-            (crate::config::Mode::Global, crate::action::Action::Backspace),
             (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
             (crate::config::Mode::JsonOptionsDialog, crate::action::Action::OpenJsonFileBrowser),
             (crate::config::Mode::JsonOptionsDialog, crate::action::Action::PasteJsonFilePath),
             (crate::config::Mode::JsonOptionsDialog, crate::action::Action::ToggleNdjson),
         ])
+    }
+
+    /// Try to autodetect JSON format and a sensible records expression from a file path.
+    /// Returns (Option<ndjson>, Option<records_expr>)
+    fn autodetect_json_settings(path_str: &str) -> Option<(Option<bool>, Option<String>)> {
+        use std::io::{BufRead, BufReader, Read};
+        use serde_json::Value as JsonValue;
+        let path = std::path::Path::new(path_str);
+
+        // Prefer full-file parse first; if this succeeds, it's regular JSON (not NDJSON)
+        if let Ok(mut file) = std::fs::File::open(path) {
+            let mut buf = String::new();
+            if file.read_to_string(&mut buf).is_ok() {
+                if let Ok(root) = serde_json::from_str::<JsonValue>(&buf) {
+                    // If root is array of objects -> records '@'
+                    if let JsonValue::Array(arr) = &root {
+                        if arr.iter().all(|v| v.is_object()) {
+                            info!("json autodetect: top-level array of objects -> '@'");
+                            return Some((Some(false), Some("@".to_string())));
+                        }
+                    }
+                    // If root is object, try common keys that are arrays of objects
+                    if let JsonValue::Object(map) = &root {
+                        // Prioritized list of common record keys
+                        let candidates = [
+                            "records", "Records", "items", "Items", "data", "Data", "rows", "Rows", "result", "results", "value", "values"
+                        ];
+                        for key in candidates {
+                            if let Some(v) = map.get(key) {
+                                if let JsonValue::Array(arr) = v {
+                                    if arr.iter().all(|e| e.is_object()) {
+                                        info!("json autodetect: found array-of-objects at key '{}'", key);
+                                        return Some((Some(false), Some(key.to_string())));
+                                    }
+                                }
+                            }
+                        }
+                        // Try to find first array-of-objects to use as key
+                        for (k, v) in map.iter() {
+                            if let JsonValue::Array(arr) = v {
+                                if arr.iter().all(|e| e.is_object()) {
+                                    info!("json autodetect: using first array-of-objects key '{}'", k);
+                                    return Some((Some(false), Some(k.clone())));
+                                }
+                            }
+                        }
+                    }
+                    // Fallback to '@'
+                    info!("json autodetect: fallback to '@'");
+                    return Some((Some(false), Some("@".to_string())));
+                }
+            }
+        }
+
+        // If the whole file doesn't parse as JSON, sample multiple non-empty lines for NDJSON
+        if let Ok(file) = std::fs::File::open(path) {
+            let reader = BufReader::new(file);
+            let mut total_non_empty: usize = 0;
+            let mut valid_object_lines: usize = 0;
+            for line_res in reader.lines().take(500) {
+                if let Ok(line) = line_res {
+                    let t = line.trim();
+                    if t.is_empty() { continue; }
+                    total_non_empty += 1;
+                    if serde_json::from_str::<JsonValue>(t).ok().is_some_and(|v| v.is_object()) {
+                        valid_object_lines += 1;
+                    }
+                    if total_non_empty >= 5 { break; }
+                }
+            }
+            // Heuristic: at least 3 non-empty lines sampled and >= 2 valid JSON object lines
+            if total_non_empty >= 3 && valid_object_lines >= 2 {
+                info!("json autodetect: detected NDJSON for {} ({} valid object lines)", path_str, valid_object_lines);
+                return Some((Some(true), None));
+            }
+        }
+
+        None
     }
 
     /// Render the dialog
@@ -129,6 +225,7 @@ impl JsonOptionsDialog {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // File path input
+                Constraint::Length(3), // records expr input
                 Constraint::Min(0),    // Options/content
             ])
             .split(content_area);
@@ -182,10 +279,38 @@ impl JsonOptionsDialog {
         };
         buf.set_string(browse_x, inner_y, browse_text, browse_style);
 
+        // Render records expression input row
+        let records_area = chunks[1];
+        let records_block = Block::default()
+            .title("JMESPath Records Expression (e.g., @, Records, data.items)")
+            .borders(Borders::ALL);
+        records_block.render(records_area, buf);
+        let rec_inner = Rect {
+            x: records_area.x.saturating_add(1),
+            y: records_area.y.saturating_add(1),
+            width: records_area.width.saturating_sub(2),
+            height: records_area.height.saturating_sub(2),
+        };
+        if !self.records_expr_focused {
+            let mut rec_copy = self.records_expr_input.clone();
+            rec_copy.set_block(Block::default());
+            rec_copy.set_cursor_style(Style::default().fg(Color::Gray));
+            rec_copy.render(rec_inner, buf);
+        } else {
+            let mut rec_copy = self.records_expr_input.clone();
+            rec_copy.set_block(Block::default());
+            rec_copy.render(rec_inner, buf);
+        }
+
         // Render options content: NDJSON toggle and Finish
-        let options_area = chunks[1];
+        let options_area = chunks[2];
         let ndjson_label = format!("NDJSON (one JSON object per line): {}", if self.json_options.ndjson { "On" } else { "Off" });
-        buf.set_string(options_area.x + 1, options_area.y + 1, ndjson_label, Style::default());
+        let ndjson_style = if self.ndjson_option_selected {
+            Style::default().fg(Color::Black).bg(Color::White)
+        } else {
+            Style::default()
+        };
+        buf.set_string(options_area.x + 1, options_area.y + 1, ndjson_label, ndjson_style);
 
         // Render the [Finish] button at the bottom right of the content area
         let finish_text = "[Finish]";
@@ -255,6 +380,22 @@ impl Component for JsonOptionsDialog {
                                 .title("File Path")
                                 .borders(Borders::ALL)
                         );
+                        // Autodetect records expression and JSONL based on selected file
+                        if let Some((det_ndjson, det_expr)) = Self::autodetect_json_settings(&self.file_path) {
+                            let mut opts = self.json_options.clone();
+                            if let Some(is_ndjson) = det_ndjson { opts.ndjson = is_ndjson; }
+                            if let Some(expr) = det_expr {
+                                opts.records_expr = expr.clone();
+                                // Update records expr input field to show detected value
+                                self.records_expr_input = TextArea::from(vec![expr]);
+                                self.records_expr_input.set_block(
+                                    Block::default()
+                                        .title("JMESPath Records Expression (default: @)")
+                                        .borders(Borders::ALL)
+                                );
+                            }
+                            self.json_options = opts;
+                        }
                         self.file_browser_mode = false;
                         self.file_browser = None;
                         return Ok(None);
@@ -278,17 +419,25 @@ impl Component for JsonOptionsDialog {
                         return Ok(Some(Action::CloseJsonOptionsDialog));
                     }
                     Action::Tab => {
-                        // Cycle between file path, browse button, finish button
+                        // Cycle: file_path -> records_expr -> browse -> finish -> file_path
                         if self.file_path_focused {
                             self.file_path_focused = false;
+                            self.records_expr_focused = true;
+                            self.browse_button_selected = false;
+                            self.finish_button_selected = false;
+                        } else if self.records_expr_focused {
+                            self.file_path_focused = false;
+                            self.records_expr_focused = false;
                             self.browse_button_selected = true;
                             self.finish_button_selected = false;
                         } else if self.browse_button_selected {
                             self.file_path_focused = false;
+                            self.records_expr_focused = false;
                             self.browse_button_selected = false;
                             self.finish_button_selected = true;
                         } else {
                             self.file_path_focused = true;
+                            self.records_expr_focused = false;
                             self.browse_button_selected = false;
                             self.finish_button_selected = false;
                         }
@@ -316,6 +465,12 @@ impl Component for JsonOptionsDialog {
                         } else if self.file_path_focused {
                             // If file path is focused and Enter is pressed, select the finish button
                             self.file_path_focused = false;
+                            self.records_expr_focused = true;
+                            self.finish_button_selected = false;
+                            return Ok(None);
+                        } else if self.records_expr_focused {
+                            // Move from records expr to finish button for convenience
+                            self.records_expr_focused = false;
                             self.finish_button_selected = true;
                             return Ok(None);
                         }
@@ -331,7 +486,8 @@ impl Component for JsonOptionsDialog {
                                cursor_pos.1 >= lines.last().unwrap_or(&String::new()).len() {
                                 // Cursor is at the end, move to browse button
                                 self.file_path_focused = false;
-                                self.browse_button_selected = true;
+                                self.records_expr_focused = true;
+                                self.browse_button_selected = false;
                                 self.finish_button_selected = false;
                             } else {
                                 // Let the TextArea handle the right arrow normally
@@ -340,6 +496,25 @@ impl Component for JsonOptionsDialog {
                                 self.file_path_input.input(input);
                                 self.update_file_path(self.file_path_input.lines().join("\n"));
                             }
+                        } else if self.records_expr_focused {
+                            // Only move to Browse when cursor is at end-of-text; otherwise move cursor right within field
+                            let lines = self.records_expr_input.lines();
+                            let cursor_pos = self.records_expr_input.cursor();
+                            if cursor_pos.0 == lines.len().saturating_sub(1) &&
+                               cursor_pos.1 >= lines.last().unwrap_or(&String::new()).len() {
+                                self.records_expr_focused = false;
+                                self.browse_button_selected = true;
+                                self.finish_button_selected = false;
+                            } else {
+                                use tui_textarea::Input as TuiInput;
+                                let input: TuiInput = key.into();
+                                self.records_expr_input.input(input);
+                                // Do not change focus; allow cursor to advance
+                            }
+                        } else if self.ndjson_option_selected {
+                            // Move from NDJSON option to Finish
+                            self.ndjson_option_selected = false;
+                            self.finish_button_selected = true;
                         } else if self.browse_button_selected {
                             // Move to finish button
                             self.browse_button_selected = false;
@@ -349,12 +524,15 @@ impl Component for JsonOptionsDialog {
                     }
                     Action::Left => {
                         if self.finish_button_selected {
-                            // Move from finish button back to browse button
+                            // Move from Finish back to options (NDJSON)
                             self.finish_button_selected = false;
-                            self.browse_button_selected = true;
+                            self.ndjson_option_selected = true;
+                            self.browse_button_selected = false;
+                            self.records_expr_focused = false;
+                            self.file_path_focused = false;
                         } else if self.browse_button_selected {
-                            // Move from browse button to file path
-                            self.file_path_focused = true;
+                            // Move from browse button to records expr
+                            self.records_expr_focused = true;
                             self.browse_button_selected = false;
                         } else if self.file_path_focused {
                             // Let the TextArea handle the left arrow normally
@@ -362,24 +540,57 @@ impl Component for JsonOptionsDialog {
                             let input: TuiInput = key.into();
                             self.file_path_input.input(input);
                             self.update_file_path(self.file_path_input.lines().join("\n"));
+                        } else if self.records_expr_focused {
+                            // Let TextArea handle normally
+                            use tui_textarea::Input as TuiInput;
+                            let input: TuiInput = key.into();
+                            self.records_expr_input.input(input);
+                            let expr = self.records_expr_input.lines().join("\n");
+                            let mut opts = self.json_options.clone();
+                            opts.records_expr = expr;
+                            self.json_options = opts;
                         }
                         return Ok(None);
                     }
                     Action::Up => {
-                        if self.finish_button_selected {
+                        // Reverse of Down behavior
+                        if self.ndjson_option_selected {
+                            self.ndjson_option_selected = false;
+                            self.records_expr_focused = true;
+                        } else if self.records_expr_focused {
+                            // Only move up to File Path when cursor is at column 0 on first line
+                            let cursor_pos = self.records_expr_input.cursor();
+                            if cursor_pos.0 == 0 && cursor_pos.1 == 0 {
+                                self.records_expr_focused = false;
+                                self.file_path_focused = true;
+                            } else {
+                                // Let TextArea handle the left arrow normally when not at start
+                                use tui_textarea::Input as TuiInput;
+                                let input: TuiInput = key.into();
+                                self.records_expr_input.input(input);
+                            }
+                        } else if self.finish_button_selected {
                             self.finish_button_selected = false;
                             self.browse_button_selected = true;
-                        } else if self.browse_button_selected {
-                            self.browse_button_selected = false;
-                            self.file_path_focused = true;
                         }
                         return Ok(None);
                     }
                     Action::Down => {
+                        // When File Path is selected, Down -> Records expression
                         if self.file_path_focused {
                             self.file_path_focused = false;
-                            self.browse_button_selected = true;
+                            self.records_expr_focused = true;
+                            self.ndjson_option_selected = false;
+                            self.browse_button_selected = false;
+                            self.finish_button_selected = false;
+                        } else if self.records_expr_focused {
+                            // When Records expression is selected, Down -> NDJSON option
+                            self.records_expr_focused = false;
+                            self.ndjson_option_selected = true;
+                            self.browse_button_selected = false;
+                            self.finish_button_selected = false;
                         } else if self.browse_button_selected {
+                            // When Browse is selected, Down -> Finish
                             self.browse_button_selected = false;
                             self.finish_button_selected = true;
                         }
@@ -387,11 +598,18 @@ impl Component for JsonOptionsDialog {
                     }
                     Action::Backspace => {
                         if self.file_path_focused {
-                            // Handle backspace to delete characters in file path
                             use tui_textarea::Input as TuiInput;
                             let input: TuiInput = key.into();
                             self.file_path_input.input(input);
                             self.update_file_path(self.file_path_input.lines().join("\n"));
+                        } else if self.records_expr_focused {
+                            use tui_textarea::Input as TuiInput;
+                            let input: TuiInput = key.into();
+                            self.records_expr_input.input(input);
+                            let expr = self.records_expr_input.lines().join("\n");
+                            let mut opts = self.json_options.clone();
+                            opts.records_expr = expr;
+                            self.json_options = opts;
                         }
                         return Ok(None);
                     }
@@ -448,16 +666,34 @@ impl Component for JsonOptionsDialog {
                 }
             }
 
-            // Fallback for character input when editing file path
-            if let KeyCode::Char(_c) = key.code
-                && self.file_path_focused {
-                    // Handle text input for file path
+            // Fallback for character input when editing fields
+            if let KeyCode::Char(c) = key.code {
+                // Space toggles NDJSON when the NDJSON option is selected
+                if self.ndjson_option_selected && c == ' ' {
+                    let mut opts = self.json_options.clone();
+                    opts.ndjson = !opts.ndjson;
+                    self.json_options = opts;
+                    return Ok(None);
+                }
+                if self.file_path_focused {
                     use tui_textarea::Input as TuiInput;
                     let input: TuiInput = key.into();
                     self.file_path_input.input(input);
                     self.update_file_path(self.file_path_input.lines().join("\n"));
                     return Ok(None);
+                } else if self.records_expr_focused {
+                    use tui_textarea::Input as TuiInput;
+                    let input: TuiInput = key.into();
+                    self.records_expr_input.input(input);
+                    let expr = self.records_expr_input.lines().join("\n");
+                    let mut opts = self.json_options.clone();
+                    opts.records_expr = expr;
+                    self.json_options = opts;
+                    return Ok(None);
+                } else {
+                    return Ok(None);
                 }
+            }
             None
         } else {
             None

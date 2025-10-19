@@ -411,6 +411,7 @@ fn parse_load_spec(spec: &str) -> color_eyre::Result<Vec<DataImportConfig>> {
                 let mut opts = JsonImportOptions::default();
                 if kind == "jsonl" || kind == "ndjson" { opts.ndjson = true; }
                 if let Some(v) = kv.get("ndjson") { opts.ndjson = parse_bool(v); }
+                if let Some(expr) = kv.get("records") { opts.records_expr = expr.to_string(); }
                 out.push(DataImportConfig::json(pb, opts));
             }
             if merge && out.len() > 1 {
