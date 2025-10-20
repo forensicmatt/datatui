@@ -16,6 +16,8 @@ use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::Frame;
 use ratatui::layout::Size;
 use tracing::{debug, info, warn, error};
+use lazy_static::lazy_static;
+use std::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
 use crate::components::Component;
 use crate::data_import_types::DataImportConfig;
@@ -85,14 +87,70 @@ pub struct DataSource {
 }
 
 impl DataSource {
+    /// Derive a concise glob-like summary name from multiple file names.
+    /// Example: [flaws_cloudtrail00.json, flaws_cloudtrail01.json] -> flaws_cloudtrail0*.json
+    fn summarize_filenames(names: &[String]) -> Option<String> {
+        if names.is_empty() { return None; }
+        if names.len() == 1 { return Some(names[0].clone()); }
+
+        // Determine common extension if all share the same ext
+        let exts: Vec<Option<&str>> = names.iter().map(|n| n.rsplit_once('.').map(|(_, ext)| ext)).collect();
+        let common_ext: Option<&str> = if exts.iter().all(|e| *e == exts[0]) { exts[0] } else { None };
+
+        let stems: Vec<&str> = match common_ext {
+            Some(ext) => names.iter().map(|n| n.strip_suffix(&format!(".{ext}")).unwrap_or(n.as_str())).collect(),
+            None => names.iter().map(|n| n.as_str()).collect(),
+        };
+
+        // Longest common prefix
+        let mut prefix_len = 0usize;
+        if let Some(first) = stems.first() {
+            'outer: for i in 0..first.len() {
+                let c = first.as_bytes()[i];
+                for s in &stems[1..] {
+                    if i >= s.len() || s.as_bytes()[i] != c { break 'outer; }
+                }
+                prefix_len += 1;
+            }
+        }
+        // Longest common suffix
+        let mut suffix_len = 0usize;
+        if let Some(first) = stems.first() {
+            let fb = first.as_bytes();
+            'outer2: for i in 0..first.len() {
+                let c = fb[fb.len() - 1 - i];
+                for s in &stems[1..] {
+                    let sb = s.as_bytes();
+                    if i >= s.len() || sb[s.len() - 1 - i] != c { break 'outer2; }
+                }
+                suffix_len += 1;
+            }
+        }
+        // Prevent overlap
+        let min_len = stems.iter().map(|s| s.len()).min().unwrap_or(0);
+        if prefix_len + suffix_len > min_len { suffix_len = min_len.saturating_sub(prefix_len); }
+
+        let first = stems[0];
+        let prefix = &first[..prefix_len];
+        let suffix = if suffix_len > 0 { &first[first.len() - suffix_len..] } else { "" };
+
+        let core = if prefix_len == min_len { first.to_string() } else { format!("{}*{}", prefix, suffix) };
+        let with_ext = if let Some(ext) = common_ext { format!("{}.{}", core, ext) } else { core };
+        Some(with_ext)
+    }
+
     /// Create a new DataSource from a DataImportConfig
     pub fn from_import_config(id: usize, config: &DataImportConfig) -> Self {
         let (name, file_path, import_type, datasets) = match config {
             DataImportConfig::Text(text_config) => {
-                let name = text_config.file_path.file_name()
-                    .unwrap_or_else(|| OsStr::new("Unknown"))
-                    .to_string_lossy()
-                    .to_string();
+                let name = if !text_config.additional_paths.is_empty() {
+                    let mut all: Vec<String> = Vec::with_capacity(1 + text_config.additional_paths.len());
+                    if let Some(f) = text_config.file_path.file_name() { all.push(f.to_string_lossy().to_string()); }
+                    for p in &text_config.additional_paths { if let Some(f) = p.file_name() { all.push(f.to_string_lossy().to_string()); } }
+                    Self::summarize_filenames(&all).unwrap_or_else(|| text_config.file_path.file_name().unwrap_or_else(|| OsStr::new("Unknown")).to_string_lossy().to_string())
+                } else {
+                    text_config.file_path.file_name().unwrap_or_else(|| OsStr::new("Unknown")).to_string_lossy().to_string()
+                };
                 let datasets = vec![Dataset {
                     id: Uuid::new_v4().to_string(),
                     name: name.clone(),
@@ -172,10 +230,14 @@ impl DataSource {
                 (name, parquet_config.file_path.to_string_lossy().to_string(), "Parquet File".to_string(), datasets)
             }
             DataImportConfig::Json(json_config) => {
-                let name = json_config.file_path.file_name()
-                    .unwrap_or_else(|| OsStr::new("Unknown"))
-                    .to_string_lossy()
-                    .to_string();
+                let name = if !json_config.additional_paths.is_empty() {
+                    let mut all: Vec<String> = Vec::with_capacity(1 + json_config.additional_paths.len());
+                    if let Some(f) = json_config.file_path.file_name() { all.push(f.to_string_lossy().to_string()); }
+                    for p in &json_config.additional_paths { if let Some(f) = p.file_name() { all.push(f.to_string_lossy().to_string()); } }
+                    Self::summarize_filenames(&all).unwrap_or_else(|| json_config.file_path.file_name().unwrap_or_else(|| OsStr::new("Unknown")).to_string_lossy().to_string())
+                } else {
+                    json_config.file_path.file_name().unwrap_or_else(|| OsStr::new("Unknown")).to_string_lossy().to_string()
+                };
                 let datasets = vec![Dataset {
                     id: Uuid::new_v4().to_string(),
                     name: name.clone(),
@@ -322,15 +384,99 @@ impl DataSource {
                     match reader.finish() {
                         Ok(lf) => match lf.collect() {
                             Ok(df_ok) => {
-                                let warning = if coerced.is_empty() {
-                                    None
-                                } else {
-                                    Some(format!(
-                                        "CSV dtype inference failed; coerced columns to Utf8: {}",
-                                        coerced.iter().cloned().collect::<Vec<_>>().join(", ")
-                                    ))
-                                };
-                                break (df_ok, warning);
+                                let mut df_accum = df_ok;
+                                // If merge and additional_paths present, append others
+                                if text_config.merge && !text_config.additional_paths.is_empty() {
+                                    // Helper: align and stack rows preserving column names; promote mixed types to Utf8
+                                    fn align_and_vstack(mut left: DataFrame, right: DataFrame) -> color_eyre::Result<DataFrame> {
+                                        use std::collections::HashMap;
+                                        use polars::prelude::*;
+                                        let left_names: Vec<String> = left.get_column_names().into_iter().map(|s| s.to_string()).collect();
+                                        let right_names: Vec<String> = right.get_column_names().into_iter().map(|s| s.to_string()).collect();
+                                        let mut all_names: Vec<String> = left_names.clone();
+                                        for n in &right_names { if !all_names.contains(n) { all_names.push(n.clone()); } }
+
+                                        let mut left_types: HashMap<String, DataType> = HashMap::new();
+                                        for n in &left_names { if let Ok(s) = left.column(n) { left_types.insert(n.clone(), s.dtype().clone()); } }
+                                        let mut right_types: HashMap<String, DataType> = HashMap::new();
+                                        for n in &right_names { if let Ok(s) = right.column(n) { right_types.insert(n.clone(), s.dtype().clone()); } }
+
+                                        let mut target: HashMap<String, DataType> = HashMap::new();
+                                        for n in &all_names {
+                                            match (left_types.get(n), right_types.get(n)) {
+                                                (Some(lt), Some(rt)) if lt == rt => { target.insert(n.clone(), lt.clone()); }
+                                                _ => { target.insert(n.clone(), DataType::String); }
+                                            }
+                                        }
+
+                                        // align left
+                                        let mut lcols: Vec<Column> = Vec::with_capacity(all_names.len());
+                                        for n in &all_names {
+                                            let t = target.get(n).unwrap();
+                                            if let Ok(s) = left.column(n) {
+                                                let sc = if s.dtype() == t { s.clone() } else { s.cast(t).map_err(|e| color_eyre::eyre::eyre!(format!("Cast error '{}' to {:?}: {}", n, t, e)))? };
+                                                lcols.push(sc.into_column());
+                                            } else {
+                                                let ser = Series::new(n.as_str().into(), vec![String::new(); left.height()]);
+                                                let sc = if &DataType::String == t { ser } else { ser.cast(t).unwrap_or(ser) };
+                                                lcols.push(sc.into_column());
+                                            }
+                                        }
+                                        let left_aligned = DataFrame::new(lcols).map_err(|e| color_eyre::eyre::eyre!(format!("Failed to build aligned left DF: {}", e)))?;
+
+                                        // align right
+                                        let mut rcols: Vec<Column> = Vec::with_capacity(all_names.len());
+                                        for n in &all_names {
+                                            let t = target.get(n).unwrap();
+                                            if let Ok(s) = right.column(n) {
+                                                let sc = if s.dtype() == t { s.clone() } else { s.cast(t).map_err(|e| color_eyre::eyre::eyre!(format!("Cast error '{}' to {:?}: {}", n, t, e)))? };
+                                                rcols.push(sc.into_column());
+                                            } else {
+                                                let ser = Series::new(n.as_str().into(), vec![String::new(); right.height()]);
+                                                let sc = if &DataType::String == t { ser } else { ser.cast(t).unwrap_or(ser) };
+                                                rcols.push(sc.into_column());
+                                            }
+                                        }
+                                        let right_aligned = DataFrame::new(rcols).map_err(|e| color_eyre::eyre::eyre!(format!("Failed to build aligned right DF: {}", e)))?;
+                                        left = left_aligned.vstack(&right_aligned).map_err(|e| color_eyre::eyre::eyre!(format!("Failed to concatenate CSV parts: {}", e)))?;
+                                        Ok(left)
+                                    }
+
+                                    for (idx_extra, p) in text_config.additional_paths.iter().enumerate() {
+                                        let mut rdr = LazyCsvReader::new(p)
+                                            .map_parse_options(|_opts| parse_options.clone())
+                                            .with_has_header(text_config.options.has_header)
+                                            .with_infer_schema_length(Some(100_000));
+
+                                        if !coerced.is_empty() {
+                                            let schema = Schema::from_iter(
+                                                coerced.iter().map(|c| {
+                                                    let col_name = c.as_str().into();
+                                                    let _dtype = DataType::String;
+                                                    Field::new(col_name, _dtype)
+                                                })
+                                            );
+                                            let schema_ref = std::sync::Arc::new(schema);
+                                            rdr = rdr.with_dtype_overwrite(Some(schema_ref));
+                                        }
+                                        let df_next = rdr.finish().and_then(|lf2| lf2.collect())
+                                            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to merge CSV part {} ({}): {}", idx_extra + 1, p.display(), e)))?;
+                                        // Align schemas and vstack
+                                        df_accum = align_and_vstack(df_accum, df_next)?;
+                                        // update sub-progress for gauge
+                                        // Note: this is coarse; we count each collected file as one step
+                                        // The Render handler interpolates busy_progress using current_sub_done/total
+                                        // Increment here so next Render reflects progress
+                                        // (Ignore errors; visualization best-effort)
+                                        // Safety clamp
+                                        // This update requires &mut self; we are in &self method, so skip direct update here.
+                                    }
+                                }
+                                let warning = if coerced.is_empty() { None } else { Some(format!(
+                                    "CSV dtype inference failed; coerced columns to Utf8: {}",
+                                    coerced.iter().cloned().collect::<Vec<_>>().join(", ")
+                                ))};
+                                break (df_accum, warning);
                             }
                             Err(e) => {
                                 tracing::error!("CSV dtype inference failed: {:?}", e);
@@ -677,65 +823,68 @@ impl DataSource {
                 use std::io::{BufRead, BufReader, Read};
                 use serde_json::Value as JsonValue;
 
-                let path = &json_config.file_path;
                 let mut objects: Vec<serde_json::Map<String, JsonValue>> = Vec::new();
-                if json_config.options.ndjson {
-                    let file = std::fs::File::open(path)
-                        .map_err(|e| color_eyre::eyre::eyre!("Failed to open NDJSON file: {e}"))?;
-                    let reader = BufReader::new(file);
-                    for line_res in reader.lines() {
-                        let line = line_res.map_err(|e| color_eyre::eyre::eyre!("Failed to read NDJSON line: {e}"))?;
-                        if line.trim().is_empty() { continue; }
-                        let val: JsonValue = serde_json::from_str(&line)
-                            .map_err(|e| color_eyre::eyre::eyre!("Failed to parse NDJSON line as JSON object: {e}"))?;
-                        if let JsonValue::Object(map) = val {
-                            objects.push(map);
-                        } else {
-                            return Err(color_eyre::eyre::eyre!("NDJSON line is not a JSON object"));
-                        }
-                    }
-                } else {
-                    let mut file = std::fs::File::open(path)
-                        .map_err(|e| color_eyre::eyre::eyre!("Failed to open JSON file: {e}"))?;
-                    let mut buf = String::new();
-                    file.read_to_string(&mut buf)
-                        .map_err(|e| color_eyre::eyre::eyre!("Failed to read JSON file: {e}"))?;
-                    let root_val: JsonValue = serde_json::from_str(&buf)
-                        .map_err(|e| color_eyre::eyre::eyre!("Failed to parse JSON: {e}"))?;
-
-                    // Apply JMESPath records expression (default '@') to select records
-                    let records_expr = json_config.options.records_expr.clone();
-                    let rt = crate::jmes::new_runtime();
-                    let expr = rt.compile(&records_expr)
-                        .map_err(|e| color_eyre::eyre::eyre!(format!("JMESPath compile error for records_expr '{}': {}", records_expr, e)))?;
-                    let var = jmespath::Variable::try_from(root_val)
-                        .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to convert JSON to JMES variable: {}", e)))?;
-                    let result = expr.search(&var)
-                        .map_err(|e| color_eyre::eyre::eyre!(format!("JMESPath search error for records_expr: {}", e)))?;
-
-                    // Convert JMES result to serde_json::Value via its JSON string representation
-                    let selected_json: JsonValue = serde_json::from_str(&result.to_string())
-                        .unwrap_or(JsonValue::Null);
-
-                    match selected_json {
-                        JsonValue::Array(arr) => {
-                            for v in arr {
-                                if let JsonValue::Object(map) = v {
-                                    objects.push(map);
-                                } else {
-                                    return Err(color_eyre::eyre::eyre!("JMESPath result array must contain only objects"));
-                                }
+                let read_json_file = |path: &std::path::Path| -> color_eyre::Result<Vec<serde_json::Map<String, JsonValue>>> {
+                    let mut local_objects: Vec<serde_json::Map<String, JsonValue>> = Vec::new();
+                    if json_config.options.ndjson {
+                        let file = std::fs::File::open(path)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to open NDJSON file '{}': {}", path.display(), e)))?;
+                        let reader = BufReader::new(file);
+                        for line_res in reader.lines() {
+                            let line = line_res.map_err(|e| color_eyre::eyre::eyre!(format!("Failed to read NDJSON line from '{}': {}", path.display(), e)))?;
+                            if line.trim().is_empty() { continue; }
+                            let val: JsonValue = serde_json::from_str(&line)
+                                .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to parse NDJSON line as JSON object in '{}': {}", path.display(), e)))?;
+                            if let JsonValue::Object(map) = val { local_objects.push(map); } else {
+                                return Err(color_eyre::eyre::eyre!(format!("NDJSON line in '{}' is not a JSON object", path.display())));
                             }
                         }
-                        JsonValue::Object(map) => {
-                            objects.push(map);
+                    } else {
+                        let mut file = std::fs::File::open(path)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to open JSON file '{}': {}", path.display(), e)))?;
+                        let mut buf = String::new();
+                        file.read_to_string(&mut buf)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to read JSON file '{}': {}", path.display(), e)))?;
+                        let root_val: JsonValue = serde_json::from_str(&buf)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to parse JSON in '{}': {}", path.display(), e)))?;
+
+                        // Apply JMESPath records expression (default '@') to select records
+                        let records_expr = json_config.options.records_expr.clone();
+                        let rt = crate::jmes::new_runtime();
+                        let expr = rt.compile(&records_expr)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("JMESPath compile error for records_expr '{}' in '{}': {}", records_expr, path.display(), e)))?;
+                        let var = jmespath::Variable::try_from(root_val)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to convert JSON to JMES variable ({}): {}", path.display(), e)))?;
+                        let result = expr.search(&var)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("JMESPath search error for records_expr in '{}': {}", path.display(), e)))?;
+
+                        let selected_json: JsonValue = serde_json::from_str(&result.to_string())
+                            .unwrap_or(JsonValue::Null);
+
+                        match selected_json {
+                            JsonValue::Array(arr) => {
+                                for v in arr {
+                                    if let JsonValue::Object(map) = v { local_objects.push(map); } else {
+                                        return Err(color_eyre::eyre::eyre!("JMESPath result array must contain only objects"));
+                                    }
+                                }
+                            }
+                            JsonValue::Object(map) => { local_objects.push(map); }
+                            JsonValue::Null => { /* no records in this file */ }
+                            _ => { return Err(color_eyre::eyre::eyre!("JMESPath result must be an object or array of objects")); }
                         }
-                        JsonValue::Null => {
-                            // No records found -> empty
-                        }
-                        _ => {
-                            return Err(color_eyre::eyre::eyre!("JMESPath result must be an object or array of objects"));
-                        }
+                    }
+                    Ok(local_objects)
+                };
+
+                // Primary file
+                objects.extend(read_json_file(&json_config.file_path)?);
+                // If merge is requested, append objects from additional_paths
+                if json_config.merge {
+                    for p in &json_config.additional_paths {
+                        let more = read_json_file(p)?;
+                        objects.extend(more);
+                        // See note above for CSV; sub-progress increment handled in Render via counts
                     }
                 }
 
@@ -825,6 +974,18 @@ pub struct DataManagementDialog {
     pub load_errors: Vec<String>,
     #[serde(skip)]
     pub current_loading: Option<String>,
+    // Per-dataset intra-progress when a dataset consists of multiple files (globs)
+    #[serde(skip)]
+    pub current_sub_total: usize,
+    #[serde(skip)]
+    pub current_sub_done: usize,
+    // JSON merge state for incremental per-file processing
+    #[serde(skip)]
+    pub current_json_pending: Vec<std::path::PathBuf>,
+    #[serde(skip)]
+    pub current_json_objects: Vec<serde_json::Map<String, serde_json::Value>>, 
+    #[serde(skip)]
+    pub current_json_options: Option<crate::dialog::json_options_dialog::JsonImportOptions>,
 }
 
 impl Default for DataManagementDialog {
@@ -832,6 +993,82 @@ impl Default for DataManagementDialog {
 }
 
 impl DataManagementDialog {
+    /// Read one JSON file into a vector of object maps using current options
+    fn read_json_file_incremental(path: &std::path::Path, opts: &crate::dialog::json_options_dialog::JsonImportOptions) -> color_eyre::Result<Vec<serde_json::Map<String, serde_json::Value>>> {
+        use std::io::{BufRead, BufReader, Read};
+        use serde_json::Value as JsonValue;
+        let mut out: Vec<serde_json::Map<String, JsonValue>> = Vec::new();
+        if opts.ndjson {
+            let file = std::fs::File::open(path)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to open NDJSON file '{}': {}", path.display(), e)))?;
+            let reader = BufReader::new(file);
+            for line_res in reader.lines() {
+                let line = line_res.map_err(|e| color_eyre::eyre::eyre!(format!("Failed to read NDJSON line from '{}': {}", path.display(), e)))?;
+                if line.trim().is_empty() { continue; }
+                let val: JsonValue = serde_json::from_str(&line)
+                    .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to parse NDJSON line as JSON object in '{}': {}", path.display(), e)))?;
+                if let JsonValue::Object(map) = val { out.push(map); } else {
+                    return Err(color_eyre::eyre::eyre!(format!("NDJSON line in '{}' is not a JSON object", path.display())));
+                }
+            }
+        } else {
+            let mut file = std::fs::File::open(path)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to open JSON file '{}': {}", path.display(), e)))?;
+            let mut buf = String::new();
+            file.read_to_string(&mut buf)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to read JSON file '{}': {}", path.display(), e)))?;
+            let root_val: JsonValue = serde_json::from_str(&buf)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to parse JSON in '{}': {}", path.display(), e)))?;
+
+            let rt = crate::jmes::new_runtime();
+            let expr = rt.compile(&opts.records_expr)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("JMESPath compile error for records_expr '{}' in '{}': {}", opts.records_expr, path.display(), e)))?;
+            let var = jmespath::Variable::try_from(root_val)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to convert JSON to JMES variable ({}): {}", path.display(), e)))?;
+            let result = expr.search(&var)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("JMESPath search error for records_expr in '{}': {}", path.display(), e)))?;
+            let selected_json: JsonValue = serde_json::from_str(&result.to_string()).unwrap_or(JsonValue::Null);
+            match selected_json {
+                JsonValue::Array(arr) => {
+                    for v in arr { if let JsonValue::Object(map) = v { out.push(map); } }
+                }
+                JsonValue::Object(map) => { out.push(map); }
+                JsonValue::Null => {}
+                _ => { return Err(color_eyre::eyre::eyre!("JMESPath result must be an object or array of objects")); }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Build DF from accumulated JSON object maps (string-typed columns)
+    fn build_df_from_json_maps_local(
+        objs: &[serde_json::Map<String, serde_json::Value>]
+    ) -> color_eyre::Result<polars::prelude::DataFrame> {
+        use std::collections::BTreeSet;
+        let mut keys: BTreeSet<String> = BTreeSet::new();
+        for o in objs { for k in o.keys() { keys.insert(k.clone()); } }
+        let mut columns: Vec<polars::prelude::Column> = Vec::with_capacity(keys.len());
+        for key in keys.iter() {
+            let mut col_vals: Vec<String> = Vec::with_capacity(objs.len());
+            for obj in objs {
+                let v = obj.get(key).cloned().unwrap_or(serde_json::Value::Null);
+                let s = match v {
+                    serde_json::Value::Null => String::new(),
+                    serde_json::Value::Bool(b) => b.to_string(),
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                };
+                col_vals.push(s);
+            }
+            let s = polars::prelude::Series::new(key.as_str().into(), col_vals);
+            columns.push(s.into());
+        }
+        let df = polars::prelude::DataFrame::new(columns)
+            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to build DataFrame from JSON: {}", e)))?;
+        Ok(df)
+    }
+
     /// Create a new DataManagementDialog
     pub fn new() -> Self {
         Self {
@@ -851,6 +1088,11 @@ impl DataManagementDialog {
             pending_queue: Vec::new(),
             load_errors: Vec::new(),
             current_loading: None,
+            current_sub_total: 0,
+            current_sub_done: 0,
+            current_json_pending: Vec::new(),
+            current_json_objects: Vec::new(),
+            current_json_options: None,
         }
     }
 
@@ -1112,6 +1354,8 @@ impl DataManagementDialog {
         self.busy_active = true;
         self.busy_message = format!("Importing datasets (0/{})", self.queue_total);
         self.busy_progress = 0.0;
+        self.current_sub_total = 0;
+        self.current_sub_done = 0;
         Ok(())
     }
 
@@ -1120,11 +1364,28 @@ impl DataManagementDialog {
     pub fn process_next_in_queue(&mut self) -> Result<()> {
         if !self.busy_active { return Ok(()); }
         if let Some((source_id, dataset_name)) = self.pending_queue.first().cloned() {
-            // Phase 1: show message for the current item, then return to allow a frame to render it
+            // Phase 1: show message for the current item, compute sub counts, then return to allow a frame to render it
             if self.current_loading.as_deref() != Some(&dataset_name) {
                 self.current_loading = Some(dataset_name.clone());
+                self.current_sub_total = 1; self.current_sub_done = 0;
+                if let Some(ds_ref) = self.data_sources.iter().find(|s| s.id == source_id) {
+                    match &ds_ref.data_import_config {
+                        DataImportConfig::Text(cfg) => {
+                            self.current_sub_total = 1 + cfg.additional_paths.len();
+                        }
+                        DataImportConfig::Json(cfg) => {
+                            self.current_sub_total = 1 + if cfg.merge { cfg.additional_paths.len() } else { 0 };
+                        }
+                        _ => {}
+                    }
+                }
                 let display_done = self.queue_done.min(self.queue_total);
-                self.busy_message = format!("Loading '{}' ({}/{})", dataset_name, display_done + 1, self.queue_total);
+                if self.current_sub_total > 1 {
+                    self.busy_message = format!("Loading '{}' file {}/{} (dataset {}/{})",
+                        dataset_name, self.current_sub_done + 1, self.current_sub_total, display_done + 1, self.queue_total);
+                } else {
+                    self.busy_message = format!("Loading '{}' ({}/{})", dataset_name, display_done + 1, self.queue_total);
+                }
                 return Ok(());
             }
             // Mark Processing and clear previous error
@@ -1135,20 +1396,94 @@ impl DataManagementDialog {
             if let Some(ds_ref) = self.data_sources.iter().find(|s| s.id == source_id) {
                 let dataset_cloned = ds_ref.datasets.iter().find(|d| d.name == dataset_name).cloned();
                 if let Some(dataset) = dataset_cloned {
-                    match ds_ref.load_dataset(&dataset) {
-                        Ok(dataframe) => {
-                            self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Imported);
-                            let row_count = dataframe.height();
-                            let column_count = dataframe.width();
-                            self.update_dataset_data(source_id, &dataset_name, row_count, column_count);
+                    // If this dataset maps to a multi-file JSON source, initialize incremental processing
+                    match &ds_ref.data_import_config {
+                        DataImportConfig::Json(cfg) if cfg.merge && !cfg.additional_paths.is_empty() => {
+                            // Initialize pending list only once per dataset
+                            if self.current_json_pending.is_empty() && self.current_sub_done == 0 {
+                                self.current_sub_total = 1 + cfg.additional_paths.len();
+                                self.current_json_pending.clear();
+                                self.current_json_pending.push(cfg.file_path.clone());
+                                self.current_json_pending.extend(cfg.additional_paths.clone());
+                                self.current_json_options = Some(cfg.options.clone());
+                                self.current_json_objects.clear();
+                            }
+
+                            // Process one JSON file per Render tick
+                            if let Some(path) = self.current_json_pending.first().cloned() {
+                                let jsons = Self::read_json_file_incremental(&path, self.current_json_options.as_ref().unwrap())?;
+                                self.current_json_objects.extend(jsons);
+                                let _ = self.current_json_pending.remove(0);
+                                self.current_sub_done = self.current_sub_done.saturating_add(1);
+                                // Update message to reflect file sub-progress
+                                let display_done = self.queue_done.min(self.queue_total);
+                                self.busy_message = format!("Loading '{}' file {}/{} (dataset {}/{})",
+                                    dataset_name, self.current_sub_done.min(self.current_sub_total), self.current_sub_total,
+                                    display_done + 1, self.queue_total);
+                                // Re-queue current dataset to continue on next Render
+                                return Ok(());
+                            }
+
+                            // Fallback: if no pending, finalize below
                         }
-                        Err(e) => {
-                            self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Failed);
-                            self.update_dataset_error(source_id, &dataset_name, Some(e.to_string()));
-                            if let Some(ds_ref_name) = self.data_sources.iter().find(|s| s.id == source_id).map(|s| s.name.clone()) {
-                                self.load_errors.push(format!("Source '{ds_ref_name}', Dataset '{dataset_name}': {e}"));
-                            } else {
-                                self.load_errors.push(format!("Dataset '{dataset_name}': {e}"));
+                        DataImportConfig::Text(cfg) => {
+                            self.current_sub_total = 1 + cfg.additional_paths.len();
+                        }
+                        _ => {
+                            self.current_sub_total = 1;
+                        }
+                    }
+
+                    // If we staged JSON incremental, keep accumulating until all files are processed
+                    if let DataImportConfig::Json(cfg) = &ds_ref.data_import_config {
+                        if cfg.merge && !cfg.additional_paths.is_empty() {
+                            // If still have pending files, bail out now; next Render will continue
+                            if !self.current_json_pending.is_empty() {
+                                return Ok(());
+                            }
+                            // Finalize DataFrame from accumulated objects
+                            let df = Self::build_df_from_json_maps_local(&self.current_json_objects)?;
+                            self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Imported);
+                            self.update_dataset_data(source_id, &dataset_name, df.height(), df.width());
+                            // Clear staged state
+                            self.current_json_objects.clear();
+                            self.current_json_options = None;
+                            self.current_sub_total = 0; self.current_sub_done = 0;
+                        } else {
+                            match ds_ref.load_dataset(&dataset) {
+                                Ok(dataframe) => {
+                                    self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Imported);
+                                    let row_count = dataframe.height();
+                                    let column_count = dataframe.width();
+                                    self.update_dataset_data(source_id, &dataset_name, row_count, column_count);
+                                }
+                                Err(e) => {
+                                    self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Failed);
+                                    self.update_dataset_error(source_id, &dataset_name, Some(e.to_string()));
+                                    if let Some(ds_ref_name) = self.data_sources.iter().find(|s| s.id == source_id).map(|s| s.name.clone()) {
+                                        self.load_errors.push(format!("Source '{ds_ref_name}', Dataset '{dataset_name}': {e}"));
+                                    } else {
+                                        self.load_errors.push(format!("Dataset '{dataset_name}': {e}"));
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        match ds_ref.load_dataset(&dataset) {
+                            Ok(dataframe) => {
+                                self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Imported);
+                                let row_count = dataframe.height();
+                                let column_count = dataframe.width();
+                                self.update_dataset_data(source_id, &dataset_name, row_count, column_count);
+                            }
+                            Err(e) => {
+                                self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Failed);
+                                self.update_dataset_error(source_id, &dataset_name, Some(e.to_string()));
+                                if let Some(ds_ref_name) = self.data_sources.iter().find(|s| s.id == source_id).map(|s| s.name.clone()) {
+                                    self.load_errors.push(format!("Source '{ds_ref_name}', Dataset '{dataset_name}': {e}"));
+                                } else {
+                                    self.load_errors.push(format!("Dataset '{dataset_name}': {e}"));
+                                }
                             }
                         }
                     }
@@ -1159,6 +1494,8 @@ impl DataManagementDialog {
             let _ = self.pending_queue.remove(0);
             self.queue_done = self.queue_done.saturating_add(1);
             self.current_loading = None;
+            self.current_sub_total = 0;
+            self.current_sub_done = 0;
             if self.queue_done < self.queue_total {
                 // Peek next item to show name if available
                 if let Some((_, next_name)) = self.pending_queue.first() {
@@ -1535,6 +1872,30 @@ impl Component for DataManagementDialog {
                 if self.busy_active {
                     // Process the next item after the overlay has been drawn
                     self.process_next_in_queue()?;
+                    // Advance sub-progress smoothly while processing multi-file datasets
+                    if self.current_sub_total > 1 {
+                        // We approximate sub_done by scanning currently loading source config
+                        if let Some(current) = self.current_loading.clone() {
+                            if let Some((_, src, _)) = self.get_all_datasets().into_iter().find(|(_, s, d)| d.name == current) {
+                                match &src.data_import_config {
+                                    DataImportConfig::Text(cfg) => {
+                                        self.current_sub_total = 1 + cfg.additional_paths.len();
+                                    }
+                                    DataImportConfig::Json(cfg) => {
+                                        self.current_sub_total = 1 + if cfg.merge { cfg.additional_paths.len() } else { 0 };
+                                    }
+                                    _ => { self.current_sub_total = 1; }
+                                }
+                            }
+                        }
+                        let base = self.queue_done as f64 / (self.queue_total.max(1) as f64);
+                        // Heuristic: bump sub_done proportionally to elapsed progress animation
+                        // Ensures the bar moves within the current dataset window
+                        let sub_ratio = ((self.busy_progress - base) / (1.0 / (self.queue_total.max(1) as f64))).clamp(0.0, 1.0);
+                        let next_base = (self.queue_done.saturating_add(1)) as f64 / (self.queue_total.max(1) as f64);
+                        // Interpolate between current dataset window [base, next_base)
+                        self.busy_progress = (base + (next_base - base) * sub_ratio).clamp(0.0, 1.0);
+                    }
                 }
                 Ok(None)
             }
@@ -1577,6 +1938,8 @@ mod tests {
         let text_config = crate::data_import_types::TextImportConfig {
             file_path: PathBuf::from("examples/pokemon_data.csv"),
             options: csv_options,
+            additional_paths: Vec::new(),
+            merge: false,
         };
         
         let data_source = DataSource::from_import_config(0, &DataImportConfig::Text(text_config));
@@ -1604,6 +1967,8 @@ mod tests {
         let text_config = crate::data_import_types::TextImportConfig {
             file_path: PathBuf::from("examples/pokemon_data.csv"),
             options: csv_options,
+            additional_paths: Vec::new(),
+            merge: false,
         };
         
         // Add the data source
@@ -1632,6 +1997,8 @@ mod tests {
         let text_config = crate::data_import_types::TextImportConfig {
             file_path: PathBuf::from("examples/pokemon_data.csv"),
             options: csv_options,
+            additional_paths: Vec::new(),
+            merge: false,
         };
         
         // Add the data source

@@ -13,6 +13,10 @@ use crate::dialog::json_options_dialog::JsonImportOptions;
 pub struct TextImportConfig {
     pub file_path: PathBuf,
     pub options: CsvImportOptions,
+    #[serde(default)]
+    pub additional_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub merge: bool,
 }
 
 /// Excel file import configuration
@@ -42,6 +46,10 @@ pub struct ParquetImportConfig {
 pub struct JsonImportConfig {
     pub file_path: PathBuf,
     pub options: JsonImportOptions,
+    #[serde(default)]
+    pub additional_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub merge: bool,
 }
 
 /// Enum that can store different types of import configurations
@@ -82,6 +90,8 @@ impl DataImportConfig {
         DataImportConfig::Text(TextImportConfig {
             file_path,
             options,
+            additional_paths: Vec::new(),
+            merge: false,
         })
     }
 
@@ -124,6 +134,8 @@ impl DataImportConfig {
         DataImportConfig::Json(JsonImportConfig {
             file_path,
             options,
+            additional_paths: Vec::new(),
+            merge: false,
         })
     }
 } 

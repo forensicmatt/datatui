@@ -208,6 +208,8 @@ impl DataTabManagerDialog {
             data_import_config: DataImportConfig::Text(crate::data_import_types::TextImportConfig {
                 file_path: std::path::PathBuf::from(format!("sql://{dataset_name}")),
                 options: crate::dialog::csv_options_dialog::CsvImportOptions::default(),
+                additional_paths: Vec::new(),
+                merge: false,
             }),
         };
 

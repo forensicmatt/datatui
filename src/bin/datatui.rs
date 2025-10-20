@@ -73,29 +73,15 @@ fn main() -> Result<()> {
         let _ = tab_manager.register_config_handler(cfg);
     }
 
-    // Process any --load specs before setting up terminal
-    if !args.load.is_empty() {
-        match materialize_and_add_loads(&args.load, &mut tab_manager) {
-            Ok(added) => {
-                if added > 0 {
-                    let _ = tab_manager.data_management_dialog.begin_queued_import();
-                }
-            }
-            Err(e) => {
-                error!("Failed to process --load specs: {e}");
-            }
-        }
-    }
-    
-    // Set up terminal
+    // Set up terminal (render first before heavy work so users see UI immediately)
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // App loop
-    let res = run_app(&mut terminal, &mut tab_manager);
+    // App loop (defer --load processing until after the first frame renders)
+    let res = run_app(&mut terminal, &mut tab_manager, args.load);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -109,7 +95,9 @@ fn main() -> Result<()> {
 fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     tab_manager: &mut DataTabManagerDialog,
-) -> anyhow::Result<()> {
+    initial_load_specs: Vec<String>,
+) -> color_eyre::Result<()> {
+    let mut pending_load_specs: Option<Vec<String>> = if initial_load_specs.is_empty() { None } else { Some(initial_load_specs) };
     // Optional global Keybindings dialog overlay, opened via a global shortcut
     let mut keybindings_dialog: Option<KeybindingsDialog> = None;
     loop {
@@ -123,6 +111,47 @@ fn run_app<B: ratatui::backend::Backend>(
         })?;
         // After drawing, process queued Render work (overlay is now visible)
         let _ = tab_manager.update(Action::Render);
+
+        // If we have deferred --load specs, process them now that UI has rendered at least once
+        if let Some(specs) = pending_load_specs.take() {
+            // Show an immediate status that we're detecting input formats before heavy work
+            tab_manager.show_data_management = true;
+            {
+                let dmd = &mut tab_manager.data_management_dialog;
+                dmd.busy_active = true;
+                dmd.busy_message = "Detecting input formats...".to_string();
+                dmd.busy_progress = 0.0;
+                dmd.queue_total = 0;
+                dmd.queue_done = 0;
+                dmd.current_loading = None;
+            }
+            // Draw once to show the detection message before we start processing
+            terminal.draw(|f| {
+                let size = f.area();
+                tab_manager.draw(f, size).unwrap();
+            })?;
+            let _ = tab_manager.update(Action::Render);
+
+            match materialize_and_add_loads(&specs, tab_manager) {
+                Ok(added) => {
+                    if added > 0 {
+                        // Show Data Management so progress is visible while imports run
+                        tab_manager.show_data_management = true;
+                        let _ = tab_manager.data_management_dialog.begin_queued_import();
+                    } else {
+                        // Nothing to import; clear busy overlay
+                        let dmd = &mut tab_manager.data_management_dialog;
+                        dmd.busy_active = false;
+                        dmd.busy_message.clear();
+                        dmd.busy_progress = 0.0;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to process --load specs: {e}");
+                    return Err(e);
+                }
+            }
+        }
         // If Data Management is visible and busy, pump a few extra render/update cycles to show progress
         if tab_manager.show_data_management && tab_manager.data_management_dialog.busy_active {
             for _ in 0..3 {
@@ -210,6 +239,23 @@ fn run_app<B: ratatui::backend::Backend>(
 
 
 
+// Ensure only known option keys are present for a given kind; otherwise return an error
+fn ensure_only_allowed_keys(kind: &str, kv: &std::collections::HashMap<String, String>, allowed: &[&str]) -> color_eyre::Result<()> {
+    let mut unknown: Vec<String> = Vec::new();
+    for k in kv.keys() {
+        if !allowed.contains(&k.as_str()) {
+            unknown.push(k.clone());
+        }
+    }
+    if !unknown.is_empty() {
+        return Err(color_eyre::eyre::eyre!(format!(
+            "Unknown option(s) for {kind}: {}",
+            unknown.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 // Parse and add --load specs to the DataTabManagerDialog.
 fn materialize_and_add_loads(specs: &[String], tab_manager: &mut DataTabManagerDialog) -> color_eyre::Result<usize> {
     let mut added = 0usize;
@@ -223,6 +269,7 @@ fn materialize_and_add_loads(specs: &[String], tab_manager: &mut DataTabManagerD
             }
             Err(e) => {
                 error!("Invalid --load spec '{s}': {e}");
+                panic!("Invalid --load spec '{s}': {e}");
             }
         }
     }
@@ -262,51 +309,74 @@ fn parse_load_spec(spec: &str) -> color_eyre::Result<Vec<DataImportConfig>> {
     match kind.as_str() {
         // Text/CSV-like
         "text" | "csv" | "tsv" | "psv" => {
+            ensure_only_allowed_keys(
+                &kind,
+                &kv,
+                &[
+                    "delim",
+                    "delimiter",
+                    "header",
+                    "has_header",
+                    "quote",
+                    "quote_char",
+                    "escape",
+                    "escape_char",
+                    "merge",
+                ],
+            )?;
             let mut out = Vec::new();
             let merge = kv.get("merge").map(|v| parse_bool(v)).unwrap_or(false);
-            for pb in paths {
-                let mut opts = CsvImportOptions::default();
-                // Kind shortcuts for delimiter
-                if kind == "tsv" { opts.delimiter = '\t'; }
-                if kind == "psv" { opts.delimiter = '|'; }
-                if kind == "csv" { opts.delimiter = ','; }
-                // Guess from extension if not overridden
-                if let Some(ext) = pb.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()) {
-                    if opts.delimiter == ',' {
-                        if ext == "tsv" { opts.delimiter = '\t'; }
-                        else if ext == "psv" { opts.delimiter = '|'; }
+            if !paths.is_empty() {
+                // First path becomes primary; rest go into additional_paths and merge flag.
+                let mut primary: Option<DataImportConfig> = None;
+                let mut extras: Vec<PathBuf> = Vec::new();
+                for (idx, pb) in paths.iter().enumerate() {
+                    let mut opts = CsvImportOptions::default();
+                    // Kind shortcuts for delimiter
+                    if kind == "tsv" { opts.delimiter = '\t'; }
+                    if kind == "psv" { opts.delimiter = '|'; }
+                    if kind == "csv" { opts.delimiter = ','; }
+                    // Guess from extension if not overridden
+                    if let Some(ext) = pb.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()) {
+                        if opts.delimiter == ',' {
+                            if ext == "tsv" { opts.delimiter = '\t'; }
+                            else if ext == "psv" { opts.delimiter = '|'; }
+                        }
+                    }
+                    if let Some(v) = kv.get("delim").or_else(|| kv.get("delimiter")) {
+                        opts.delimiter = parse_delimiter(v)?;
+                    }
+                    if let Some(v) = kv.get("header").or_else(|| kv.get("has_header")) {
+                        opts.has_header = parse_bool(v);
+                    }
+                    if let Some(v) = kv.get("quote").or_else(|| kv.get("quote_char")) {
+                        opts.quote_char = parse_char_opt(v);
+                    }
+                    if let Some(v) = kv.get("escape").or_else(|| kv.get("escape_char")) {
+                        opts.escape_char = parse_char_opt(v);
+                    }
+                    if idx == 0 {
+                        let mut cfg = DataImportConfig::text(pb.clone(), opts);
+                        if let DataImportConfig::Text(ref mut t) = cfg {
+                            t.merge = merge;
+                        }
+                        primary = Some(cfg);
+                    } else {
+                        extras.push(pb.clone());
                     }
                 }
-                if let Some(v) = kv.get("delim").or_else(|| kv.get("delimiter")) {
-                    opts.delimiter = parse_delimiter(v)?;
+                if let Some(mut cfg) = primary {
+                    if let DataImportConfig::Text(ref mut t) = cfg {
+                        t.additional_paths = extras;
+                    }
+                    out.push(cfg);
                 }
-                if let Some(v) = kv.get("header").or_else(|| kv.get("has_header")) {
-                    opts.has_header = parse_bool(v);
-                }
-                if let Some(v) = kv.get("quote").or_else(|| kv.get("quote_char")) {
-                    opts.quote_char = parse_char_opt(v);
-                }
-                if let Some(v) = kv.get("escape").or_else(|| kv.get("escape_char")) {
-                    opts.escape_char = parse_char_opt(v);
-                }
-                out.push(DataImportConfig::text(pb, opts));
-            }
-            // If merge requested and multiple paths, create a merged temp and return single config
-            if merge && out.len() > 1 {
-                // Derive options from the first entry
-                let first_opts = if let DataImportConfig::Text(cfg) = &out[0] { cfg.options.clone() } else { CsvImportOptions::default() };
-                // Rebuild original paths from created configs
-                let mut orig_paths: Vec<PathBuf> = Vec::new();
-                for cfg in &out {
-                    if let DataImportConfig::Text(t) = cfg { orig_paths.push(t.file_path.clone()); }
-                }
-                let merged_path = create_merged_text_tmp(&orig_paths, &first_opts)?;
-                return Ok(vec![DataImportConfig::text(merged_path, first_opts)]);
             }
             Ok(out)
         }
         // Excel
         "xlsx" | "xls" => {
+            ensure_only_allowed_keys(&kind, &kv, &["all_sheets", "sheets", "sheet"]) ?;
             let mut out = Vec::new();
             for pb in paths {
                 // Default: load worksheet info and mark all load=true
@@ -327,6 +397,7 @@ fn parse_load_spec(spec: &str) -> color_eyre::Result<Vec<DataImportConfig>> {
         }
         // SQLite
         "sqlite" | "db" => {
+            ensure_only_allowed_keys(&kind, &kv, &["import_all_tables", "table", "tables"]) ?;
             let mut out = Vec::new();
             for pb in paths {
                 let mut opts = SqliteImportOptions::default();
@@ -339,6 +410,7 @@ fn parse_load_spec(spec: &str) -> color_eyre::Result<Vec<DataImportConfig>> {
         }
         // Parquet
         "parquet" => {
+            ensure_only_allowed_keys(&kind, &kv, &[])?;
             let mut out = Vec::new();
             for pb in paths {
                 let opts = ParquetImportOptions::default();
@@ -348,27 +420,33 @@ fn parse_load_spec(spec: &str) -> color_eyre::Result<Vec<DataImportConfig>> {
         }
         // JSON / NDJSON
         "json" | "jsonl" | "ndjson" => {
+            ensure_only_allowed_keys(&kind, &kv, &["ndjson", "records", "merge"]) ?;
             let mut out = Vec::new();
             let merge = kv.get("merge").map(|v| parse_bool(v)).unwrap_or(false);
-            for pb in paths {
-                let mut opts = JsonImportOptions::default();
-                if kind == "jsonl" || kind == "ndjson" { opts.ndjson = true; }
-                if let Some(v) = kv.get("ndjson") { opts.ndjson = parse_bool(v); }
-                if let Some(expr) = kv.get("records") { opts.records_expr = expr.to_string(); }
-                out.push(DataImportConfig::json(pb, opts));
-            }
-            if merge && out.len() > 1 {
-                // Only supported for NDJSON
-                let first_opts = if let DataImportConfig::Json(cfg) = &out[0] { cfg.options.clone() } else { JsonImportOptions::default() };
-                if !first_opts.ndjson {
-                    return Err(color_eyre::eyre::eyre!("merge is only supported for NDJSON (jsonl)"));
+            if !paths.is_empty() {
+                let mut primary: Option<DataImportConfig> = None;
+                let mut extras: Vec<PathBuf> = Vec::new();
+                for (idx, pb) in paths.iter().enumerate() {
+                    let mut opts = JsonImportOptions::default();
+                    if kind == "jsonl" || kind == "ndjson" { opts.ndjson = true; }
+                    if let Some(v) = kv.get("ndjson") { opts.ndjson = parse_bool(v); }
+                    if let Some(expr) = kv.get("records") { opts.records_expr = expr.to_string(); }
+                    if idx == 0 {
+                        let mut cfg = DataImportConfig::json(pb.clone(), opts);
+                        if let DataImportConfig::Json(ref mut j) = cfg {
+                            j.merge = merge;
+                        }
+                        primary = Some(cfg);
+                    } else {
+                        extras.push(pb.clone());
+                    }
                 }
-                let mut orig_paths: Vec<PathBuf> = Vec::new();
-                for cfg in &out {
-                    if let DataImportConfig::Json(j) = cfg { orig_paths.push(j.file_path.clone()); }
+                if let Some(mut cfg) = primary {
+                    if let DataImportConfig::Json(ref mut j) = cfg {
+                        j.additional_paths = extras;
+                    }
+                    out.push(cfg);
                 }
-                let merged_path = create_merged_ndjson_tmp(&orig_paths)?;
-                return Ok(vec![DataImportConfig::json(merged_path, first_opts)]);
             }
             Ok(out)
         }
@@ -449,59 +527,3 @@ fn expand_glob_paths(input: &str) -> color_eyre::Result<Vec<PathBuf>> {
         Ok(out)
     }
 }
-
-// Concatenate multiple text files into a single temporary CSV/TSV/PSV according to options.
-fn create_merged_text_tmp(paths: &[PathBuf], opts: &CsvImportOptions) -> color_eyre::Result<PathBuf> {
-    if paths.is_empty() { return Err(color_eyre::eyre::eyre!("No files to merge")); }
-    let ext = match opts.delimiter {
-        '\t' => "tsv",
-        '|' => "psv",
-        _ => "csv",
-    };
-    let tmp = std::env::temp_dir().join(format!("datatui_merge_{}.{}", Uuid::new_v4(), ext));
-    let mut out = BufWriter::new(std::fs::File::create(&tmp)?);
-
-    let mut _wrote_header = false;
-    for (idx, p) in paths.iter().enumerate() {
-        let file = std::fs::File::open(p)?;
-        let reader = BufReader::new(file);
-        for (line_idx, line_res) in reader.lines().enumerate() {
-            let line = line_res?;
-            if line_idx == 0 && opts.has_header {
-                if idx == 0 {
-                    out.write_all(line.as_bytes())?;
-                    out.write_all(b"\n")?;
-                    _wrote_header = true;
-                } else {
-                    // skip subsequent headers
-                }
-            } else {
-                out.write_all(line.as_bytes())?;
-                out.write_all(b"\n")?;
-            }
-        }
-    }
-    out.flush()?;
-    // If user requested header=false but files had headers, we didn't alter; that's acceptable.
-    Ok(tmp)
-}
-
-// Concatenate multiple NDJSON files into a single temporary NDJSON.
-fn create_merged_ndjson_tmp(paths: &[PathBuf]) -> color_eyre::Result<PathBuf> {
-    if paths.is_empty() { return Err(color_eyre::eyre::eyre!("No files to merge")); }
-    let tmp = std::env::temp_dir().join(format!("datatui_merge_{}.jsonl", Uuid::new_v4()));
-    let mut out = BufWriter::new(std::fs::File::create(&tmp)?);
-    for p in paths {
-        let file = std::fs::File::open(p)?;
-        let reader = BufReader::new(file);
-        for line_res in reader.lines() {
-            let line = line_res?;
-            if line.trim().is_empty() { continue; }
-            out.write_all(line.as_bytes())?;
-            out.write_all(b"\n")?;
-        }
-    }
-    out.flush()?;
-    Ok(tmp)
-}
-
