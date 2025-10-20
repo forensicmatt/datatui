@@ -16,10 +16,77 @@ pub enum Action {
     Resize(u16, u16),
     Suspend,
     Resume,
-    Quit,
     ClearScreen,
     Error(String),
     Help,
+    /// Global actions (configurable)
+    Quit,
+    OpenKeybindings,
+    Escape,
+    Enter,
+    Backspace,
+    Up,
+    Down,
+    Left,
+    Right,
+    Tab,
+    Paste,
+    /// DataManagementDialog actions (configurable)
+    DeleteSelectedSource,
+    LoadAllPendingDatasets,
+    EditSelectedAlias,
+    /// Open the Project Settings dialog
+    OpenProjectSettingsDialog,
+    /// Close the Project Settings dialog
+    CloseProjectSettingsDialog,
+    /// Open the Sort dialog in the current context
+    OpenSortDialog,
+    /// Quick sort: add/select current column in Sort dialog
+    QuickSortCurrentColumn,
+    /// Open the Filter dialog
+    OpenFilterDialog,
+    /// Quick filter: equals on current cell value
+    QuickFilterEqualsCurrentValue,
+    /// Move selected column left within the table
+    MoveSelectedColumnLeft,
+    /// Move selected column right within the table
+    MoveSelectedColumnRight,
+    /// Open SQL dialog
+    OpenSqlDialog,
+    /// Open JMESPath dialog
+    OpenJmesDialog,
+    /// Open Column Operations dialog
+    OpenColumnOperationsDialog,
+    /// Open Find dialog
+    OpenFindDialog,
+    /// Open DataFrame Details dialog
+    OpenDataframeDetailsDialog,
+    /// Open Column Width dialog
+    OpenColumnWidthDialog,
+    /// Open Data Export dialog
+    OpenDataExportDialog,
+    /// Copy currently selected cell
+    CopySelectedCell,
+    /// Toggle instructions panel
+    ToggleInstructions,
+    /// Open the Data Management dialog
+    OpenDataManagementDialog,
+    /// Close the Data Management dialog
+    CloseDataManagementDialog,
+    /// Move current tab to front
+    MoveTabToFront,
+    /// Move current tab to back
+    MoveTabToBack,
+    /// Move current tab one position left
+    MoveTabLeft,
+    /// Move current tab one position right
+    MoveTabRight,
+    /// Switch to previous tab
+    PrevTab,
+    /// Switch to next tab
+    NextTab,
+    /// Manually synchronize tabs from Data Management
+    SyncTabs,
     /// Close any active dialog
     DialogClose,
     /// User applied a sort dialog with columns and directions
@@ -76,6 +143,10 @@ pub enum Action {
     CloseDataImportDialog,
     /// User requested to confirm data import
     ConfirmDataImport,
+    /// User selected an item in DataImport dialog (e.g., proceed/open options)
+    DataImportSelect,
+    /// User requested to go back within the DataImport dialog
+    DataImportBack,
     /// User requested to add a data import configuration
     AddDataImportConfig {
         config: crate::data_import_types::DataImportConfig,
@@ -98,18 +169,15 @@ pub enum Action {
     CloseSqliteOptionsDialog,
     /// User requested to open Parquet options dialog
     OpenParquetOptionsDialog,
+    /// Internal: start blocking import with gauge updates
+    StartBlockingImport,
     /// User requested to close Parquet options dialog
     CloseParquetOptionsDialog,
     /// User requested to open JSON options dialog
     OpenJsonOptionsDialog,
     /// User requested to close JSON options dialog
     CloseJsonOptionsDialog,
-    /// User requested to open data management dialog
-    OpenDataManagementDialog,
-    /// User requested to close data management dialog
-    CloseDataManagementDialog,
-    /// User requested to open data export dialog
-    OpenDataExportDialog,
+    // (OpenDataExportDialog moved earlier in the enum)
     /// User requested to close data export dialog
     CloseDataExportDialog,
     /// User requested to remove a data source
@@ -147,6 +215,121 @@ pub enum Action {
     ColumnOperationRequested(String),
     /// User applied column operation options
     ColumnOperationOptionsApplied(crate::dialog::column_operation_options_dialog::ColumnOperationConfig),
+    /// Internal container -> manager: open export dialog (alias already exists earlier)
+    OpenDataExportDialogAlias,
+    /// Sort dialog specific actions
+    ToggleSortDirection,
+    RemoveSortColumn,
+    AddSortColumn,
+    /// Filter dialog specific actions
+    AddFilter,
+    EditFilter,
+    DeleteFilter,
+    AddFilterGroup,
+    SaveFilter,
+    LoadFilter,
+    ResetFilters,
+    ToggleFilterGroupType,
+    /// Find dialog specific actions
+    ToggleSpace,
+    Delete,
+    /// JMESPath dialog specific actions
+    AddColumn,
+    EditColumn,
+    DeleteColumn,
+    ApplyTransform,
+    /// FindAllResults dialog specific actions
+    GoToFirst,
+    GoToLast,
+    PageUp,
+    PageDown,
+    /// SqlDialog specific actions
+    SelectAllText,
+    CopyText,
+    RunQuery,
+    CreateNewDataset,
+    RestoreDataFrame,
+    OpenSqlFileBrowser,
+    ClearText,
+    PasteText,
+    /// XlsxOptionsDialog specific actions
+    OpenXlsxFileBrowser,
+    PasteFilePath,
+    ToggleWorksheetLoad,
+    /// ParquetOptionsDialog specific actions
+    OpenParquetFileBrowser,
+    PasteParquetFilePath,
+    /// SqliteOptionsDialog specific actions
+    OpenSqliteFileBrowser,
+    ToggleImportAllTables,
+    ToggleTableSelection,
+    /// FileBrowserDialog specific actions
+    FileBrowserPageUp,
+    FileBrowserPageDown,
+    ConfirmOverwrite,
+    DenyOverwrite,
+    NavigateToParent,
+    /// ColumnWidthDialog specific actions
+    ToggleAutoExpand,
+    StartColumnEditing,
+    ToggleEditMode,
+    ToggleColumnHidden,
+    MoveColumnUp,
+    MoveColumnDown,
+    /// JsonOptionsDialog specific actions
+    OpenJsonFileBrowser,
+    PasteJsonFilePath,
+    ToggleNdjson,
+    ToggleJsonAutodetect,
+    FinishJsonImport,
+    /// ColumnOperationOptionsDialog specific actions
+    ToggleField,
+    ToggleButtons,
+    /// DataFrameDetailsDialog specific actions
+    SwitchToNextTab,
+    SwitchToPrevTab,
+    ChangeColumnLeft,
+    ChangeColumnRight,
+    OpenSortChoice,
+    OpenCastOverlay,
+    AddFilterFromValue,
+    ExportCurrentTab,
+    NavigateHeatmapLeft,
+    NavigateHeatmapRight,
+    NavigateHeatmapUp,
+    NavigateHeatmapDown,
+    NavigateHeatmapPageUp,
+    NavigateHeatmapPageDown,
+    NavigateHeatmapHome,
+    NavigateHeatmapEnd,
+    ScrollStatsLeft,
+    ScrollStatsRight,
+    /// ProjectSettingsDialog specific actions
+    ToggleDataViewerOption,
+    /// DataExportDialog specific actions
+    ToggleFormat,
+    /// TableExportDialog specific actions
+    CopyFilePath,
+    ExportTable,
+    /// DataExportDialog multi-dataset request
+    DataExportRequestedMulti {
+        dataset_ids: Vec<String>,
+        file_path: String,
+        format_index: usize,
+    },
+    /// KeybindingsDialog specific actions
+    OpenGroupingDropdown,
+    SelectNextGrouping,
+    SelectPrevGrouping,
+    StartRebinding,
+    ConfirmRebinding,
+    CancelRebinding,
+    ClearBinding,
+    SaveKeybindings,
+    /// Reset all keybindings to defaults
+    ResetKeybindings,
+    /// Save keybindings to a chosen file path
+    SaveKeybindingsAs,
 }
 
 #[cfg(test)]

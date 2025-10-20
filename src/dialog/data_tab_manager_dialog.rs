@@ -11,11 +11,12 @@ use crate::action::Action;
 use crate::config::Config;
 use crate::tui::Event;
 use color_eyre::Result;
-use crossterm::event::{KeyEvent, MouseEvent, KeyCode, KeyModifiers};
+use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::Frame;
 use ratatui::layout::Size;
 use tokio::sync::mpsc::UnboundedSender;
 use polars::prelude::DataFrame;
+use tracing::{debug, info};
 use crate::components::Component;
 use crate::components::datatable_container::DataTableContainer;
 use crate::components::datatable::DataTable;
@@ -23,13 +24,19 @@ use crate::components::dialog_layout::split_dialog_area;
 use crate::dataframe::manager::ManagedDataFrame;
 use crate::dialog::data_management_dialog::{LoadedDataset, DataManagementDialog};
 use crate::dialog::project_settings_dialog::{ProjectSettingsDialog, ProjectSettingsConfig};
+use crate::dialog::data_export_dialog::{DataExportDialog, DataExportMode};
 use crate::style::StyleConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
 use crate::data_import_types::DataImportConfig;
 use uuid::Uuid;
 use std::fs::{File, create_dir_all};
+use std::io::{Write, BufWriter};
+use std::path::PathBuf;
+use csv::WriterBuilder;
 use crate::workspace::WorkspaceState;
+use serde_json;
+use polars::prelude::IntoColumn;
 
 
 /// Represents a single tab in the DataTabManagerDialog
@@ -72,11 +79,14 @@ pub struct DataTabManagerDialog {
     pub containers: HashMap<String, DataTableContainer>,
     pub show_instructions: bool,
     pub style: StyleConfig,
+	pub config: Config,
     pub data_management_dialog: DataManagementDialog,
     pub show_data_management: bool,
     pub project_settings_dialog: ProjectSettingsDialog,
     pub show_project_settings: bool,
     pub tab_order: Vec<String>, // Maintains the order of tabs for reordering functionality
+    pub data_export_dialog: Option<DataExportDialog>,
+    pub show_data_export_dialog: bool,
 }
 
 impl DataTabManagerDialog {
@@ -88,12 +98,30 @@ impl DataTabManagerDialog {
             containers: HashMap::new(),
             show_instructions: true,
             style,
+			config: Config::default(),
             data_management_dialog: DataManagementDialog::new(),
             show_data_management: false,
             project_settings_dialog: ProjectSettingsDialog::new(ProjectSettingsConfig::default()),
             show_project_settings: false,
             tab_order: Vec::new(),
+            data_export_dialog: None,
+            show_data_export_dialog: false,
         }
+    }
+    
+    /// Build instructions string from configured keybindings for DataTabManager mode
+    fn build_instructions_from_config(&self) -> String {
+        self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::OpenKeybindings),
+            (crate::config::Mode::DataTabManager, crate::action::Action::OpenDataManagementDialog),
+            (crate::config::Mode::DataTabManager, crate::action::Action::OpenProjectSettingsDialog),
+            (crate::config::Mode::DataTabManager, crate::action::Action::MoveTabToFront),
+            (crate::config::Mode::DataTabManager, crate::action::Action::MoveTabToBack),
+            (crate::config::Mode::DataTabManager, crate::action::Action::MoveTabLeft),
+            (crate::config::Mode::DataTabManager, crate::action::Action::MoveTabRight),
+            (crate::config::Mode::DataTabManager, crate::action::Action::PrevTab),
+            (crate::config::Mode::DataTabManager, crate::action::Action::NextTab),
+        ])
     }
 
     /// Save the current workspace state (data sources and dialog states) to the workspace folder
@@ -180,6 +208,8 @@ impl DataTabManagerDialog {
             data_import_config: DataImportConfig::Text(crate::data_import_types::TextImportConfig {
                 file_path: std::path::PathBuf::from(format!("sql://{dataset_name}")),
                 options: crate::dialog::csv_options_dialog::CsvImportOptions::default(),
+                additional_paths: Vec::new(),
+                merge: false,
             }),
         };
 
@@ -227,6 +257,8 @@ impl DataTabManagerDialog {
                 let mut container = DataTableContainer::new_with_dataframes(
                     datatable, self.style.clone(), available_datasets.clone()
                 );
+                // Register config with the new container
+                let _ = container.register_config_handler(self.config.clone());
                 // If we had an existing container for this dataset, carry over transient UI state
                 if let Some(prev) = old_containers.get(&loaded_dataset.dataset.id) {
                     // Preserve SQL textarea content if present
@@ -478,16 +510,28 @@ impl DataTabManagerDialog {
                 );
                 let _ = self.project_settings_dialog.render(ps_area, frame.buffer_mut());
             }
+            // Render DataExport overlay if active
+            if self.show_data_export_dialog {
+                let margin_x = (area.width as f32 * 0.10) as u16;
+                let margin_y = (area.height as f32 * 0.10) as u16;
+                let de_area = Rect::new(
+                    area.x + margin_x,
+                    area.y + margin_y,
+                    area.width.saturating_sub(margin_x * 2),
+                    area.height.saturating_sub(margin_y * 2),
+                );
+                if let Some(d) = &mut self.data_export_dialog { d.render(de_area, frame.buffer_mut()); }
+            }
             Ok(())
         } else {
             // Render the main tab manager
-            let instructions = 
-                "Ctrl+m: Data Management  Alt+s: Project Settings  Ctrl+s: Manual Sync Tabs  
-                Ctrl+f: Move Tab to Front  Ctrl+b: Move Tab to Back  Ctrl+l: Move Tab Left  
-                Ctrl+r: Move Tab Right  Ctrl+d: Delete Tab  Left/Right or h/l: Navigate Tabs  ";
+            let instructions = if self.show_instructions {
+                self.build_instructions_from_config()
+            } else { String::new() };
+
             let show_instructions = self.tabs.is_empty();
             let layout = split_dialog_area(
-                area, show_instructions, Some(instructions)
+                area, show_instructions, if instructions.is_empty() { None } else { Some(instructions.as_str()) }
             );
             let content_area = layout.content_area;
 
@@ -512,7 +556,7 @@ impl DataTabManagerDialog {
             // Render tabs
             self.render_tabs(tab_area, frame.buffer_mut());
             // Render content for active tab
-            self.render_active_tab_content(frame, content_area, instructions)?;
+            self.render_active_tab_content(frame, content_area, &instructions)?;
             // self.render_instructions(instructions, instructions_area, frame.buffer_mut());
 
             // Render ProjectSettings overlay if active
@@ -526,6 +570,21 @@ impl DataTabManagerDialog {
                     area.height.saturating_sub(margin_y * 2),
                 );
                 let _ = self.project_settings_dialog.render(ps_area, frame.buffer_mut());
+            }
+
+            // Render DataExport overlay if active
+            if self.show_data_export_dialog {
+                let margin_x = (area.width as f32 * 0.10) as u16;
+                let margin_y = (area.height as f32 * 0.10) as u16;
+                let de_area = Rect::new(
+                    area.x + margin_x,
+                    area.y + margin_y,
+                    area.width.saturating_sub(margin_x * 2),
+                    area.height.saturating_sub(margin_y * 2),
+                );
+                if let Some(d) = &mut self.data_export_dialog { 
+                    d.render(de_area, frame.buffer_mut());
+                }
             }
 
             Ok(())
@@ -568,17 +627,42 @@ impl DataTabManagerDialog {
         let available_width = tab_area.width as usize;
         let total_tabs = self.tabs.len();
         
-        // Estimate tab width (including padding and dividers)
-        let estimated_tab_width = 15; // Approximate width per tab
-        let max_visible_tabs = available_width / estimated_tab_width;
+        // Calculate actual tab width based on tab titles and divider
+        let divider_width = 1; // Single space character " "
+        let total_tab_content_width: usize = tab_titles.iter()
+            .map(|title| title.len())
+            .sum();
+        let total_divider_width = if total_tabs > 1 { (total_tabs - 1) * divider_width } else { 0 };
+        let total_required_width = total_tab_content_width + total_divider_width;
+        
+        // Calculate estimated width per tab (with some padding for safety)
+        let estimated_tab_width = if total_tabs > 0 {
+            (total_required_width / total_tabs).max(1) + 2 // Add 2 for padding
+        } else {
+            15 // Fallback to original value if no tabs
+        };
+        
+        let max_visible_tabs = if estimated_tab_width > 0 {
+            available_width / estimated_tab_width
+        } else {
+            1
+        };
         
         if max_visible_tabs >= total_tabs {
             // All tabs can fit, render normally
+            let tabs_block = Block::default()
+                .borders(Borders::BOTTOM);
+        
+            let highlight_style = Style::default()
+                .fg(Color::White)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD);
+
             let tabs = Tabs::new(tab_titles)
-                .block(Block::default().borders(Borders::BOTTOM))
+                .block(tabs_block)
                 .select(self.active_tab_index)
                 .divider(" ")
-                .highlight_style(Style::default().fg(Color::White).bg(Color::Yellow));
+                .highlight_style(highlight_style);
 
             tabs.render(tab_area, buf);
         } else {
@@ -600,7 +684,7 @@ impl DataTabManagerDialog {
                     let style = if is_active {
                         Style::default().fg(Color::White).bg(Color::Yellow)
                     } else {
-                        Style::default().fg(Color::White).bg(Color::White)
+                        Style::default().fg(Color::White).bg(Color::Black)
                     };
                     
                     let title = tab.display_name().to_string();
@@ -611,11 +695,19 @@ impl DataTabManagerDialog {
             // Calculate the relative index for the active tab within visible tabs
             let relative_active_index = self.active_tab_index.saturating_sub(start_index);
             
+            let tabs_block = Block::default()
+                .borders(Borders::BOTTOM);
+
+            let highlight_style = Style::default()
+                .fg(Color::White)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD);
+
             let tabs = Tabs::new(visible_titles)
-                .block(Block::default().borders(Borders::BOTTOM))
+                .block(tabs_block)
                 .select(relative_active_index)
                 .divider(" ")
-                .highlight_style(Style::default().fg(Color::White).bg(Color::Yellow));
+                .highlight_style(highlight_style);
 
             tabs.render(tab_area, buf);
             
@@ -660,6 +752,7 @@ impl DataTabManagerDialog {
         if let Some(active_tab) = self.tabs.get(self.active_tab_index)
             && let Some(container) = self.containers.get_mut(&active_tab.id()) {
                 container.additional_instructions = Some(instructions.to_string());
+
                 // Render the container in the content area
                 // Sync auto expand option from project settings to container before draw
                 container.auto_expand_value_display = self.project_settings_dialog
@@ -671,6 +764,81 @@ impl DataTabManagerDialog {
 
         Ok(())
     }
+
+    /// Export selected datasets to the given path. If multiple datasets are selected,
+    /// write separate files with dataset name suffix before extension.
+    fn export_selected_datasets(&self, dataset_ids: Vec<String>, file_path: &str, format_index: usize) -> color_eyre::Result<()> {
+        if dataset_ids.is_empty() { return Ok(()); }
+        let base = PathBuf::from(file_path);
+        let ext = match format_index { 0 => "csv", 1 => "xlsx", 2 => "jsonl", _ => "parquet" };
+        let multiple = dataset_ids.len() > 1;
+        create_dir_all(base.parent().unwrap_or_else(|| std::path::Path::new(".")))?;
+
+        for ds_id in dataset_ids {
+            let Some(container) = self.containers.get(&ds_id) else { continue; };
+            let df_arc = container.datatable.get_dataframe()?;
+            let df = df_arc.as_ref();
+            // Determine visible columns in current table
+            let visible_columns = container.datatable.get_visible_columns().unwrap_or_default();
+            // Build file path
+            let out_path = if multiple {
+                let name = self.tabs.iter().find(|t| t.loaded_dataset.dataset.id == ds_id).map(|t| t.display_name()).unwrap_or_else(|| ds_id.clone());
+                let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("export");
+                let parent = base.parent().unwrap_or_else(|| std::path::Path::new("."));
+                parent.join(format!("{stem}_{name}.{ext}"))
+            } else {
+                base.clone()
+            };
+
+            match format_index {
+                0 => { // CSV/Text
+                    let mut buffer: Vec<u8> = Vec::with_capacity(1024 * 8);
+                    let mut builder = WriterBuilder::new();
+                    builder.delimiter(b',');
+                    builder.flexible(true);
+                    let mut wtr = builder.from_writer(&mut buffer);
+                    // headers
+                    wtr.write_record(visible_columns.iter())?;
+                    for row_idx in 0..df.height() {
+                        let mut row: Vec<String> = Vec::with_capacity(visible_columns.len());
+                        for col in &visible_columns {
+                            let cell = df.column(col).ok().and_then(|s| s.get(row_idx).ok()).map(|v| v.str_value().to_string()).unwrap_or_default();
+                            row.push(cell);
+                        }
+                        wtr.write_record(row.iter())?;
+                    }
+                    wtr.flush()?;
+                    drop(wtr);
+                    let mut file = BufWriter::new(File::create(&out_path)?);
+                    file.write_all(&buffer)?;
+                    file.flush()?;
+                }
+                2 => { // JSONL
+                    let mut file = BufWriter::new(File::create(&out_path)?);
+                    for row_idx in 0..df.height() {
+                        let mut obj = serde_json::Map::new();
+                        for col in &visible_columns {
+                            let cell = df.column(col).ok().and_then(|s| s.get(row_idx).ok()).map(|v| v.str_value().to_string()).unwrap_or_default();
+                            obj.insert(col.clone(), serde_json::Value::String(cell));
+                        }
+                        let line = serde_json::to_string(&obj)?;
+                        writeln!(file, "{line}")?;
+                    }
+                }
+                _ => { // Parquet (Excel not supported)
+                    if format_index == 1 { return Err(color_eyre::eyre::eyre!("Excel export is not yet supported")); }
+                    // Select visible columns and write parquet
+                    let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(visible_columns.len());
+                    for col in &visible_columns {
+                        if let Ok(s) = df.column(col) { cols.push(s.clone().into_column()); }
+                    }
+                    let mut out_df = polars::prelude::DataFrame::new(cols)?;
+                    polars::prelude::ParquetWriter::new(File::create(&out_path)?).finish(&mut out_df)?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Component for DataTabManagerDialog {
@@ -678,7 +846,10 @@ impl Component for DataTabManagerDialog {
         Ok(())
     }
 
-    fn register_config_handler(&mut self, _config: Config) -> Result<()> {
+    fn register_config_handler(&mut self, config: Config) -> Result<()> {
+        self.project_settings_dialog.register_config_handler(config.clone())?;
+        self.data_management_dialog.register_config_handler(config.clone())?;
+        self.config = config;
         Ok(())
     }
 
@@ -695,8 +866,28 @@ impl Component for DataTabManagerDialog {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        debug!("DataTabManagerDialog handle_key_event: {:?}", key);
+        if let Some(action) = self.config.action_for_key(
+            crate::config::Mode::DataTabManager,
+            key
+        ) {
+            debug!("DataTabManagerDialog 1st action_for_key<DataTabManager>: {:?}", action);
+            match action {
+                Action::OpenProjectSettingsDialog => {
+                    self.show_project_settings = true;
+                    return Ok(None);
+                }
+                Action::OpenDataManagementDialog => { 
+                    self.show_data_management = true;
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
+        
         // Handle ProjectSettingsDialog first if active (overlay)
         if self.show_project_settings {
+            debug!("DataTabManagerDialog handle_key_event<show_project_settings>: {:?}", key);
             if let Some(Event::Key(key_event)) = Some(Event::Key(key)) {
                 let result = self.project_settings_dialog.handle_events(Some(Event::Key(key_event)))?;
                 if let Some(action) = result.clone() {
@@ -721,184 +912,179 @@ impl Component for DataTabManagerDialog {
                 }
                 return Ok(None);
             }
-            Ok(None)
-        } else if self.show_data_management {
-            // Handle events for DataManagementDialog
-            // Allow opening ProjectSettings with Alt+S even while Data Management is open
-            if key.kind == crossterm::event::KeyEventKind::Press
-                && key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::ALT) {
-                self.show_project_settings = true;
-                return Ok(None);
-            }
-            if let Some(Event::Key(key_event)) = Some(Event::Key(key)) {
-                let result = self.data_management_dialog.handle_events(
-                    Some(Event::Key(key_event))
-                )?;
-                
-                // Check if the dialog should be closed
-                if let Some(Action::CloseDataManagementDialog) = result {
-                    self.show_data_management = false;
-                    // Auto-sync tabs when DataManagementDialog is closed
-                    if let Err(e) = self.sync_tabs_from_data_management() {
-                        return Ok(Some(Action::Error(format!("Failed to auto-sync tabs: {e}"))));
-                    }
-
-                    // Update all containers with the latest available dataframes
-                    let _ = self.update_all_containers_dataframes();
-
-                    // Forward to active container if available
-                    let latest = self.get_available_datasets()?;
-                    if let Some(container) = self.get_active_container() {
-                        // Ensure container has the latest available DataFrames
-                        container.set_available_datasets(latest);
-                        // Forward the key event to the active container
-                        if let Some(action) = container.handle_key_event(key)? {
-                            match action {
-                                Action::SqlDialogAppliedNewDataset { dataset_name, dataframe } => {
-                                    // Handle new dataset creation
-                                    return self.handle_new_dataset_creation(dataset_name, dataframe);
-                                }
-                                _ => {
-                                    // Forward other actions up
-                                    return Ok(Some(action));
-                                }
+        } else if self.show_data_export_dialog {
+            // Route to export dialog
+            if let Some(dialog) = &mut self.data_export_dialog {
+                if let Some(action) = dialog.handle_key_event(key) {
+                    match action {
+                        Action::DialogClose => {
+                            self.show_data_export_dialog = false;
+                            self.data_export_dialog = None;
+                            return Ok(None);
+                        }
+                        Action::DataExportRequestedMulti { dataset_ids, file_path, format_index } => {
+                            if let Err(e) = self.export_selected_datasets(dataset_ids, &file_path, format_index) {
+                                if let Some(d) = &mut self.data_export_dialog { d.mode = DataExportMode::Error(format!("{e}")); }
+                            } else {
+                                if let Some(d) = &mut self.data_export_dialog { d.mode = DataExportMode::Success(format!("Export complete: {file_path}")); }
                             }
+                            return Ok(None);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            return Ok(None);
+        } else if self.show_data_management {
+            debug!("DataTabManagerDialog handle_key_event<show_data_management>: {:?}", key);
+
+            if let Some(action) = self.data_management_dialog.handle_key_event(key)? {
+                debug!("DataTabManagerDialog handle_key_event<data_management_dialog>: {:?} for key: {:?}", action, key);
+                match action {
+                    Action::CloseDataManagementDialog => {
+                        self.show_data_management = false;
+                        if let Err(e) = self.sync_tabs_from_data_management() {
+                            return Ok(Some(Action::Error(format!("Failed to sync tabs: {e}"))));
+                        }
+                        self.update_all_containers_dataframes()?;
+                        return Ok(None);
+                    }
+                    // No special handling; DM dialog will advance queue on Render/Tick
+                    _ => {
+                        return Ok(Some(action));
+                    }
+                }
+            }
+            return Ok(None);
+        } else {
+            debug!("DataTabManagerDialog handle_key_event<main>: {:?}", key);
+
+            // Forward to active container if available
+            if let Some(action) = self.config.action_for_key(crate::config::Mode::DataTabManager, key) {
+                if let Action::OpenDataExportDialog = action {
+                    let entries: Vec<(String, String)> = self.tabs.iter()
+                        .map(|t| (t.loaded_dataset.dataset.id.clone(), t.display_name()))
+                        .collect();
+                    let mut d = DataExportDialog::new(entries, Some("export.csv".to_string()));
+                    // Preselect the current tab's dataset in the export dialog
+                    if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
+                        let current_id = active_tab.loaded_dataset.dataset.id.clone();
+                        if let Some(pos) = d.datasets.iter().position(|ds| ds.id == current_id) {
+                            d.datasets[pos].selected = true;
+                            d.selected_dataset_index = pos;
                         }
                     }
+                    let _ = d.register_config_handler(self.config.clone());
+                    self.data_export_dialog = Some(d);
+                    self.show_data_export_dialog = true;
                     return Ok(None);
                 }
-                
-                return Ok(result);
             }
-            Ok(None)
-        } else {
-            // Handle events for main tab manager
-            if key.kind == crossterm::event::KeyEventKind::Press {
-                match key.code {
-                    KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Open ProjectSettingsDialog
-                        self.show_project_settings = true;
-                        Ok(None)
+            let latest = self.get_available_datasets()?;
+            if let Some(container) = self.get_active_container() {
+                container.set_available_datasets(latest);
+                // Forward the key event to the active container
+                if let Some(action) = container.handle_key_event(key)? {
+                    match action {
+                        Action::SqlDialogAppliedNewDataset {
+                            dataset_name,
+                            dataframe
+                        } => {
+                            // Handle new dataset creation
+                            return self.handle_new_dataset_creation(dataset_name, dataframe);
+                        }
+                        Action::SaveWorkspaceState => {
+                            // Ensure last SQL text is stored on the dataframe for capture
+                            if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
+                                let tab_id = active_tab.id();
+                                if let Some(container) = self.containers.get_mut(&tab_id) {
+                                    let sql_text = container.sql_dialog.textarea.lines().join("\n");
+                                    container.datatable.dataframe.last_sql_query = Some(sql_text);
+                                }
+                            }
+                            if self.project_settings_dialog.config.workspace_path.as_ref().is_some_and(|p| p.is_dir()) {
+                                let _ = self.save_workspace_state();
+                            }
+                            return Ok(None);
+                        }
+                        _ => {
+                            // Forward other actions up
+                            return Ok(Some(action));
+                        }
                     }
-                    KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Open DataManagementDialog
-                        self.show_data_management = true;
-                        Ok(None)
-                    }
-                    KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Move current tab to front
-                        if !self.tabs.is_empty()
-                            && let Err(e) = self.move_tab_to_front(self.active_tab_index) {
+                }
+            }
+
+            // Handle tab navigation// Handle events for main tab manager
+            // First, try to resolve an action from config for DataTabManager mode
+            if let Some(action) = self.config.action_for_key(
+                crate::config::Mode::DataTabManager, key
+            ) {
+                debug!("DataTabManagerDialog 2nd action_for_key<DataTabManager>: {:?}", action);
+                match action {
+                    Action::MoveTabToFront => {
+                        if !self.tabs.is_empty() && let Err(e) = self.move_tab_to_front(self.active_tab_index) {
                             return Ok(Some(Action::Error(format!("Failed to move tab to front: {e}"))));
                         }
-                        Ok(None)
+                        return Ok(None);
                     }
-                    KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Move current tab to back
+                    Action::MoveTabToBack => {
                         if !self.tabs.is_empty() && let Err(e) = self.move_tab_to_back(self.active_tab_index) {
                             return Ok(Some(Action::Error(format!("Failed to move tab to back: {e}"))));
                         }
-                        Ok(None)
+                        return Ok(None);
                     }
-                    KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Move current tab left (swap with previous)
+                    Action::MoveTabLeft => {
                         if !self.tabs.is_empty() && self.active_tab_index > 0 {
                             let new_index = self.active_tab_index - 1;
                             if let Err(e) = self.reorder_tab(self.active_tab_index, new_index) {
                                 return Ok(Some(Action::Error(format!("Failed to move tab left: {e}"))));
                             }
                         }
-                        Ok(None)
+                        return Ok(None);
                     }
-                    KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Move current tab right (swap with next)
+                    Action::MoveTabRight => {
                         if !self.tabs.is_empty() && self.active_tab_index < self.tabs.len() - 1 {
                             let new_index = self.active_tab_index + 1;
                             if let Err(e) = self.reorder_tab(self.active_tab_index, new_index) {
                                 return Ok(Some(Action::Error(format!("Failed to move tab right: {e}"))));
                             }
                         }
-                        Ok(None)
+                        return Ok(None);
                     }
-                    KeyCode::Left if key.modifiers.contains(KeyModifiers::ALT) => {
-                    // Navigate to previous tab
+                    Action::PrevTab => {
                         if !self.tabs.is_empty() {
-                            let new_index = if self.active_tab_index == 0 {
-                                self.tabs.len() - 1
-                            } else {
-                                self.active_tab_index - 1
-                            };
+                            let new_index = if self.active_tab_index == 0 { self.tabs.len() - 1 } else { self.active_tab_index - 1 };
                             let _ = self.switch_tab(new_index);
                         }
-                        Ok(None)
+                        return Ok(None);
                     }
-                    KeyCode::Right if key.modifiers.contains(KeyModifiers::ALT) => {
-                        // Navigate to next tab
+                    Action::NextTab => {
                         if !self.tabs.is_empty() {
-                            let new_index = if self.active_tab_index == self.tabs.len() - 1 {
-                                0
-                            } else {
-                                self.active_tab_index + 1
-                            };
+                            let new_index = if self.active_tab_index == self.tabs.len() - 1 { 0 } else { self.active_tab_index + 1 };
                             let _ = self.switch_tab(new_index);
                         }
-                        Ok(None)
+                        return Ok(None);
                     }
-                    KeyCode::Tab => {
-                        // Navigate to next tab
-                        if !self.tabs.is_empty() {
-                            let new_index = if self.active_tab_index == self.tabs.len() - 1 {
-                                0
-                            } else {
-                                self.active_tab_index + 1
-                            };
-                            let _ = self.switch_tab(new_index);
+                    Action::SyncTabs => {
+                        if let Err(e) = self.sync_tabs_from_data_management() {
+                            return Ok(Some(Action::Error(format!("Failed to sync tabs: {e}"))));
                         }
-                        Ok(None)
+                        let _ = self.update_all_containers_dataframes();
+                        return Ok(None);
                     }
                     _ => {
-                        // Forward to active container if available
-                        let latest = self.get_available_datasets()?;
-                        if let Some(container) = self.get_active_container() {
-                            // Ensure container has the latest available DataFrames
-                            container.set_available_datasets(latest);
-                            // Forward the key event to the active container
-                            if let Some(action) = container.handle_key_event(key)? {
-                                match action {
-                                    Action::SqlDialogAppliedNewDataset { dataset_name, dataframe } => {
-                                        // Handle new dataset creation
-                                        return self.handle_new_dataset_creation(dataset_name, dataframe);
-                                    }
-                                    Action::SaveWorkspaceState => {
-                                        // Ensure last SQL text is stored on the dataframe for capture
-                                        if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
-                                            let tab_id = active_tab.id();
-                                            if let Some(container) = self.containers.get_mut(&tab_id) {
-                                                let sql_text = container.sql_dialog.textarea.lines().join("\n");
-                                                container.datatable.dataframe.last_sql_query = Some(sql_text);
-                                            }
-                                        }
-                                        if self.project_settings_dialog.config.workspace_path.as_ref().is_some_and(|p| p.is_dir()) {
-                                            let _ = self.save_workspace_state();
-                                        }
-                                        return Ok(None);
-                                    }
-                                    _ => {
-                                        // Forward other actions up
-                                        return Ok(Some(action));
-                                    }
-                                }
-                            }
-                            Ok(None)
-                        } else {
-                            Ok(None)
-                        }
+                        info!("DataTabManagerDialog unhandled DataTabManager action: {:?} for key: {:?}", action, key);
                     }
                 }
             } else {
-                Ok(None)
+                debug!("DataTabManagerDialog no action for key: {:?}", key);
             }
+
+            return Ok(None);
         }
+
+        Ok(None)
     }
 
     fn handle_mouse_event(&mut self, _mouse: MouseEvent) -> Result<Option<Action>> {
@@ -906,7 +1092,14 @@ impl Component for DataTabManagerDialog {
     }
 
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
-        // Forward updates (Tick, Render, etc.) to the active DataTableContainer
+        // If DataManagement dialog is visible, forward updates to it (advances gauge/queue)
+        if self.show_data_management {
+            if let Some(ret) = self.data_management_dialog.update(action)? {
+                return Ok(Some(ret));
+            }
+            return Ok(None);
+        }
+        // Otherwise, forward updates (Tick, Render, etc.) to the active DataTableContainer
         if let Some(container) = self.get_active_container() && let Some(ret) = container.update(action)? {
             return Ok(Some(ret));
         }

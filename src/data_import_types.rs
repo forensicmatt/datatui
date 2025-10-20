@@ -13,6 +13,10 @@ use crate::dialog::json_options_dialog::JsonImportOptions;
 pub struct TextImportConfig {
     pub file_path: PathBuf,
     pub options: CsvImportOptions,
+    #[serde(default)]
+    pub additional_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub merge: bool,
 }
 
 /// Excel file import configuration
@@ -27,6 +31,7 @@ pub struct ExcelImportConfig {
 pub struct SqliteImportConfig {
     pub file_path: PathBuf,
     pub options: SqliteImportOptions,
+    pub table_name: Option<String>, // Specific table to import (None means use options to determine)
 }
 
 /// Parquet file import configuration
@@ -41,6 +46,10 @@ pub struct ParquetImportConfig {
 pub struct JsonImportConfig {
     pub file_path: PathBuf,
     pub options: JsonImportOptions,
+    #[serde(default)]
+    pub additional_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub merge: bool,
 }
 
 /// Enum that can store different types of import configurations
@@ -81,6 +90,8 @@ impl DataImportConfig {
         DataImportConfig::Text(TextImportConfig {
             file_path,
             options,
+            additional_paths: Vec::new(),
+            merge: false,
         })
     }
 
@@ -97,6 +108,16 @@ impl DataImportConfig {
         DataImportConfig::Sqlite(SqliteImportConfig {
             file_path,
             options,
+            table_name: None,
+        })
+    }
+
+    /// Create a sqlite import configuration for a specific table
+    pub fn sqlite_table(file_path: PathBuf, options: SqliteImportOptions, table_name: String) -> Self {
+        DataImportConfig::Sqlite(SqliteImportConfig {
+            file_path,
+            options,
+            table_name: Some(table_name),
         })
     }
 
@@ -113,6 +134,8 @@ impl DataImportConfig {
         DataImportConfig::Json(JsonImportConfig {
             file_path,
             options,
+            additional_paths: Vec::new(),
+            merge: false,
         })
     }
 } 

@@ -10,6 +10,7 @@ use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserAction, F
 use arboard::Clipboard;
 use tui_textarea::TextArea;
 use crate::components::dialog_layout::split_dialog_area;
+use crate::config::Config;
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +30,7 @@ pub struct SqlDialog {
     pub show_instructions: bool, // new: show instructions area (default true)
     pub create_new_dataset: bool, // whether to create a new dataset from the query
     pub dataset_name_input: String, // input for new dataset name
+    pub config: Config,
 }
 
 impl Default for SqlDialog {
@@ -48,6 +50,7 @@ impl SqlDialog {
             show_instructions: true,
             create_new_dataset: false,
             dataset_name_input: String::new(),
+            config: Config::default(),
         }
     }
 
@@ -58,9 +61,25 @@ impl SqlDialog {
         self.textarea.insert_str(text);
     }
 
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Escape),
+            (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+            (crate::config::Mode::SqlDialog, crate::action::Action::RunQuery),
+            // (crate::config::Mode::SqlDialog, crate::action::Action::CreateNewDataset),
+            (crate::config::Mode::SqlDialog, crate::action::Action::SelectAllText),
+            (crate::config::Mode::SqlDialog, crate::action::Action::CopyText),
+            (crate::config::Mode::SqlDialog, crate::action::Action::ClearText),
+            (crate::config::Mode::SqlDialog, crate::action::Action::RestoreDataFrame),
+            (crate::config::Mode::SqlDialog, crate::action::Action::OpenSqlFileBrowser),
+            (crate::config::Mode::SqlDialog, crate::action::Action::PasteText),
+        ])
+    }
+
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {
         Clear.render(area, buf);
-        let instructions = "Ctrl+Enter:Run  Ctrl+Shift+Enter:New Dataset  Ctrl+a:SelectAll  Ctrl+c:Copy  Ctrl+l:Clear  Ctrl+r:Restore  Ctrl+o:OpenFile  Ctrl+p:Paste  Esc:Cancel";
+        let instructions = self.build_instructions_from_config();
         // Outer container with double border
         let outer_block = Block::default()
             .title("SQL")
@@ -69,7 +88,8 @@ impl SqlDialog {
         let inner_area = outer_block.inner(area);
         outer_block.render(area, buf);
 
-        let layout = split_dialog_area(inner_area, self.show_instructions, Some(instructions));
+        let layout = split_dialog_area(inner_area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
         let wrap_width = content_area.width.saturating_sub(2) as usize;
@@ -127,7 +147,7 @@ impl SqlDialog {
         }
         if self.show_instructions
             && let Some(instructions_area) = instructions_area {
-                let instructions_paragraph = Paragraph::new(instructions)
+                let instructions_paragraph = Paragraph::new(instructions.as_str())
                     .block(Block::default().borders(Borders::ALL).title("Instructions"))
                     .style(Style::default().fg(Color::Yellow))
                     .wrap(Wrap { trim: true });
@@ -138,90 +158,122 @@ impl SqlDialog {
 
     /// Handle a key event. Returns Some(Action) if the dialog should close and apply, None otherwise.
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crossterm::event::KeyCode;
         use tui_textarea::{Input as TuiInput};
         
-        // Handle Ctrl+I to toggle instructions
-        if key.kind == KeyEventKind::Press
-            && key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.show_instructions = !self.show_instructions;
+        if key.kind != KeyEventKind::Press {
             return None;
         }
+
+        // Get all configured actions once at the start
+        let optional_global_action = self.config.action_for_key(crate::config::Mode::Global, key);
+        let sql_dialog_action = self.config.action_for_key(crate::config::Mode::SqlDialog, key);
+
+        // Handle global actions that work in all modes
+        if let Some(global_action) = &optional_global_action
+            && global_action == &Action::ToggleInstructions {
+                self.show_instructions = !self.show_instructions;
+                return None;
+            }
         
         match &mut self.mode {
             SqlDialogMode::Input => {
                 if self.error_active {
                     // Only allow Esc or Enter to clear error
-                    if key.kind == KeyEventKind::Press {
-                        match key.code {
-                            KeyCode::Esc | KeyCode::Enter => {
-                                self.error_active = false;
-                                self.mode = SqlDialogMode::Input;
-                            }
-                            _ => {}
+                    if let Some(Action::Escape | Action::Enter) = &optional_global_action {
+                        self.error_active = false;
+                        self.mode = SqlDialogMode::Input;
+                        return None;
+                    }
+                    // Fallback for hardcoded Esc/Enter
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Enter => {
+                            self.error_active = false;
+                            self.mode = SqlDialogMode::Input;
                         }
+                        _ => {}
                     }
                     return None;
                 }
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            // Ctrl+a: select all text in the textarea
+                
+                // First, check Global actions
+                if let Some(global_action) = &optional_global_action {
+                    match global_action {
+                        Action::Escape => {
+                            return Some(Action::DialogClose);
+                        }
+                        Action::Enter => {
+                            // Enter: insert newline in textarea
+                            let input: TuiInput = key.into();
+                            self.textarea.input(input);
+                            return None;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Next, check SqlDialog-specific actions
+                if let Some(dialog_action) = &sql_dialog_action {
+                    match dialog_action {
+                        Action::SelectAllText => {
+                            // select all text in the textarea
                             self.textarea.select_all();
                             return None;
                         }
-                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            // Ctrl+c: copy full textarea to clipboard
+                        Action::CopyText => {
+                            // copy full textarea to clipboard
                             if let Ok(mut clipboard) = Clipboard::new() {
                                 let text = self.textarea.lines().join("\n");
                                 let _ = clipboard.set_text(text);
                             }
                             return None;
                         }
-                        KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) && key.modifiers.contains(KeyModifiers::SHIFT) => {
-                            // Ctrl+Shift+Enter: create new dataset
+                        Action::CreateNewDataset => {
+                            // create new dataset
                             self.mode = SqlDialogMode::NewDatasetInput;
                             return None;
                         }
-                        KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            // Ctrl+Enter: run query
+                        Action::RunQuery => {
+                            // run query
                             return Some(Action::SqlDialogApplied(self.textarea.lines().join("\n")));
                         }
-                        KeyCode::Enter => {
-                            // Enter: insert newline in textarea
-                            let input: TuiInput = key.into();
-                            self.textarea.input(input);
-                        }
-                        KeyCode::Esc => {
-                            return Some(Action::DialogClose);
-                        }
-                        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        Action::RestoreDataFrame => {
                             return Some(Action::SqlDialogRestore);
                         }
-                        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            self.file_browser = Some(FileBrowserDialog::new(None, Some(vec!["sql"]), false, FileBrowserMode::Load));
+                        Action::OpenSqlFileBrowser => {
+                            let mut browser = FileBrowserDialog::new(None, Some(vec!["sql"]), false, FileBrowserMode::Load);
+                            browser.register_config_handler(self.config.clone());
+                            self.file_browser = Some(browser);
                             self.mode = SqlDialogMode::FileBrowser;
                             return None;
                         }
-                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        Action::ClearText => {
                             self.textarea = TextArea::default();
                             let style = Style::default().bg(Color::DarkGray);
                             self.textarea.set_line_number_style(style);
                             return None;
                         }
-                        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        Action::PasteText => {
                             if let Ok(mut clipboard) = Clipboard::new()
                                 && let Ok(text) = clipboard.get_text() {
                                 self.textarea.insert_str(&text);
                             }
                             return None;
                         }
-                        _ => {
-                            // Forward to textarea
-                            let input: TuiInput = key.into();
-                            self.textarea.input(input);
-                        }
+                        _ => {}
                     }
+                }
+
+                // For any other character input, forward to textarea
+                match key.code {
+                    KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete | 
+                    KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down |
+                    KeyCode::Home | KeyCode::End | KeyCode::PageUp | KeyCode::PageDown |
+                    KeyCode::Tab => {
+                        let input: TuiInput = key.into();
+                        self.textarea.input(input);
+                    }
+                    _ => {}
                 }
             }
             SqlDialogMode::FileBrowser => {
@@ -253,9 +305,10 @@ impl SqlDialog {
                     }
             }
             SqlDialogMode::NewDatasetInput => {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Enter => {
+                // Check Global actions first
+                if let Some(global_action) = &optional_global_action {
+                    match global_action {
+                        Action::Enter => {
                             // Create new dataset if name is not empty
                             if !self.dataset_name_input.trim().is_empty() {
                                 let query = self.textarea.lines().join("\n");
@@ -265,32 +318,60 @@ impl SqlDialog {
                                 self.mode = SqlDialogMode::Input;
                                 return Some(Action::SqlDialogApplied(format!("NEW_DATASET:{dataset_name}:{query}")));
                             }
+                            return None;
                         }
-                        KeyCode::Esc => {
+                        Action::Escape => {
                             // Cancel new dataset creation
                             self.dataset_name_input.clear();
                             self.mode = SqlDialogMode::Input;
-                        }
-                        KeyCode::Backspace => {
-                            self.dataset_name_input.pop();
-                        }
-                        KeyCode::Char(c) => {
-                            self.dataset_name_input.push(c);
+                            return None;
                         }
                         _ => {}
                     }
                 }
+
+                // Handle character input for dataset name
+                match key.code {
+                    KeyCode::Enter => {
+                        // Fallback for Enter
+                        if !self.dataset_name_input.trim().is_empty() {
+                            let query = self.textarea.lines().join("\n");
+                            let dataset_name = self.dataset_name_input.trim().to_string();
+                            // Reset state
+                            self.dataset_name_input.clear();
+                            self.mode = SqlDialogMode::Input;
+                            return Some(Action::SqlDialogApplied(format!("NEW_DATASET:{dataset_name}:{query}")));
+                        }
+                    }
+                    KeyCode::Esc => {
+                        // Fallback for Esc
+                        self.dataset_name_input.clear();
+                        self.mode = SqlDialogMode::Input;
+                    }
+                    KeyCode::Backspace => {
+                        self.dataset_name_input.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        self.dataset_name_input.push(c);
+                    }
+                    _ => {}
+                }
             }
             SqlDialogMode::Error(_) => {
                 // Only close error on Esc or Enter
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Enter => {
-                            self.error_active = false;
-                            self.mode = SqlDialogMode::Input;
-                        }
-                        _ => {}
+                // Check Global actions first
+                if let Some(Action::Escape | Action::Enter) = &optional_global_action {
+                    self.error_active = false;
+                    self.mode = SqlDialogMode::Input;
+                    return None;
+                }
+                // Fallback for hardcoded keys
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter => {
+                        self.error_active = false;
+                        self.mode = SqlDialogMode::Input;
                     }
+                    _ => {}
                 }
             }
         }
@@ -309,6 +390,11 @@ impl Component for SqlDialog {
         Ok(())
     }
     fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> {
+        self.config = _config;
+        // Propagate to FileBrowserDialog if it exists
+        if let Some(ref mut browser) = self.file_browser {
+            browser.register_config_handler(self.config.clone());
+        }
         Ok(())
     }
     fn init(&mut self, _area: ratatui::layout::Size) -> Result<()> {
@@ -318,6 +404,9 @@ impl Component for SqlDialog {
         Ok(None)
     }
     fn handle_key_event(&mut self, _key: KeyEvent) -> Result<Option<Action>> {
+        if let Some(action) = self.handle_key_event(_key) {
+            return Ok(Some(action));
+        }
         Ok(None)
     }
     fn handle_mouse_event(&mut self, _mouse: crossterm::event::MouseEvent) -> Result<Option<Action>> {

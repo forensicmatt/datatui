@@ -1,7 +1,8 @@
 //! XlsxOptionsDialog: Dialog for configuring Excel import options
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use crate::components::dialog_layout::split_dialog_area;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::action::Action;
@@ -10,6 +11,7 @@ use crate::tui::Event;
 use color_eyre::Result;
 use crossterm::event::{KeyEvent, MouseEvent, KeyCode};
 use ratatui::Frame;
+use tui_textarea::Input as TuiInput;
 use ratatui::layout::Size;
 use tokio::sync::mpsc::UnboundedSender;
 use crate::components::Component;
@@ -37,10 +39,13 @@ pub struct XlsxOptionsDialog {
     pub file_browser_path: PathBuf,
     pub selected_worksheet_index: usize, // Index of selected worksheet in the table
     pub finish_button_selected: bool, // Whether the finish button is selected
+    pub show_instructions: bool, // Whether to show instructions area
     #[serde(skip)]
     pub file_path_input: TextArea<'static>,
     #[serde(skip)]
     pub file_browser: Option<FileBrowserDialog>,
+    #[serde(skip)]
+    pub config: Config,
 }
 
 impl XlsxOptionsDialog {
@@ -63,8 +68,10 @@ impl XlsxOptionsDialog {
             file_browser_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             selected_worksheet_index: 0,
             finish_button_selected: false,
+            show_instructions: true,
             file_path_input,
             file_browser: None,
+            config: Config::default(),
         }
     }
 
@@ -145,6 +152,22 @@ impl XlsxOptionsDialog {
         }
     }
 
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Escape),
+            (crate::config::Mode::Global, crate::action::Action::Enter),
+            (crate::config::Mode::Global, crate::action::Action::Tab),
+            (crate::config::Mode::Global, crate::action::Action::Up),
+            (crate::config::Mode::Global, crate::action::Action::Down),
+            (crate::config::Mode::Global, crate::action::Action::Left),
+            (crate::config::Mode::Global, crate::action::Action::Right),
+            (crate::config::Mode::XlsxOptionsDialog, crate::action::Action::OpenXlsxFileBrowser),
+            (crate::config::Mode::XlsxOptionsDialog, crate::action::Action::PasteFilePath),
+            (crate::config::Mode::XlsxOptionsDialog, crate::action::Action::ToggleWorksheetLoad),
+        ])
+    }
+
     /// Render the dialog
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         // Clear the background for the popup
@@ -160,14 +183,19 @@ impl XlsxOptionsDialog {
             .title("Excel Import Options")
             .borders(Borders::ALL);
 
-        // Create a layout with the file path input at the top
+        // Use split_dialog_area to handle instructions layout
+        let instructions = self.build_instructions_from_config();
+        let main_layout = split_dialog_area(area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
+        
+        // Split the content area for file path and options
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // File path input
                 Constraint::Min(0),    // Options content
             ])
-            .split(area);
+            .split(main_layout.content_area);
 
         // Render file path input and [Browse] within a single bordered block,
         // shrinking the input area to avoid overlapping the [Browse] text
@@ -273,8 +301,8 @@ impl XlsxOptionsDialog {
 
         // Render the [Finish] button at the bottom right of the full dialog area
         let finish_text = "[Finish]";
-        let finish_x = area.x + area.width.saturating_sub(finish_text.len() as u16 + 2);
-        let finish_y = area.y + area.height.saturating_sub(2);
+        let finish_x = main_layout.content_area.x + main_layout.content_area.width.saturating_sub(finish_text.len() as u16 + 2);
+        let finish_y = main_layout.content_area.y + main_layout.content_area.height.saturating_sub(2);
         let finish_style = if self.finish_button_selected {
             Style::default().fg(Color::Black).bg(Color::White)
         } else {
@@ -293,6 +321,15 @@ impl XlsxOptionsDialog {
             .borders(Borders::ALL)
             .title("Excel Options");
         options_block.render(options_area, buf);
+
+        // Render instructions area if available
+        if let Some(instructions_area) = main_layout.instructions_area {
+            let instructions_paragraph = Paragraph::new(instructions.as_str())
+                .block(Block::default().borders(Borders::ALL).title("Instructions"))
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: true });
+            instructions_paragraph.render(instructions_area, buf);
+        }
     }
 }
 
@@ -302,6 +339,11 @@ impl Component for XlsxOptionsDialog {
     }
 
     fn register_config_handler(&mut self, _config: Config) -> Result<()> {
+        self.config = _config;
+        // Propagate to FileBrowserDialog if it exists
+        if let Some(ref mut browser) = self.file_browser {
+            browser.register_config_handler(self.config.clone());
+        }
         Ok(())
     }
 
@@ -352,179 +394,194 @@ impl Component for XlsxOptionsDialog {
         }
 
         let result = if key.kind == crossterm::event::KeyEventKind::Press {
-            match key.code {
-                KeyCode::Tab => {
-                    // Tab moves between file path and browse button
-                    if self.file_path_focused {
-                        self.file_path_focused = false;
-                        self.browse_button_selected = true;
-                    } else {
-                        self.file_path_focused = true;
-                        self.browse_button_selected = false;
+            // Get all configured actions once at the start
+            let global_action = self.config.action_for_key(crate::config::Mode::Global, key);
+            let xlsx_dialog_action = self.config.action_for_key(crate::config::Mode::XlsxOptionsDialog, key);
+
+            // First, check for XlsxOptionsDialog-specific actions
+            if let Some(dialog_action) = &xlsx_dialog_action {
+                match dialog_action {
+                    Action::OpenXlsxFileBrowser => {
+                        // Open file browser
+                        let mut browser = FileBrowserDialog::new(
+                            Some(self.file_browser_path.clone()),
+                            Some(vec!["xlsx", "xls"]),
+                            false,
+                            FileBrowserMode::Load
+                        );
+                        browser.register_config_handler(self.config.clone());
+                        self.file_browser = Some(browser);
+                        self.file_browser_mode = true;
+                        return Ok(None);
                     }
-                    None
+                    Action::PasteFilePath => {
+                        // Paste clipboard text into the File Path when focused
+                        if self.file_path_focused
+                            && let Ok(mut clipboard) = Clipboard::new()
+                            && let Ok(text) = clipboard.get_text() {
+                            let first_line = text.lines().next().unwrap_or("").to_string();
+                            self.set_file_path(first_line);
+                            let _ = self.load_worksheets();
+                        }
+                        return Ok(None);
+                    }
+                    Action::ToggleWorksheetLoad => {
+                        // Toggle worksheet load status when a worksheet is selected
+                        if !self.file_path_focused
+                            && !self.browse_button_selected
+                            && !self.finish_button_selected
+                            && !self.xlsx_options.worksheets.is_empty() {
+                            self.toggle_worksheet_load(self.selected_worksheet_index);
+                        }
+                        return Ok(None);
+                    }
+                    _ => {}
                 }
-                KeyCode::Right => {
-                    if self.file_path_focused {
-                        // Check if cursor is at the end of the text
-                        let lines = self.file_path_input.lines();
-                        let cursor_pos = self.file_path_input.cursor();
-                        
-                        if cursor_pos.0 == lines.len().saturating_sub(1) && 
-                           cursor_pos.1 >= lines.last().unwrap_or(&String::new()).len() {
-                            // Cursor is at the end, move to browse button
+            }
+
+            // Next, check Global actions with special handling
+            if let Some(global_action) = &global_action {
+                match global_action {
+                    Action::Escape => {
+                        return Ok(Some(Action::CloseXlsxOptionsDialog));
+                    }
+                    Action::ToggleInstructions => {
+                        self.show_instructions = !self.show_instructions;
+                        return Ok(None);
+                    }
+                    Action::Tab => {
+                        // Tab moves between file path and browse button
+                        if self.file_path_focused {
                             self.file_path_focused = false;
                             self.browse_button_selected = true;
                         } else {
-                            // Let the TextArea handle the right arrow normally
+                            self.file_path_focused = true;
+                            self.browse_button_selected = false;
+                        }
+                        return Ok(None);
+                    }
+                    Action::Right => {
+                        if self.file_path_focused {
+                            // Always move focus from File Path to [Browse]
+                            self.file_path_focused = false;
+                            self.browse_button_selected = true;
+                        }
+                        return Ok(None);
+                    }
+                    Action::Left => {
+                        if self.browse_button_selected {
+                            // Move from browse button to file path
+                            self.file_path_focused = true;
+                            self.browse_button_selected = false;
+                        } else if self.file_path_focused {
+                            // Let the TextArea handle the left arrow normally
                             use tui_textarea::Input as TuiInput;
                             let input: TuiInput = key.into();
                             self.file_path_input.input(input);
                             self.update_file_path(self.file_path_input.lines().join("\n"));
                         }
+                        return Ok(None);
                     }
-                    None
-                }
-                KeyCode::Left => {
-                    if self.browse_button_selected {
-                        // Move from browse button to file path
-                        self.file_path_focused = true;
-                        self.browse_button_selected = false;
-                    } else if self.file_path_focused {
-                        // Let the TextArea handle the left arrow normally
-                        use tui_textarea::Input as TuiInput;
-                        let input: TuiInput = key.into();
-                        self.file_path_input.input(input);
-                        self.update_file_path(self.file_path_input.lines().join("\n"));
-                    }
-                    None
-                }
-                KeyCode::Up => {
-                    if self.finish_button_selected {
-                        // If finish button is selected, up arrow goes to last worksheet or browse button
-                        self.finish_button_selected = false;
-                        if !self.xlsx_options.worksheets.is_empty() {
-                            self.selected_worksheet_index = self.xlsx_options.worksheets.len().saturating_sub(1);
-                        } else {
-                            // If no worksheets, go to browse button
-                            self.browse_button_selected = true;
+                    Action::Up => {
+                        if self.finish_button_selected {
+                            // If finish button is selected, up arrow goes to last worksheet or browse button
+                            self.finish_button_selected = false;
+                            if !self.xlsx_options.worksheets.is_empty() {
+                                self.selected_worksheet_index = self.xlsx_options.worksheets.len().saturating_sub(1);
+                            } else {
+                                // If no worksheets, go to browse button
+                                self.browse_button_selected = true;
+                            }
+                        } else if self.file_path_focused {
+                            // When file path is focused, up arrow moves to worksheets only if there are worksheets
+                            if !self.xlsx_options.worksheets.is_empty() {
+                                self.file_path_focused = false;
+                                self.browse_button_selected = false;
+                                self.selected_worksheet_index = 0;
+                            }
+                            // If no worksheets, keep file path focused
+                        } else if self.browse_button_selected {
+                            // If browse button is selected, up arrow goes back to file path
+                            self.file_path_focused = true;
+                            self.browse_button_selected = false;
+                        } else if !self.xlsx_options.worksheets.is_empty() {
+                            // Navigate worksheet selection
+                            if self.selected_worksheet_index > 0 {
+                                self.selected_worksheet_index = self.selected_worksheet_index.saturating_sub(1);
+                            } else {
+                                // If at first worksheet, go back to browse button
+                                self.browse_button_selected = true;
+                            }
                         }
-                    } else if self.file_path_focused {
-                        // When file path is focused, up arrow moves to worksheets only if there are worksheets
-                        if !self.xlsx_options.worksheets.is_empty() {
+                        return Ok(None);
+                    }
+                    Action::Down => {
+                        if self.file_path_focused {
+                            // When file path is focused, down arrow moves to worksheets only if there are worksheets
+                            if !self.xlsx_options.worksheets.is_empty() {
+                                self.file_path_focused = false;
+                                self.browse_button_selected = false;
+                                self.selected_worksheet_index = 0;
+                            }
+                            // If no worksheets, keep file path focused
+                        } else if self.browse_button_selected {
+                            // If browse button is selected, down arrow moves to worksheets only if there are worksheets
+                            if !self.xlsx_options.worksheets.is_empty() {
+                                self.browse_button_selected = false;
+                                self.selected_worksheet_index = 0;
+                            } else {
+                                // If no worksheets, move to finish button
+                                self.browse_button_selected = false;
+                                self.finish_button_selected = true;
+                            }
+                        } else if !self.xlsx_options.worksheets.is_empty() {
+                            // Navigate worksheet selection
+                            if self.selected_worksheet_index < self.xlsx_options.worksheets.len().saturating_sub(1) {
+                                self.selected_worksheet_index = self.selected_worksheet_index.saturating_add(1);
+                            } else {
+                                // If at last worksheet, move to finish button
+                                self.selected_worksheet_index = 0; // Reset worksheet selection
+                                self.finish_button_selected = true;
+                            }
+                        }
+                        return Ok(None);
+                    }
+                    Action::Enter => {
+                        if self.browse_button_selected {
+                            // Open file browser
+                            let mut browser = FileBrowserDialog::new(
+                                Some(self.file_browser_path.clone()),
+                                Some(vec!["xlsx", "xls"]),
+                                false,
+                                FileBrowserMode::Load
+                            );
+                            browser.register_config_handler(self.config.clone());
+                            self.file_browser = Some(browser);
+                            self.file_browser_mode = true;
+                            return Ok(None);
+                        } else if self.finish_button_selected {
+                            // Finish button pressed - create import config and return it
+                            let config = self.create_import_config();
+                            return Ok(Some(Action::AddDataImportConfig { config }));
+                        } else if self.file_path_focused {
+                            // If file path is focused and Enter is pressed, select the finish button
                             self.file_path_focused = false;
-                            self.browse_button_selected = false;
-                            self.selected_worksheet_index = 0;
-                        }
-                        // If no worksheets, keep file path focused
-                    } else if self.browse_button_selected {
-                        // If browse button is selected, up arrow goes back to file path
-                        self.file_path_focused = true;
-                        self.browse_button_selected = false;
-                    } else if !self.xlsx_options.worksheets.is_empty() {
-                        // Navigate worksheet selection
-                        if self.selected_worksheet_index > 0 {
-                            self.selected_worksheet_index = self.selected_worksheet_index.saturating_sub(1);
-                        } else {
-                            // If at first worksheet, go back to browse button
-                            self.browse_button_selected = true;
-                        }
-                    }
-                    None
-                }
-                KeyCode::Down => {
-                    if self.file_path_focused {
-                        // When file path is focused, down arrow moves to worksheets only if there are worksheets
-                        if !self.xlsx_options.worksheets.is_empty() {
-                            self.file_path_focused = false;
-                            self.browse_button_selected = false;
-                            self.selected_worksheet_index = 0;
-                        }
-                        // If no worksheets, keep file path focused
-                    } else if self.browse_button_selected {
-                        // If browse button is selected, down arrow moves to worksheets only if there are worksheets
-                        if !self.xlsx_options.worksheets.is_empty() {
-                            self.browse_button_selected = false;
-                            self.selected_worksheet_index = 0;
-                        } else {
-                            // If no worksheets, move to finish button
-                            self.browse_button_selected = false;
                             self.finish_button_selected = true;
-                        }
-                    } else if !self.xlsx_options.worksheets.is_empty() {
-                        // Navigate worksheet selection
-                        if self.selected_worksheet_index < self.xlsx_options.worksheets.len().saturating_sub(1) {
-                            self.selected_worksheet_index = self.selected_worksheet_index.saturating_add(1);
+                            return Ok(None);
                         } else {
-                            // If at last worksheet, move to finish button
-                            self.selected_worksheet_index = 0; // Reset worksheet selection
+                            // If no button is selected and Enter is pressed, select the finish button
                             self.finish_button_selected = true;
+                            return Ok(None);
                         }
                     }
-                    None
+                    _ => {}
                 }
-                KeyCode::Enter => {
-                    if self.browse_button_selected {
-                        // Open file browser
-                        self.file_browser = Some(FileBrowserDialog::new(
-                            Some(self.file_browser_path.clone()),
-                            Some(vec!["xlsx", "xls"]),
-                            false,
-                            FileBrowserMode::Load
-                        ));
-                        self.file_browser_mode = true;
-                        None
-                    } else if self.finish_button_selected {
-                        // Finish button pressed - create import config and return it
-                        let config = self.create_import_config();
-                        Some(Action::AddDataImportConfig { config })
-                    } else if self.file_path_focused {
-                        // If file path is focused and Enter is pressed, select the finish button
-                        self.file_path_focused = false;
-                        self.finish_button_selected = true;
-                        None
-                    } else {
-                        // If no button is selected and Enter is pressed, select the finish button
-                        self.finish_button_selected = true;
-                        None
-                    }
-                }
-                KeyCode::Char(' ') => {
-                    // Space key toggles worksheet load status when a worksheet is selected
-                    if !self.file_path_focused
-                        && !self.browse_button_selected
-                        && !self.finish_button_selected
-                        && !self.xlsx_options.worksheets.is_empty() {
-                        self.toggle_worksheet_load(self.selected_worksheet_index);
-                    }
-                    None
-                }
-                KeyCode::Char('b') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Ctrl+B: Open file browser
-                    self.file_browser = Some(FileBrowserDialog::new(
-                        Some(self.file_browser_path.clone()),
-                        Some(vec!["xlsx", "xls"]),
-                        false,
-                        FileBrowserMode::Load
-                    ));
-                    self.file_browser_mode = true;
-                    None
-                }
-                KeyCode::Char('p') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Ctrl+P: Paste clipboard text into the File Path when focused
-                    if self.file_path_focused
-                        && let Ok(mut clipboard) = Clipboard::new()
-                        && let Ok(text) = clipboard.get_text() {
-                        let first_line = text.lines().next().unwrap_or("").to_string();
-                        self.set_file_path(first_line);
-                        let _ = self.load_worksheets();
-                    }
-                    None
-                }
+            }
+
+            match key.code {
                 KeyCode::Backspace => {
                     if self.file_path_focused {
                         // Handle backspace to delete characters in file path
-                        use tui_textarea::Input as TuiInput;
                         let input: TuiInput = key.into();
                         self.file_path_input.input(input);
                         self.update_file_path(self.file_path_input.lines().join("\n"));
@@ -534,7 +591,6 @@ impl Component for XlsxOptionsDialog {
                 KeyCode::Char(_c) => {
                     if self.file_path_focused {
                         // Handle text input for file path
-                        use tui_textarea::Input as TuiInput;
                         let input: TuiInput = key.into();
                         self.file_path_input.input(input);
                         self.update_file_path(self.file_path_input.lines().join("\n"));
@@ -542,9 +598,6 @@ impl Component for XlsxOptionsDialog {
                     } else {
                         None
                     }
-                }
-                KeyCode::Esc => {
-                    Some(Action::CloseXlsxOptionsDialog)
                 }
                 _ => None,
             }

@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Display;
 use crate::action::Action;
-use crate::config::Config;
+use crate::config::{Config, Mode};
 use crate::tui::Event;
 use color_eyre::Result;
-use crossterm::event::{KeyEvent, KeyEventKind, MouseEvent, KeyCode};
+use crossterm::event::{KeyEvent, KeyEventKind, MouseEvent};
 use ratatui::Frame;
 use ratatui::layout::Size;
 use tokio::sync::mpsc::UnboundedSender;
@@ -61,7 +61,7 @@ pub enum InputMode {
 }
 
 /// ColumnWidthDialog: UI for configuring column widths
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnWidthDialog {
     pub columns: Vec<String>,
     pub config: ColumnWidthConfig,
@@ -76,6 +76,8 @@ pub struct ColumnWidthDialog {
     /// Currently editing column index
     pub editing_column: Option<usize>,
     pub show_instructions: bool, // new: show instructions area (default true)
+    #[serde(skip)]
+    pub key_config: Config,
 }
 
 impl ColumnWidthDialog {
@@ -91,6 +93,7 @@ impl ColumnWidthDialog {
             input_mode: InputMode::Number,
             editing_column: None,
             show_instructions: true,
+            key_config: Config::default(),
         }
     }
 
@@ -191,11 +194,26 @@ impl ColumnWidthDialog {
         true
     }
 
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        self.key_config.actions_to_instructions(&[
+            (Mode::ColumnWidthDialog, Action::ToggleAutoExpand),
+            (Mode::ColumnWidthDialog, Action::ToggleColumnHidden),
+            (Mode::ColumnWidthDialog, Action::MoveColumnUp),
+            (Mode::ColumnWidthDialog, Action::MoveColumnDown),
+            (Mode::Global, Action::ToggleInstructions),
+            (Mode::Global, Action::Escape),
+            (Mode::Global, Action::Enter),
+            (Mode::Global, Action::Up),
+            (Mode::Global, Action::Down)
+        ])
+    }
+
     /// Render the dialog (UI skeleton)
     pub fn render(&self, area: Rect, buf: &mut Buffer) -> usize {
         // Clear the background for the popup
         Clear.render(area, buf);
-        let instructions = "Space: Auto/Number  h: Toggle Hide  Ctrl+↑/↓: Reorder  Esc: Apply/Close";
+        let instructions = self.build_instructions_from_config();
         // Outer container with double border and title "Column Widths"
         let outer_block = Block::default()
             .title("Column Widths")
@@ -204,7 +222,8 @@ impl ColumnWidthDialog {
         let inner_area = outer_block.inner(area);
         outer_block.render(area, buf);
 
-        let layout = split_dialog_area(inner_area, self.show_instructions, Some(instructions));
+        let layout = split_dialog_area(inner_area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
         // Draw dialog frame
@@ -316,147 +335,163 @@ impl ColumnWidthDialog {
 
     /// Handle a key event. Returns Some(Action) if the dialog should close and apply, None otherwise.
     pub fn handle_key_event(&mut self, key: KeyEvent, max_rows: usize) -> Option<Action> {
+        use crossterm::event::KeyCode;
+        
         if key.kind == KeyEventKind::Press {
-            // Handle Ctrl+I to toggle instructions
-            if key.code == KeyCode::Char('i') && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
-                self.show_instructions = !self.show_instructions;
-                return None;
-            }
-            
-            match self.mode {
-                ColumnWidthDialogMode::Main => {
-                    match key.code {
-                        KeyCode::Esc => return Some(Action::ColumnWidthDialogApplied(self.config.clone())),
-                        KeyCode::Up => {
-                            if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
-                                // Ctrl+Up: Move column up
-                                if self.active_index > 0 {
-                                    let col_idx = self.active_index - 1; // -1 because index 0 is auto-expand
-                                    if col_idx < self.columns.len()
-                                        && self.move_column(col_idx, -1) {
-                                            // Return the reorder action
-                                            return Some(Action::ColumnWidthDialogReordered(self.columns.clone()));
-                                        }
-                                }
-                            } else {
-                                // Normal Up: Move selection up
-                                if self.active_index > 0 {
-                                    self.active_index -= 1;
-                                    // Adjust scroll if needed
-                                    if self.active_index < self.scroll_offset {
-                                        self.scroll_offset = self.active_index;
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::Down => {
-                            if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
-                                // Ctrl+Down: Move column down
-                                if self.active_index > 0 {
-                                    let col_idx = self.active_index - 1; // -1 because index 0 is auto-expand
-                                    if col_idx < self.columns.len()
-                                        && self.move_column(col_idx, 1) {
-                                            // Return the reorder action
-                                            return Some(Action::ColumnWidthDialogReordered(self.columns.clone()));
-                                        }
-                                }
-                            } else {
-                                // Normal Down: Move selection down
-                                let max_index = self.columns.len() + 1; // +1 for auto-expand toggle
-                                if self.active_index + 1 < max_index {
-                                    self.active_index += 1;
-                                    // Adjust scroll if needed
-                                    let visible_end = self.scroll_offset + max_rows;
-                                    if self.active_index > visible_end {
-                                        self.scroll_offset = self.active_index.saturating_sub(max_rows);
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::Char(' ') => {
-                            if self.active_index == 0 {
-                                // Toggle auto-expand
-                                self.config.auto_expand = !self.config.auto_expand;
-                            } else {
-                                // Toggle between number and auto for the selected column
-                                let col_idx = self.active_index - 1; // -1 because index 0 is auto-expand
-                                if col_idx < self.columns.len() {
-                                    if self.editing_column == Some(col_idx) {
-                                        // Toggle input mode
-                                        self.input_mode = match self.input_mode {
-                                            InputMode::Number => InputMode::Auto,
-                                            InputMode::Auto => InputMode::Number,
-                                        };
-                                        if let InputMode::Number = self.input_mode {
-                                            // Initialize with current width if available
-                                            if let Some(width) = self.get_column_width(&self.columns[col_idx]) {
-                                                self.input_buffer = width.to_string();
-                                            } else {
-                                                self.input_buffer.clear();
+            // First, honor config-driven Global actions
+            if let Some(global_action) = self.key_config.action_for_key(crate::config::Mode::Global, key) {
+                match global_action {
+                    Action::Escape => {
+                        return Some(Action::ColumnWidthDialogApplied(self.config.clone()));
+                    }
+                    Action::Enter => {
+                        // Apply the current editing state immediately
+                        if let Some(col_idx) = self.editing_column
+                            && col_idx < self.columns.len() {
+                                let col_name = self.columns[col_idx].clone();
+                                match self.input_mode {
+                                    InputMode::Number => {
+                                        if let Ok(width) = self.input_buffer.parse::<u16>()
+                                            && (4..=255).contains(&width) {
+                                                self.set_column_width(&col_name, Some(width));
                                             }
-                                        }
-                                    } else {
-                                        // Start editing this column
-                                        self.editing_column = Some(col_idx);
-                                        self.input_mode = InputMode::Number;
+                                    }
+                                    InputMode::Auto => {
+                                        self.set_column_width(&col_name, None);
+                                    }
+                                }
+                            }
+                        // Stop editing
+                        self.editing_column = None;
+                        self.input_buffer.clear();
+                        return None;
+                    }
+                    Action::Up => {
+                        // Normal Up: Move selection up
+                        if self.active_index > 0 {
+                            self.active_index -= 1;
+                            // Adjust scroll if needed
+                            if self.active_index < self.scroll_offset {
+                                self.scroll_offset = self.active_index;
+                            }
+                        }
+                        return None;
+                    }
+                    Action::Down => {
+                        // Normal Down: Move selection down
+                        let max_index = self.columns.len() + 1; // +1 for auto-expand toggle
+                        if self.active_index + 1 < max_index {
+                            self.active_index += 1;
+                            // Adjust scroll if needed
+                            let visible_end = self.scroll_offset + max_rows;
+                            if self.active_index > visible_end {
+                                self.scroll_offset = self.active_index.saturating_sub(max_rows);
+                            }
+                        }
+                        return None;
+                    }
+                    Action::Backspace => {
+                        // Handle backspace when editing
+                        if let Some(editing_col) = self.editing_column
+                            && editing_col == self.active_index - 1 && matches!(self.input_mode, InputMode::Number) {
+                                self.input_buffer.pop();
+                            }
+                        return None;
+                    }
+                    Action::ToggleInstructions => {
+                        self.show_instructions = !self.show_instructions;
+                        return None;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Next, check for ColumnWidthDialog specific actions
+            if let Some(dialog_action) = self.key_config.action_for_key(crate::config::Mode::ColumnWidthDialog, key) {
+                match dialog_action {
+                    Action::ToggleAutoExpand => {
+                        if self.active_index == 0 {
+                            // Toggle auto-expand
+                            self.config.auto_expand = !self.config.auto_expand;
+                        } else {
+                            // Toggle between number and auto for the selected column, or start editing
+                            let col_idx = self.active_index - 1; // -1 because index 0 is auto-expand
+                            if col_idx < self.columns.len() {
+                                if self.editing_column == Some(col_idx) {
+                                    // Toggle input mode
+                                    self.input_mode = match self.input_mode {
+                                        InputMode::Number => InputMode::Auto,
+                                        InputMode::Auto => InputMode::Number,
+                                    };
+                                    if let InputMode::Number = self.input_mode {
+                                        // Initialize with current width if available
                                         if let Some(width) = self.get_column_width(&self.columns[col_idx]) {
                                             self.input_buffer = width.to_string();
                                         } else {
                                             self.input_buffer.clear();
                                         }
                                     }
+                                } else {
+                                    // Start editing this column
+                                    self.editing_column = Some(col_idx);
+                                    self.input_mode = InputMode::Number;
+                                    if let Some(width) = self.get_column_width(&self.columns[col_idx]) {
+                                        self.input_buffer = width.to_string();
+                                    } else {
+                                        self.input_buffer.clear();
+                                    }
                                 }
                             }
                         }
-                        KeyCode::Enter => {
-                            // Apply the current editing state immediately
-                            if let Some(col_idx) = self.editing_column
-                                && col_idx < self.columns.len() {
-                                    let col_name = self.columns[col_idx].clone();
-                                    match self.input_mode {
-                                        InputMode::Number => {
-                                            if let Ok(width) = self.input_buffer.parse::<u16>()
-                                                && (4..=255).contains(&width) {
-                                                    self.set_column_width(&col_name, Some(width));
-                                                }
-                                        }
-                                        InputMode::Auto => {
-                                            self.set_column_width(&col_name, None);
-                                        }
-                                    }
-                                }
-                            // Stop editing
-                            self.editing_column = None;
-                            self.input_buffer.clear();
-                        }
-                        KeyCode::Char('h') => {
-                            // Toggle hidden status for the selected column
-                            if self.active_index > 0 {
-                                let col_idx = self.active_index - 1; // -1 because index 0 is auto-expand
-                                if col_idx < self.columns.len() {
-                                    let col_name = self.columns[col_idx].clone();
-                                    self.toggle_column_hidden(&col_name);
-                                }
-                            }
-                        }
-                        KeyCode::Char(c) => {
-                            // Handle direct number input when editing
-                            if let Some(editing_col) = self.editing_column
-                                && editing_col == self.active_index - 1 && matches!(self.input_mode, InputMode::Number)
-                                    && c.is_ascii_digit() {
-                                        self.input_buffer.push(c);
-                                    }
-                        }
-                        KeyCode::Backspace => {
-                            // Handle backspace when editing
-                            if let Some(editing_col) = self.editing_column
-                                && editing_col == self.active_index - 1 && matches!(self.input_mode, InputMode::Number) {
-                                    self.input_buffer.pop();
-                                }
-                        }
-                        _ => {}
+                        return None;
                     }
+                    Action::ToggleColumnHidden => {
+                        // Toggle hidden status for the selected column
+                        if self.active_index > 0 {
+                            let col_idx = self.active_index - 1; // -1 because index 0 is auto-expand
+                            if col_idx < self.columns.len() {
+                                let col_name = self.columns[col_idx].clone();
+                                self.toggle_column_hidden(&col_name);
+                            }
+                        }
+                        return None;
+                    }
+                    Action::MoveColumnUp => {
+                        // Ctrl+Up: Move column up
+                        if self.active_index > 0 {
+                            let col_idx = self.active_index - 1; // -1 because index 0 is auto-expand
+                            if col_idx < self.columns.len()
+                                && self.move_column(col_idx, -1) {
+                                    // Return the reorder action
+                                    return Some(Action::ColumnWidthDialogReordered(self.columns.clone()));
+                                }
+                        }
+                        return None;
+                    }
+                    Action::MoveColumnDown => {
+                        // Ctrl+Down: Move column down
+                        if self.active_index > 0 {
+                            let col_idx = self.active_index - 1; // -1 because index 0 is auto-expand
+                            if col_idx < self.columns.len()
+                                && self.move_column(col_idx, 1) {
+                                    // Return the reorder action
+                                    return Some(Action::ColumnWidthDialogReordered(self.columns.clone()));
+                                }
+                        }
+                        return None;
+                    }
+                    _ => {}
                 }
+            }
+
+            // Fallback for character input when editing
+            if let KeyCode::Char(c) = key.code {
+                // Handle direct number input when editing
+                if let Some(editing_col) = self.editing_column
+                    && editing_col == self.active_index - 1 && matches!(self.input_mode, InputMode::Number)
+                        && c.is_ascii_digit() {
+                            self.input_buffer.push(c);
+                        }
             }
         }
         None
@@ -468,7 +503,8 @@ impl Component for ColumnWidthDialog {
         Ok(())
     }
 
-    fn register_config_handler(&mut self, _config: Config) -> Result<()> {
+    fn register_config_handler(&mut self, config: Config) -> Result<()> {
+        self.key_config = config;
         Ok(())
     }
 

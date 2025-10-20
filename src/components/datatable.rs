@@ -819,7 +819,6 @@ impl Component for DataTable {
                         sel.row = nrows.saturating_sub(1);
                     }
                 }
-
                 _ => {}
             }
         }

@@ -60,6 +60,7 @@ pub struct ProjectSettingsDialog {
     pub message_dialog_mode: bool,
     pub message_dialog: Option<MessageDialog>,
     pub data_viewer_selected: bool,
+    pub keybindings_config: crate::config::Config,
 }
 
 impl ProjectSettingsDialog {
@@ -90,6 +91,7 @@ impl ProjectSettingsDialog {
             message_dialog_mode: false,
             message_dialog: None,
             data_viewer_selected: false,
+            keybindings_config: crate::config::Config::default(),
         }
     }
 
@@ -129,10 +131,26 @@ impl ProjectSettingsDialog {
         if self.browse_button_selected { 0 } else if self.connect_button_selected { 1 } else if self.finish_button_selected { 2 } else { 0 }
     }
 
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        self.keybindings_config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Up),
+            (crate::config::Mode::Global, crate::action::Action::Down),
+            (crate::config::Mode::Global, crate::action::Action::Left),
+            (crate::config::Mode::Global, crate::action::Action::Right),
+            (crate::config::Mode::Global, crate::action::Action::Tab),
+            (crate::config::Mode::Global, crate::action::Action::Enter),
+            (crate::config::Mode::Global, crate::action::Action::Escape),
+            (crate::config::Mode::Global, crate::action::Action::Backspace),
+            (crate::config::Mode::ProjectSettings, crate::action::Action::ToggleDataViewerOption),
+        ])
+    }
+
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {
         Clear.render(area, buf);
-        let instructions = "Up/Down: Move Field  Right/Left: Browse toggle  Space: Toggle  Tab/Shift+Tab: Cycle  Enter: Save/Select  Esc: Cancel  Ctrl+I: Toggle Instructions";
-        let layout = split_dialog_area(area, self.show_instructions, Some(instructions));
+        let instructions = self.build_instructions_from_config();
+        let layout = split_dialog_area(area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
         let wrap_width = content_area.width.saturating_sub(2) as usize;
@@ -273,11 +291,25 @@ impl ProjectSettingsDialog {
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
         use crossterm::event::{KeyCode, KeyModifiers};
         
-        // Handle Ctrl+I to toggle instructions
-        if key.kind == KeyEventKind::Press
-            && key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.show_instructions = !self.show_instructions;
-            return None;
+        if key.kind == KeyEventKind::Press {
+            // Handle Ctrl+I for instructions toggle if applicable
+            if let Some(global_action) = self.keybindings_config.action_for_key(crate::config::Mode::Global, key) {
+                if global_action == Action::ToggleInstructions {
+                    self.show_instructions = !self.show_instructions;
+                    return None;
+                }
+            }
+
+            // Check for ProjectSettings-specific actions
+            if let Some(dialog_action) = self.keybindings_config.action_for_key(crate::config::Mode::ProjectSettings, key) {
+                if dialog_action == Action::ToggleDataViewerOption {
+                    // Toggle boolean when data viewer option is selected
+                    if self.data_viewer_selected {
+                        self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
+                    }
+                    return None;
+                }
+            }
         }
         
         match &mut self.mode {
@@ -478,12 +510,6 @@ impl ProjectSettingsDialog {
                                 }
                             }
                         }
-                        KeyCode::Char(' ') => {
-                            // Toggle boolean when data viewer option is selected
-                            if self.data_viewer_selected {
-                                self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
-                            }
-                        }
                         KeyCode::Char(c) => {
                             // Handle character input for current field
                             if !self.browse_button_selected && !self.finish_button_selected {
@@ -577,6 +603,7 @@ impl Component for ProjectSettingsDialog {
         Ok(())
     }
     fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> {
+        self.keybindings_config = _config;
         Ok(())
     }
     fn init(&mut self, _area: ratatui::layout::Size) -> Result<()> {
@@ -594,11 +621,25 @@ impl Component for ProjectSettingsDialog {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         use crossterm::event::{KeyCode, KeyModifiers};
         
-        // Handle Ctrl+I to toggle instructions
-        if key.kind == KeyEventKind::Press
-            && key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.show_instructions = !self.show_instructions;
-            return Ok(None);
+        if key.kind == KeyEventKind::Press {
+            // Handle Ctrl+I for instructions toggle if applicable
+            if let Some(global_action) = self.keybindings_config.action_for_key(crate::config::Mode::Global, key) {
+                if global_action == Action::ToggleInstructions {
+                    self.show_instructions = !self.show_instructions;
+                    return Ok(None);
+                }
+            }
+
+            // Check for ProjectSettings-specific actions
+            if let Some(dialog_action) = self.keybindings_config.action_for_key(crate::config::Mode::ProjectSettings, key) {
+                if dialog_action == Action::ToggleDataViewerOption {
+                    // Toggle boolean when data viewer option is selected
+                    if self.data_viewer_selected {
+                        self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
+                    }
+                    return Ok(None);
+                }
+            }
         }
         
         match &mut self.mode {
@@ -740,12 +781,6 @@ impl Component for ProjectSettingsDialog {
                                     1 => { self.openai_key_input.pop(); }
                                     _ => {}
                                 }
-                            }
-                        }
-                        KeyCode::Char(' ') => {
-                            // Space toggles the boolean option when selected
-                            if self.data_viewer_selected {
-                                self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
                             }
                         }
                         KeyCode::Char(c) => {

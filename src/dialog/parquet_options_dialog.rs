@@ -1,7 +1,8 @@
 //! ParquetOptionsDialog: Dialog for configuring Parquet import options (minimal)
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use crate::components::dialog_layout::split_dialog_area;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::action::Action;
@@ -31,10 +32,13 @@ pub struct ParquetOptionsDialog {
     pub finish_button_selected: bool,
     pub file_browser_mode: bool, // Whether the file browser is currently active
     pub file_browser_path: PathBuf,
+    pub show_instructions: bool, // Whether to show instructions area
     #[serde(skip)]
     pub file_path_input: TextArea<'static>,
     #[serde(skip)]
     pub file_browser: Option<FileBrowserDialog>,
+    #[serde(skip)]
+    pub config: Config,
 }
 
 impl ParquetOptionsDialog {
@@ -56,8 +60,10 @@ impl ParquetOptionsDialog {
             finish_button_selected: false,
             file_browser_mode: false,
             file_browser_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            show_instructions: true,
             file_path_input,
             file_browser: None,
+            config: Config::default(),
         }
     }
 
@@ -71,6 +77,22 @@ impl ParquetOptionsDialog {
     /// Update the file path
     fn update_file_path(&mut self, path: String) {
         self.file_path = path;
+    }
+
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Escape),
+            (crate::config::Mode::Global, crate::action::Action::Enter),
+            (crate::config::Mode::Global, crate::action::Action::Tab),
+            (crate::config::Mode::Global, crate::action::Action::Up),
+            (crate::config::Mode::Global, crate::action::Action::Down),
+            (crate::config::Mode::Global, crate::action::Action::Left),
+            (crate::config::Mode::Global, crate::action::Action::Right),
+            (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+            (crate::config::Mode::ParquetOptionsDialog, crate::action::Action::OpenParquetFileBrowser),
+            (crate::config::Mode::ParquetOptionsDialog, crate::action::Action::PasteParquetFilePath),
+        ])
     }
 
     /// Render the dialog
@@ -88,14 +110,19 @@ impl ParquetOptionsDialog {
             .title("Parquet Import Options")
             .borders(Borders::ALL);
 
-        // Create a layout with the file path input at the top
+        // Use split_dialog_area to handle instructions layout
+        let instructions = self.build_instructions_from_config();
+        let main_layout = split_dialog_area(area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
+        
+        // Split the content area for file path and options
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // File path input
                 Constraint::Min(0),    // Options/content (empty currently)
             ])
-            .split(area);
+            .split(main_layout.content_area);
 
         // Render file path input and [Browse] within a single bordered block,
         // shrinking the input area to avoid overlapping the [Browse] text
@@ -147,16 +174,25 @@ impl ParquetOptionsDialog {
         };
         buf.set_string(browse_x, inner_y, browse_text, browse_style);
 
-        // Render the [Finish] button at the bottom right of the full dialog area
+        // Render the [Finish] button at the bottom right of the content area
         let finish_text = "[Finish]";
-        let finish_x = area.x + area.width.saturating_sub(finish_text.len() as u16 + 2);
-        let finish_y = area.y + area.height.saturating_sub(2);
+        let finish_x = main_layout.content_area.x + main_layout.content_area.width.saturating_sub(finish_text.len() as u16 + 2);
+        let finish_y = main_layout.content_area.y + main_layout.content_area.height.saturating_sub(2);
         let finish_style = if self.finish_button_selected {
             Style::default().fg(Color::Black).bg(Color::White)
         } else {
             Style::default().fg(Color::Gray)
         };
         buf.set_string(finish_x, finish_y, finish_text, finish_style);
+
+        // Render instructions area if available
+        if let Some(instructions_area) = main_layout.instructions_area {
+            let instructions_paragraph = Paragraph::new(instructions.as_str())
+                .block(Block::default().borders(Borders::ALL).title("Instructions"))
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: true });
+            instructions_paragraph.render(instructions_area, buf);
+        }
     }
 }
 
@@ -166,6 +202,11 @@ impl Component for ParquetOptionsDialog {
     }
 
     fn register_config_handler(&mut self, _config: Config) -> Result<()> {
+        self.config = _config;
+        // Propagate to FileBrowserDialog if it exists
+        if let Some(ref mut browser) = self.file_browser {
+            browser.register_config_handler(self.config.clone());
+        }
         Ok(())
     }
 
@@ -213,9 +254,25 @@ impl Component for ParquetOptionsDialog {
             return Ok(None);
         }
 
-        let result = if key.kind == crossterm::event::KeyEventKind::Press {
-            match key.code {
-                KeyCode::Tab => {
+        if key.kind != crossterm::event::KeyEventKind::Press {
+            return Ok(None);
+        }
+
+        // Get config-driven actions once
+        let global_action = self.config.action_for_key(crate::config::Mode::Global, key);
+        let parquet_dialog_action = self.config.action_for_key(crate::config::Mode::ParquetOptionsDialog, key);
+
+        // First, honor config-driven Global actions
+        if let Some(global_action) = &global_action {
+            match global_action {
+                Action::Escape => {
+                    return Ok(Some(Action::CloseParquetOptionsDialog));
+                }
+                Action::ToggleInstructions => {
+                    self.show_instructions = !self.show_instructions;
+                    return Ok(None);
+                }
+                Action::Tab => {
                     // Cycle between file path, browse button, finish button
                     if self.file_path_focused {
                         self.file_path_focused = false;
@@ -230,9 +287,9 @@ impl Component for ParquetOptionsDialog {
                         self.browse_button_selected = false;
                         self.finish_button_selected = false;
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Right => {
+                Action::Right => {
                     if self.file_path_focused {
                         // Check if cursor is at the end of the text
                         let lines = self.file_path_input.lines();
@@ -256,9 +313,9 @@ impl Component for ParquetOptionsDialog {
                         self.browse_button_selected = false;
                         self.finish_button_selected = true;
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Left => {
+                Action::Left => {
                     if self.finish_button_selected {
                         // Move from finish button back to browse button
                         self.finish_button_selected = false;
@@ -274,9 +331,9 @@ impl Component for ParquetOptionsDialog {
                         self.file_path_input.input(input);
                         self.update_file_path(self.file_path_input.lines().join("\n"));
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Up => {
+                Action::Up => {
                     if self.finish_button_selected {
                         self.finish_button_selected = false;
                         self.browse_button_selected = true;
@@ -284,9 +341,9 @@ impl Component for ParquetOptionsDialog {
                         self.browse_button_selected = false;
                         self.file_path_focused = true;
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Down => {
+                Action::Down => {
                     if self.file_path_focused {
                         self.file_path_focused = false;
                         self.browse_button_selected = true;
@@ -294,44 +351,64 @@ impl Component for ParquetOptionsDialog {
                         self.browse_button_selected = false;
                         self.finish_button_selected = true;
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Enter => {
+                Action::Enter => {
                     if self.browse_button_selected {
                         // Open file browser
-                        self.file_browser = Some(FileBrowserDialog::new(
+                        let mut browser = FileBrowserDialog::new(
                             Some(self.file_browser_path.clone()),
                             Some(vec!["parquet"]),
                             false,
                             FileBrowserMode::Load
-                        ));
+                        );
+                        browser.register_config_handler(self.config.clone());
+                        self.file_browser = Some(browser);
                         self.file_browser_mode = true;
-                        None
+                        return Ok(None);
                     } else if self.finish_button_selected {
                         // Finish button pressed - create import config and return it
                         let config = self.create_import_config();
-                        Some(Action::AddDataImportConfig { config })
+                        return Ok(Some(Action::AddDataImportConfig { config }));
                     } else if self.file_path_focused {
                         // If file path is focused and Enter is pressed, select the finish button
                         self.file_path_focused = false;
                         self.finish_button_selected = true;
-                        None
-                    } else {
-                        None
+                        return Ok(None);
                     }
+                    return Ok(None);
                 }
-                KeyCode::Char('b') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                Action::Backspace => {
+                    if self.file_path_focused {
+                        // Handle backspace to delete characters in file path
+                        use tui_textarea::Input as TuiInput;
+                        let input: TuiInput = key.into();
+                        self.file_path_input.input(input);
+                        self.update_file_path(self.file_path_input.lines().join("\n"));
+                    }
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
+
+        // Next, check for ParquetOptionsDialog-specific actions
+        if let Some(dialog_action) = &parquet_dialog_action {
+            match dialog_action {
+                Action::OpenParquetFileBrowser => {
                     // Ctrl+B: Open file browser
-                    self.file_browser = Some(FileBrowserDialog::new(
+                    let mut browser = FileBrowserDialog::new(
                         Some(self.file_browser_path.clone()),
                         Some(vec!["parquet"]),
                         false,
                         FileBrowserMode::Load
-                    ));
+                    );
+                    browser.register_config_handler(self.config.clone());
+                    self.file_browser = Some(browser);
                     self.file_browser_mode = true;
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Char('p') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                Action::PasteParquetFilePath => {
                     // Ctrl+P: Paste clipboard text into the File Path when focused
                     if self.file_path_focused
                         && let Ok(mut clipboard) = Clipboard::new()
@@ -345,39 +422,24 @@ impl Component for ParquetOptionsDialog {
                                 .borders(Borders::ALL)
                         );
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Backspace => {
-                    if self.file_path_focused {
-                        // Handle backspace to delete characters in file path
-                        use tui_textarea::Input as TuiInput;
-                        let input: TuiInput = key.into();
-                        self.file_path_input.input(input);
-                        self.update_file_path(self.file_path_input.lines().join("\n"));
-                    }
-                    None
-                }
-                KeyCode::Char(_c) => {
-                    if self.file_path_focused {
-                        // Handle text input for file path
-                        use tui_textarea::Input as TuiInput;
-                        let input: TuiInput = key.into();
-                        self.file_path_input.input(input);
-                        self.update_file_path(self.file_path_input.lines().join("\n"));
-                        None
-                    } else {
-                        None
-                    }
-                }
-                KeyCode::Esc => {
-                    Some(Action::CloseParquetOptionsDialog)
-                }
-                _ => None,
+                _ => {}
             }
-        } else {
-            None
-        };
-        Ok(result)
+        }
+
+        // Fallback for character input or other unhandled keys
+        if let KeyCode::Char(_c) = key.code
+            && self.file_path_focused {
+                // Handle text input for file path
+                use tui_textarea::Input as TuiInput;
+                let input: TuiInput = key.into();
+                self.file_path_input.input(input);
+                self.update_file_path(self.file_path_input.lines().join("\n"));
+                return Ok(None);
+            }
+
+        Ok(None)
     }
 
     fn handle_mouse_event(&mut self, _mouse: MouseEvent) -> Result<Option<Action>> {

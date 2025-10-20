@@ -1,10 +1,178 @@
 {
   "keybindings": {
-    "Home": {
-      "<q>": "Quit", // Quit the application
-      "<Ctrl-d>": "Quit", // Another way to quit
-      "<Ctrl-c>": "Quit", // Yet another way to quit
-      "<Ctrl-z>": "Suspend" // Suspend the application
+    "DataTabManager": {
+      "<Alt-s>": "OpenProjectSettingsDialog",
+      "<Alt-m>": "OpenDataManagementDialog",
+      "<Alt-f>": "MoveTabToFront",
+      "<Alt-b>": "MoveTabToBack",
+      "<Alt-l>": "MoveTabLeft",
+      "<Alt-r>": "MoveTabRight",
+      "<Alt-left>": "PrevTab",
+      "<Alt-right>": "NextTab",
+      "<Alt-k>": "SyncTabs",
+      "<Alt-e>": "OpenDataExportDialog"
     },
+    "Global": {
+      "<Ctrl-z>": "Quit",
+      "<tab>": "Tab",
+      "<up>": "Up",
+      "<down>": "Down",
+      "<left>": "Left",
+      "<right>": "Right",
+      "<esc>": "Escape",
+      "<enter>": "Enter",
+      "<backspace>": "Backspace",
+      "<Ctrl-i>": "ToggleInstructions",
+      "<Alt-,>": "OpenKeybindings"
+    },
+    "DataTableContainer": {
+      "<Ctrl-s>": "OpenSortDialog",
+      "<Shift-S>": "QuickSortCurrentColumn",
+      "<Ctrl-e>": "OpenFilterDialog",
+      "<Shift-E>": "QuickFilterEqualsCurrentValue",
+      "<Shift-Left>": "MoveSelectedColumnLeft",
+      "<Shift-Right>": "MoveSelectedColumnRight",
+      "<Ctrl-t>": "OpenSqlDialog",
+      "<Ctrl-j>": "OpenJmesDialog",
+      "<Ctrl-o>": "OpenColumnOperationsDialog",
+      "<Ctrl-f>": "OpenFindDialog",
+      "<Ctrl-d>": "OpenDataframeDetailsDialog",
+      "<Ctrl-w>": "OpenColumnWidthDialog",
+      "<Ctrl-c>": "CopySelectedCell",
+      "<Ctrl-i>": "ToggleInstructions"
+    },
+    "DataManagement": {
+      "<Ctrl-d>": "DeleteSelectedSource",
+      "<Ctrl-a>": "OpenDataImportDialog",
+      "<Ctrl-l>": "LoadAllPendingDatasets",
+      "<Ctrl-e>": "EditSelectedAlias"
+    },
+    "DataImport": {
+      "<enter>": "DataImportSelect",
+      "<y>": "ConfirmDataImport",
+      "<n>": "DataImportBack",
+    },
+    "CsvOptions": {
+      "<tab>": "Tab",
+      "<Ctrl-b>": "OpenFileBrowser",
+      "<Ctrl-p>": "Paste"
+    },
+    "Sort": {
+      "<space>": "ToggleSortDirection",
+      "<Ctrl-d>": "RemoveSortColumn",
+      "<Ctrl-a>": "AddSortColumn"
+    },
+    "Filter": {
+      "<Ctrl-a>": "AddFilter",
+      "<Ctrl-e>": "EditFilter",
+      "<Ctrl-d>": "DeleteFilter",
+      "<Ctrl-g>": "AddFilterGroup",
+      "<Ctrl-s>": "SaveFilter",
+      "<Ctrl-o>": "LoadFilter",
+      "<Ctrl-r>": "ResetFilters",
+      "<tab>": "ToggleFilterGroupType"
+    },
+    "Find": {
+      "<tab>": "Tab",
+      "<space>": "ToggleSpace",
+      "<delete>": "Delete"
+    },
+    "FindAllResults": {
+      "<home>": "GoToFirst",
+      "<end>": "GoToLast",
+      "<Ctrl-up>": "PageUp",
+      "<Ctrl-down>": "PageDown"
+    },
+    "SqlDialog": {
+      "<Ctrl-a>": "SelectAllText",
+      "<Ctrl-c>": "CopyText",
+      "<Ctrl-enter>": "RunQuery",
+      "<Ctrl-shift-enter>": "CreateNewDataset",
+      "<Ctrl-r>": "RestoreDataFrame",
+      "<Ctrl-o>": "OpenSqlFileBrowser",
+      "<Ctrl-l>": "ClearText",
+      "<Ctrl-p>": "PasteText"
+    },
+    "XlsxOptionsDialog": {
+      "<Ctrl-b>": "OpenXlsxFileBrowser",
+      "<Ctrl-p>": "PasteFilePath",
+      "<space>": "ToggleWorksheetLoad"
+    },
+    "ParquetOptionsDialog": {
+      "<Ctrl-b>": "OpenParquetFileBrowser",
+      "<Ctrl-p>": "PasteParquetFilePath"
+    },
+    "SqliteOptionsDialog": {
+      "<Ctrl-b>": "OpenSqliteFileBrowser",
+      "<space>": "ToggleTableSelection"
+    },
+    "FileBrowser": {
+      "<Ctrl-up>": "FileBrowserPageUp",
+      "<Ctrl-down>": "FileBrowserPageDown",
+      "<backspace>": "NavigateToParent",
+      "y": "ConfirmOverwrite",
+      "n": "DenyOverwrite"
+    },
+    "JmesPath": {
+      "<Ctrl-a>": "AddColumn",
+      "<Ctrl-e>": "EditColumn",
+      "<Ctrl-d>": "DeleteColumn",
+      "<Ctrl-enter>": "ApplyTransform"
+    },
+    "ColumnWidthDialog": {
+      "<space>": "ToggleAutoExpand",
+      "h": "ToggleColumnHidden",
+      "<Ctrl-up>": "MoveColumnUp",
+      "<Ctrl-down>": "MoveColumnDown"
+    },
+    "JsonOptionsDialog": {
+      "<Ctrl-b>": "OpenJsonFileBrowser",
+      "<Ctrl-p>": "PasteJsonFilePath",
+      "<Ctrl-n>": "ToggleNdjson"
+    },
+    "AliasEdit": {
+      "<Ctrl-d>": "ClearText"
+    },
+    "ColumnOperationOptions": {
+      "<space>": "ToggleField",
+      "<tab>": "ToggleButtons"
+    },
+    "DataFrameDetails": {
+      "<Ctrl-left>": "SwitchToPrevTab",
+      "<Ctrl-right>": "SwitchToNextTab",
+      "<left>": "ChangeColumnLeft",
+      "<right>": "ChangeColumnRight",
+      "<Ctrl-s>": "OpenSortChoice",
+      "<Ctrl-c>": "OpenCastOverlay",
+      "<Ctrl-f>": "AddFilterFromValue",
+      "<Ctrl-e>": "ExportCurrentTab",
+      "<Ctrl-up>": "NavigateHeatmapUp",
+      "<Ctrl-down>": "NavigateHeatmapDown",
+      "<pageup>": "NavigateHeatmapPageUp",
+      "<pagedown>": "NavigateHeatmapPageDown",
+      "<home>": "NavigateHeatmapHome",
+      "<end>": "NavigateHeatmapEnd"
+    },
+    "ProjectSettings": {
+      "<space>": "ToggleDataViewerOption"
+    },
+    "TableExport": {
+      "<Ctrl-b>": "OpenFileBrowser",
+      "<Ctrl-p>": "Paste",
+      "<Ctrl-c>": "CopyFilePath",
+      "<enter>": "ExportTable",
+      "<Ctrl-f>": "ToggleFormat"
+    },
+    "KeybindingsDialog": {
+      "<tab>": "OpenGroupingDropdown",
+      "<Ctrl-left>": "SelectPrevGrouping",
+      "<Ctrl-right>": "SelectNextGrouping",
+      "<enter>": "StartRebinding",
+      "<Ctrl-s>": "SaveKeybindings",
+      "<Ctrl-Shift-s>": "SaveKeybindingsAs",
+      "<Ctrl-r>": "ResetKeybindings",
+      "<delete>": "ClearBinding",
+      "<esc>": "CancelRebinding"
+    }
   }
 }
