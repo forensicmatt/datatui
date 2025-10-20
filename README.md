@@ -2,6 +2,9 @@
 
 A fast, keyboard‑first terminal data viewer built with Rust and Ratatui. DataTUI lets you explore CSV/TSV, Excel, and SQLite data with tabs, sorting, filtering, SQL (via Polars), and more.
 
+![DataTUI hero screenshot](docs/assets/hero.png)
+
+
 ## Features
 
 - Tabbed data views with quick navigation
