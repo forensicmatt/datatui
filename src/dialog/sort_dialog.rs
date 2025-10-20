@@ -38,7 +38,7 @@ pub enum SortDialogMode {
 }
 
 /// SortDialog: UI for configuring sort columns and order
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SortDialog {
     pub columns: Vec<String>,
     pub sort_columns: Vec<SortColumn>,
@@ -51,6 +51,8 @@ pub struct SortDialog {
     pub add_column_scroll_offset: usize,
     pub current_column: Option<String>,
     pub show_instructions: bool, // new: show instructions area (default true)
+    #[serde(skip)]
+    pub config: Config,
 }
 
 impl SortDialog {
@@ -67,6 +69,7 @@ impl SortDialog {
             add_column_scroll_offset: 0,
             current_column: None,
             show_instructions: true,
+            config: Config::default(),
         }
     }
 
@@ -79,6 +82,26 @@ impl SortDialog {
     pub fn set_columns(&mut self, columns: Vec<String>, current_index: usize) {
         self.columns = columns;
         self.current_column = self.columns.get(current_index).cloned();
+    }
+
+    /// Build instructions string from configured keybindings for Sort mode
+    fn build_instructions_from_config(&self) -> String {
+        match self.mode {
+            SortDialogMode::List => {
+                self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Global, crate::action::Action::Enter),
+                    (crate::config::Mode::Sort, crate::action::Action::ToggleSortDirection),
+                    (crate::config::Mode::Sort, crate::action::Action::RemoveSortColumn),
+                    (crate::config::Mode::Sort, crate::action::Action::AddSortColumn),
+                ])
+            }
+            SortDialogMode::AddColumn => {
+                self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                    (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+                ])
+            }
+        }
     }
 
     /// Get columns available to add (not already in sort_columns)
@@ -97,12 +120,9 @@ impl SortDialog {
             .border_type(BorderType::Double);
         let outer_inner_area = outer_block.inner(area);
         outer_block.render(area, buf);
-        // Dialog instructions per mode
-        let instructions = match self.mode {
-            SortDialogMode::List => "Up/Down: Move  t: Toggle  d: Remove  a: Add  Enter: Apply  Esc: Close",
-            SortDialogMode::AddColumn => "Up/Down: Select  Enter: Add  Esc: Cancel",
-        };
-        let layout = split_dialog_area(outer_inner_area, self.show_instructions, Some(instructions));
+        // Build dynamic instructions from config
+        let instructions = self.build_instructions_from_config();
+        let layout = split_dialog_area(outer_inner_area, self.show_instructions, if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
         // Draw dialog frame
@@ -221,44 +241,126 @@ impl SortDialog {
                 self.show_instructions = !self.show_instructions;
                 return None;
             }
-            
-            match self.mode {
-                SortDialogMode::List => {
-                    match key.code {
-                        KeyCode::Esc => return Some(Action::DialogClose),
-                        KeyCode::Up => {
-                            if !self.sort_columns.is_empty() {
-                                if self.active_index == 0 {
+
+            // First, honor config-driven actions (Global + Sort)
+            if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+                match global_action {
+                    Action::Escape => {
+                        return Some(Action::DialogClose);
+                    }
+                    Action::Enter => {
+                        match self.mode {
+                            SortDialogMode::List => {
+                                return Some(Action::SortDialogApplied(self.sort_columns.clone()));
+                            }
+                            SortDialogMode::AddColumn => {
+                                let available = self.available_columns();
+                                if !available.is_empty() {
+                                    let col_name = available[self.add_column_index].clone();
+                                    self.sort_columns.push(SortColumn { name: col_name.clone(), ascending: true });
+                                    self.mode = SortDialogMode::List;
                                     self.active_index = self.sort_columns.len() - 1;
-                                } else {
-                                    self.active_index -= 1;
+                                    // Adjust scroll for main list
+                                    if self.active_index < self.scroll_offset {
+                                        self.scroll_offset = self.active_index;
+                                    } else if self.active_index >= self.scroll_offset + max_rows {
+                                        self.scroll_offset = self.active_index + 1 - max_rows;
+                                    }
+                                    // Clamp active_index and scroll_offset
+                                    if self.active_index >= self.sort_columns.len() {
+                                        self.active_index = self.sort_columns.len().saturating_sub(1);
+                                    }
+                                    if self.scroll_offset > self.active_index {
+                                        self.scroll_offset = self.active_index;
+                                    }
+                                    if self.scroll_offset + max_rows > self.sort_columns.len() {
+                                        self.scroll_offset = self.sort_columns.len().saturating_sub(max_rows);
+                                    }
+                                    // Reset AddColumn state
+                                    self.add_column_index = 0;
+                                    self.add_column_scroll_offset = 0;
                                 }
-                                // Scroll logic
-                                if self.active_index < self.scroll_offset {
-                                    self.scroll_offset = self.active_index;
-                                } else if self.active_index >= self.scroll_offset + max_rows {
-                                    self.scroll_offset = self.active_index + 1 - max_rows;
+                                return None;
+                            }
+                        }
+                    }
+                    Action::Up => {
+                        match self.mode {
+                            SortDialogMode::List => {
+                                if !self.sort_columns.is_empty() {
+                                    if self.active_index == 0 {
+                                        self.active_index = self.sort_columns.len() - 1;
+                                    } else {
+                                        self.active_index -= 1;
+                                    }
+                                    if self.active_index < self.scroll_offset {
+                                        self.scroll_offset = self.active_index;
+                                    } else if self.active_index >= self.scroll_offset + max_rows {
+                                        self.scroll_offset = self.active_index + 1 - max_rows;
+                                    }
+                                }
+                            }
+                            SortDialogMode::AddColumn => {
+                                let available = self.available_columns();
+                                if !available.is_empty() {
+                                    if self.add_column_index == 0 {
+                                        self.add_column_index = available.len() - 1;
+                                    } else {
+                                        self.add_column_index -= 1;
+                                    }
+                                    if self.add_column_index < self.add_column_scroll_offset {
+                                        self.add_column_scroll_offset = self.add_column_index;
+                                    } else if self.add_column_index >= self.add_column_scroll_offset + max_rows {
+                                        self.add_column_scroll_offset = self.add_column_index + 1 - max_rows;
+                                    }
                                 }
                             }
                         }
-                        KeyCode::Down => {
-                            if !self.sort_columns.is_empty() {
-                                self.active_index = (self.active_index + 1) % self.sort_columns.len();
-                                // Scroll logic
-                                if self.active_index < self.scroll_offset {
-                                    self.scroll_offset = self.active_index;
-                                } else if self.active_index >= self.scroll_offset + max_rows {
-                                    self.scroll_offset = self.active_index + 1 - max_rows;
+                        return None;
+                    }
+                    Action::Down => {
+                        match self.mode {
+                            SortDialogMode::List => {
+                                if !self.sort_columns.is_empty() {
+                                    self.active_index = (self.active_index + 1) % self.sort_columns.len();
+                                    if self.active_index < self.scroll_offset {
+                                        self.scroll_offset = self.active_index;
+                                    } else if self.active_index >= self.scroll_offset + max_rows {
+                                        self.scroll_offset = self.active_index + 1 - max_rows;
+                                    }
+                                }
+                            }
+                            SortDialogMode::AddColumn => {
+                                let available = self.available_columns();
+                                if !available.is_empty() {
+                                    self.add_column_index = (self.add_column_index + 1) % available.len();
+                                    if self.add_column_index < self.add_column_scroll_offset {
+                                        self.add_column_scroll_offset = self.add_column_index;
+                                    } else if self.add_column_index >= self.add_column_scroll_offset + max_rows {
+                                        self.add_column_scroll_offset = self.add_column_index + 1 - max_rows;
+                                    }
                                 }
                             }
                         }
-                        KeyCode::Char('t') => {
-                            if let Some(col) = self.sort_columns.get_mut(self.active_index) {
+                        return None;
+                    }
+                    _ => { /* ignore others for now */ }
+                }
+            }
+
+            // Next, check for Sort mode specific actions
+            if let Some(sort_action) = self.config.action_for_key(crate::config::Mode::Sort, key) {
+                match sort_action {
+                    Action::ToggleSortDirection => {
+                        if self.mode == SortDialogMode::List
+                            && let Some(col) = self.sort_columns.get_mut(self.active_index) {
                                 col.ascending = !col.ascending;
                             }
-                        }
-                        KeyCode::Char('d') => {
-                            if !self.sort_columns.is_empty() && self.active_index < self.sort_columns.len() {
+                        return None;
+                    }
+                    Action::RemoveSortColumn => {
+                        if self.mode == SortDialogMode::List
+                            && !self.sort_columns.is_empty() && self.active_index < self.sort_columns.len() {
                                 self.sort_columns.remove(self.active_index);
                                 if self.sort_columns.is_empty() {
                                     self.active_index = 0;
@@ -280,8 +382,10 @@ impl SortDialog {
                                     }
                                 }
                             }
-                        }
-                        KeyCode::Char('a') => {
+                        return None;
+                    }
+                    Action::AddSortColumn => {
+                        if self.mode == SortDialogMode::List {
                             self.mode = SortDialogMode::AddColumn;
                             let available = self.available_columns();
                             // Highlight the current DataTable column if present
@@ -298,75 +402,13 @@ impl SortDialog {
                                 self.add_column_scroll_offset = 0;
                             }
                         }
-                        KeyCode::Enter => {
-                            // Apply sort: emit action with current sort_columns as (name, ascending) pairs
-                            return Some(Action::SortDialogApplied(self.sort_columns.clone()));
-                        }
-                        _ => {}
+                        return None;
                     }
-                }
-                SortDialogMode::AddColumn => {
-                    let available = self.available_columns();
-                    match key.code {
-                        KeyCode::Esc => return Some(Action::DialogClose),
-                        KeyCode::Up => {
-                            if !available.is_empty() {
-                                if self.add_column_index == 0 {
-                                    self.add_column_index = available.len() - 1;
-                                } else {
-                                    self.add_column_index -= 1;
-                                }
-                                // Scroll logic
-                                if self.add_column_index < self.add_column_scroll_offset {
-                                    self.add_column_scroll_offset = self.add_column_index;
-                                } else if self.add_column_index >= self.add_column_scroll_offset + max_rows {
-                                    self.add_column_scroll_offset = self.add_column_index + 1 - max_rows;
-                                }
-                            }
-                        }
-                        KeyCode::Down => {
-                            if !available.is_empty() {
-                                self.add_column_index = (self.add_column_index + 1) % available.len();
-                                // Scroll logic
-                                if self.add_column_index < self.add_column_scroll_offset {
-                                    self.add_column_scroll_offset = self.add_column_index;
-                                } else if self.add_column_index >= self.add_column_scroll_offset + max_rows {
-                                    self.add_column_scroll_offset = self.add_column_index + 1 - max_rows;
-                                }
-                            }
-                        }
-                        KeyCode::Enter => {
-                            if !available.is_empty() {
-                                let col_name = available[self.add_column_index].clone();
-                                self.sort_columns.push(SortColumn { name: col_name.clone(), ascending: true });
-                                self.mode = SortDialogMode::List;
-                                self.active_index = self.sort_columns.len() - 1;
-                                // Adjust scroll for main list
-                                if self.active_index < self.scroll_offset {
-                                    self.scroll_offset = self.active_index;
-                                } else if self.active_index >= self.scroll_offset + max_rows {
-                                    self.scroll_offset = self.active_index + 1 - max_rows;
-                                }
-                                // Clamp active_index and scroll_offset
-                                if self.active_index >= self.sort_columns.len() {
-                                    self.active_index = self.sort_columns.len().saturating_sub(1);
-                                }
-                                if self.scroll_offset > self.active_index {
-                                    self.scroll_offset = self.active_index;
-                                }
-                                if self.scroll_offset + max_rows > self.sort_columns.len() {
-                                    self.scroll_offset = self.sort_columns.len().saturating_sub(max_rows);
-                                }
-                                // Reset AddColumn state
-                                self.add_column_index = 0;
-                                self.add_column_scroll_offset = 0;
-                            }
-                        }
-                        _ => {}
-                    }
+                    _ => { /* ignore others for now */ }
                 }
             }
         }
+
         None
     }
 }
@@ -375,9 +417,7 @@ impl Component for SortDialog {
     fn register_action_handler(&mut self, _tx: UnboundedSender<Action>) -> Result<()> {
         Ok(())
     }
-    fn register_config_handler(&mut self, _config: Config) -> Result<()> {
-        Ok(())
-    }
+    fn register_config_handler(&mut self, _config: Config) -> Result<()> { self.config = _config; Ok(()) }
     fn init(&mut self, _area: Size) -> Result<()> {
         Ok(())
     }

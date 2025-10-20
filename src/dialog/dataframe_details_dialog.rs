@@ -12,8 +12,9 @@ use std::sync::Arc;
 use crate::dialog::table_export_dialog::TableExportDialog;
 use crate::style::StyleConfig;
 use crate::dialog::filter_dialog::{ColumnFilter, FilterCondition};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DetailsTab {
     UniqueValues,
     Columns,
@@ -21,20 +22,21 @@ pub enum DetailsTab {
     Heatmap,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum SortBy {
     Value,
     Count,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FocusField {
     ColumnDropdown,
     Table,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DataFrameDetailsDialog {
+    #[serde(skip)]
     pub df: Option<Arc<DataFrame>>,
     pub columns: Vec<String>,
     pub selected_column_idx: usize,
@@ -43,7 +45,9 @@ pub struct DataFrameDetailsDialog {
     pub show_instructions: bool,
     pub selected_row: usize,
     pub scroll_offset: usize,
+    #[serde(skip)]
     unique_counts: Vec<(String, u64)>,
+    #[serde(skip)]
     pub export_dialog: Option<TableExportDialog>,
     // Sorting state
     sort_by: SortBy,
@@ -51,26 +55,36 @@ pub struct DataFrameDetailsDialog {
     sort_choice_open: bool,
     sort_choice_index: usize, // 0 => Value, 1 => Count
     // Columns info for Columns tab
+    #[serde(skip)]
     columns_info: Vec<(String, String)>,
     // Styles
+    #[serde(skip)]
     style: StyleConfig,
     // Describe tab rows
+    #[serde(skip)]
     describe_rows: Vec<DescribeRow>,
     // Horizontal scroll offset for Describe stats columns
     describe_col_offset: usize,
     // Heatmap state
     heatmap_x_col_idx: usize,
     heatmap_y_col_idx: usize,
+    #[serde(skip)]
     heatmap_cols: Vec<String>,
+    #[serde(skip)]
     heatmap_matrix: Vec<Vec<f64>>,
     // Cast overlay state (Columns tab)
     cast_overlay_open: bool,
+    #[serde(skip)]
     cast_options: Vec<(String, DataType)>,
     cast_selected_idx: usize,
+    #[serde(skip)]
     cast_error: Option<crate::dialog::error_dialog::ErrorDialog>,
+    // Config
+    #[serde(skip)]
+    pub config: crate::config::Config,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct DescribeRow {
     column: String,
     count: u64,
@@ -113,6 +127,7 @@ impl DataFrameDetailsDialog {
             cast_options: Vec::new(),
             cast_selected_idx: 0,
             cast_error: None,
+            config: crate::config::Config::default(),
         }
     }
 
@@ -123,6 +138,77 @@ impl DataFrameDetailsDialog {
 
     pub fn clear_cast_error(&mut self) {
         self.cast_error = None;
+    }
+
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        match self.tab {
+            DetailsTab::UniqueValues => {
+                self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Global, crate::action::Action::Tab),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToPrevTab),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToNextTab),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::ChangeColumnLeft),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::ChangeColumnRight),
+                    (crate::config::Mode::Global, crate::action::Action::Up),
+                    (crate::config::Mode::Global, crate::action::Action::Down),
+                    (crate::config::Mode::Global, crate::action::Action::PageUp),
+                    (crate::config::Mode::Global, crate::action::Action::PageDown),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::OpenSortChoice),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::AddFilterFromValue),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::ExportCurrentTab),
+                    (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                ])
+            }
+            DetailsTab::Columns => {
+                self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Global, crate::action::Action::Tab),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToPrevTab),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToNextTab),
+                    (crate::config::Mode::Global, crate::action::Action::Up),
+                    (crate::config::Mode::Global, crate::action::Action::Down),
+                    (crate::config::Mode::Global, crate::action::Action::PageUp),
+                    (crate::config::Mode::Global, crate::action::Action::PageDown),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::OpenCastOverlay),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::ExportCurrentTab),
+                    (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                ])
+            }
+            DetailsTab::Describe => {
+                self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Global, crate::action::Action::Tab),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToPrevTab),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToNextTab),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::ScrollStatsLeft),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::ScrollStatsRight),
+                    (crate::config::Mode::Global, crate::action::Action::Up),
+                    (crate::config::Mode::Global, crate::action::Action::Down),
+                    (crate::config::Mode::Global, crate::action::Action::PageUp),
+                    (crate::config::Mode::Global, crate::action::Action::PageDown),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::ExportCurrentTab),
+                    (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                ])
+            }
+            DetailsTab::Heatmap => {
+                self.config.actions_to_instructions(&[
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToPrevTab),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToNextTab),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::NavigateHeatmapLeft),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::NavigateHeatmapRight),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::NavigateHeatmapUp),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::NavigateHeatmapDown),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::NavigateHeatmapPageUp),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::NavigateHeatmapPageDown),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::NavigateHeatmapHome),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::NavigateHeatmapEnd),
+                    (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                ])
+            }
+        }
     }
 
     pub fn close_cast_overlay(&mut self) {
@@ -416,13 +502,9 @@ impl DataFrameDetailsDialog {
         let outer_inner_area = outer_block.inner(area);
         outer_block.render(area, buf);
         // Instructions per-tab
-        let instructions = match self.tab {
-            DetailsTab::UniqueValues => "Tab: Focus  Ctrl+←/→: Tabs  ←/→: Change Column  ↑/↓: Navigate  Ctrl+↑/↓: Page  Ctrl+s: Sort  Ctrl+f: Add Filter  Ctrl+e: Export  Ctrl+i: Help  Esc: Close",
-            DetailsTab::Columns => "Tab: Focus  Ctrl+←/→: Tabs  ↑/↓: Navigate  Ctrl+↑/↓: Page  Ctrl+c: Cast  Ctrl+e: Export  Ctrl+i: Help  Esc: Close",
-            DetailsTab::Describe => "Tab: Focus  Ctrl+←/→: Tabs  ←/→: Scroll Stats  ↑/↓: Navigate  Ctrl+↑/↓: Page  Ctrl+e: Export  Ctrl+i: Help  Esc: Close",
-            DetailsTab::Heatmap => "Ctrl+←/→: Tabs  ←/→: X column  ↑/↓: Y column  Ctrl+i: Help  Esc: Close",
-        };
-        let layout = split_dialog_area(outer_inner_area, self.show_instructions, Some(instructions));
+        let instructions = self.build_instructions_from_config();
+        let layout = split_dialog_area(outer_inner_area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
         // Inner single border content frame
@@ -1045,104 +1127,95 @@ impl DataFrameDetailsDialog {
             return None;
         }
 
+        // Handle Ctrl+I for instructions toggle
         if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.show_instructions = !self.show_instructions;
             return None;
         }
 
-        // Open export dialog depending on current tab
-        if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
-			match self.tab {
-                DetailsTab::UniqueValues => {
-                    let headers = vec!["Value".to_string(), "Count".to_string()];
-                    let rows: Vec<Vec<String>> = self.unique_counts.iter().map(|(v, c)| vec![v.clone(), c.to_string()]).collect();
-                    let suggested = self.current_column_name()
-                        .map(|c| format!("unique_values_{c}.csv"))
-                        .or_else(|| Some("unique_values.csv".to_string()));
-                    self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
+        // First, honor config-driven Global actions
+        if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            match global_action {
+                Action::Escape => return Some(Action::DialogClose),
+                Action::Enter => {
+                    // Handle Enter logic based on dialog state
                 }
-                DetailsTab::Columns => {
-                    let headers = vec!["Column".to_string(), "Type".to_string()];
-                    let rows: Vec<Vec<String>> = self.columns_info.iter().map(|(n, t)| vec![n.clone(), t.clone()]).collect();
-                    let suggested = Some("columns.csv".to_string());
-                    self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
+                Action::Up => {
+                    if self.selected_row > 0 { self.selected_row -= 1; }
+                    if self.selected_row < self.scroll_offset { self.scroll_offset = self.selected_row; }
                 }
-				DetailsTab::Describe => {
-                    let headers = vec!["Column".to_string(), "count".to_string(), "mean".to_string(), "std".to_string(), "median".to_string(), "min".to_string(), "max".to_string()];
-                    let rows: Vec<Vec<String>> = self.describe_rows.iter().map(|r| vec![
-                        r.column.clone(),
-                        r.count.to_string(),
-                        r.mean.map(|v| format!("{v}")).unwrap_or_default(),
-                        r.std.map(|v| format!("{v}")).unwrap_or_default(),
-                        r.median.map(|v| format!("{v}")).unwrap_or_default(),
-                        r.min.map(|v| format!("{v}")).unwrap_or_default(),
-                        r.max.map(|v| format!("{v}")).unwrap_or_default(),
-                    ]).collect();
-                    let suggested = Some("describe.csv".to_string());
-                    self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
+                Action::Down => {
+                    let list_len = match self.tab { DetailsTab::UniqueValues => self.unique_counts.len(), DetailsTab::Columns => self.columns_info.len(), DetailsTab::Describe => self.describe_rows.len(), DetailsTab::Heatmap => 0 };
+                    let max_idx = list_len.saturating_sub(1);
+                    if self.selected_row < max_idx { self.selected_row += 1; }
+                    let visible_end = self.scroll_offset + max_rows.saturating_sub(1);
+                    if self.selected_row > visible_end { self.scroll_offset = self.selected_row.saturating_sub(max_rows.saturating_sub(1)); }
                 }
-                DetailsTab::Heatmap => { /* no export for heatmap */ }
-            }
-            return None;
-        }
-
-        // From Unique Values: Ctrl+F creates a ColumnFilter for selected value
-        if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if matches!(self.tab, DetailsTab::UniqueValues) {
-                // Determine current value string from unique_counts at selected_row
-                if let Some((value, _count)) = self.unique_counts.get(self.selected_row)
-                    && let Some(col) = self.current_column_name()
-                {
-                    let filter = ColumnFilter {
-                        column: col.to_string(),
-                        condition: FilterCondition::Equals { value: value.clone(), case_sensitive: false },
-                    };
-                    return Some(Action::AddFilterCondition(filter));
-                }
-            }
-            return None;
-        }
-
-        // Open cast overlay on Columns tab
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if matches!(self.tab, DetailsTab::Columns)
-                && let Some(df) = &self.df {
-                    let name_opt = self.columns_info.get(self.selected_row).map(|(n, _)| n.clone());
-                    if let Some(col) = name_opt.as_deref() && let Ok(s) = df.column(col) {
-                        let cur_dt = s.dtype().clone();
-                        let mut opts = Self::allowed_casts_for(&cur_dt)
-                            .into_iter()
-                            .map(|dt| (format!("{dt:?}"), dt))
-                            .collect::<Vec<_>>();
-                        // Dedup by label and keep only distinct
-                        let mut seen = std::collections::HashSet::new();
-                        opts.retain(|(label, _)| seen.insert(label.clone()));
-                        // Remove current dtype label to avoid no-op
-                        let cur_label = format!("{cur_dt:?}");
-                        opts.retain(|(label, _)| label != &cur_label);
-                        // Sort labels for stable UI
-                        opts.sort_by(|a, b| a.0.cmp(&b.0));
-                        self.cast_options = opts;
-                        self.cast_selected_idx = 0;
-                        self.cast_overlay_open = true;
+                Action::Left => {
+                    if matches!(self.tab, DetailsTab::Describe) {
+                        self.describe_col_offset = self.describe_col_offset.saturating_sub(1);
+                    } else if matches!(self.tab, DetailsTab::UniqueValues) && !self.columns.is_empty() {
+                        if self.selected_column_idx == 0 { self.selected_column_idx = self.columns.len() - 1; } else { self.selected_column_idx -= 1; }
+                        self.recompute_unique_counts();
+                    } else if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
+                        if self.heatmap_x_col_idx == 0 { self.heatmap_x_col_idx = self.heatmap_cols.len().saturating_sub(1); } else { self.heatmap_x_col_idx -= 1; }
                     }
                 }
-            return None;
-        }
-
-        // Open sort choice overlay (UniqueValues tab only)
-        if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if matches!(self.tab, DetailsTab::UniqueValues) {
-                self.sort_choice_open = true;
-                self.sort_choice_index = match self.sort_by { SortBy::Value => 0, SortBy::Count => 1 };
+                Action::Right => {
+                    if matches!(self.tab, DetailsTab::Describe) {
+                        // Max 5 (0..=5) since there are 6 stats columns
+                        if self.describe_col_offset < 5 { self.describe_col_offset += 1; }
+                    } else if matches!(self.tab, DetailsTab::UniqueValues) && !self.columns.is_empty() {
+                        let n = self.columns.len().max(1);
+                        self.selected_column_idx = (self.selected_column_idx + 1) % n;
+                        self.recompute_unique_counts();
+                    } else if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
+                        let n = self.heatmap_cols.len().max(1);
+                        self.heatmap_x_col_idx = (self.heatmap_x_col_idx + 1) % n;
+                    }
+                }
+                Action::Tab => {
+                    if matches!(self.tab, DetailsTab::UniqueValues) {
+                        if matches!(self.focus, FocusField::ColumnDropdown) {
+                            self.focus = FocusField::Table;
+                        } else {
+                            self.focus = FocusField::ColumnDropdown;
+                        }
+                    }
+                }
+                Action::PageUp => {
+                    let list_len = match self.tab { DetailsTab::UniqueValues => self.unique_counts.len(), DetailsTab::Columns => self.columns_info.len(), DetailsTab::Describe => self.describe_rows.len(), DetailsTab::Heatmap => 0 };
+                    if list_len == 0 { return None; }
+                    let page = max_rows.max(1);
+                    let new_selected = self.selected_row.saturating_sub(page);
+                    self.selected_row = new_selected;
+                    if self.selected_row < self.scroll_offset {
+                        self.scroll_offset = self.selected_row;
+                    }
+                }
+                Action::PageDown => {
+                    let list_len = match self.tab { DetailsTab::UniqueValues => self.unique_counts.len(), DetailsTab::Columns => self.columns_info.len(), DetailsTab::Describe => self.describe_rows.len(), DetailsTab::Heatmap => 0 };
+                    if list_len == 0 { return None; }
+                    let page = max_rows.max(1);
+                    let new_selected = (self.selected_row + page).min(list_len.saturating_sub(1));
+                    self.selected_row = new_selected;
+                    // Ensure selection is visible
+                    let visible_end = self.scroll_offset + max_rows.saturating_sub(1);
+                    if self.selected_row > visible_end {
+                        self.scroll_offset = self.selected_row.saturating_sub(max_rows.saturating_sub(1));
+                    }
+                }
+                Action::ToggleInstructions => {
+                    self.show_instructions = !self.show_instructions;
+                }
+                _ => {}
             }
-            return None;
         }
 
-        // Switch tabs with Ctrl+Left / Ctrl+Right
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Right => {
+        // Next, check for dialog-specific actions
+        if let Some(dialog_action) = self.config.action_for_key(crate::config::Mode::DataFrameDetails, key) {
+            match dialog_action {
+                Action::SwitchToNextTab => {
                     self.tab = match self.tab {
                         DetailsTab::UniqueValues => DetailsTab::Columns,
                         DetailsTab::Columns => DetailsTab::Describe,
@@ -1155,7 +1228,7 @@ impl DataFrameDetailsDialog {
                     if matches!(self.tab, DetailsTab::Columns | DetailsTab::Describe | DetailsTab::Heatmap) { self.focus = FocusField::Table; }
                     return None;
                 }
-                KeyCode::Left => {
+                Action::SwitchToPrevTab => {
                     self.tab = match self.tab {
                         DetailsTab::UniqueValues => DetailsTab::Heatmap,
                         DetailsTab::Columns => DetailsTab::UniqueValues,
@@ -1168,160 +1241,161 @@ impl DataFrameDetailsDialog {
                     if matches!(self.tab, DetailsTab::Columns | DetailsTab::Describe | DetailsTab::Heatmap) { self.focus = FocusField::Table; }
                     return None;
                 }
+                Action::ChangeColumnLeft => {
+                    if matches!(self.tab, DetailsTab::UniqueValues) && !self.columns.is_empty() {
+                        if self.selected_column_idx == 0 { self.selected_column_idx = self.columns.len() - 1; } else { self.selected_column_idx -= 1; }
+                        self.recompute_unique_counts();
+                    }
+                }
+                Action::ChangeColumnRight => {
+                    if matches!(self.tab, DetailsTab::UniqueValues) && !self.columns.is_empty() {
+                        let n = self.columns.len().max(1);
+                        self.selected_column_idx = (self.selected_column_idx + 1) % n;
+                        self.recompute_unique_counts();
+                    }
+                }
+                Action::OpenSortChoice => {
+                    if matches!(self.tab, DetailsTab::UniqueValues) {
+                        self.sort_choice_open = true;
+                        self.sort_choice_index = match self.sort_by { SortBy::Value => 0, SortBy::Count => 1 };
+                    }
+                }
+                Action::OpenCastOverlay => {
+                    if matches!(self.tab, DetailsTab::Columns) && let Some(df) = &self.df {
+                        let name_opt = self.columns_info.get(self.selected_row).map(|(n, _)| n.clone());
+                        if let Some(col) = name_opt.as_deref() && let Ok(s) = df.column(col) {
+                            let cur_dt = s.dtype().clone();
+                            let mut opts = Self::allowed_casts_for(&cur_dt)
+                                .into_iter()
+                                .map(|dt| (format!("{dt:?}"), dt))
+                                .collect::<Vec<_>>();
+                            // Dedup by label and keep only distinct
+                            let mut seen = std::collections::HashSet::new();
+                            opts.retain(|(label, _)| seen.insert(label.clone()));
+                            // Remove current dtype label to avoid no-op
+                            let cur_label = format!("{cur_dt:?}");
+                            opts.retain(|(label, _)| label != &cur_label);
+                            // Sort labels for stable UI
+                            opts.sort_by(|a, b| a.0.cmp(&b.0));
+                            self.cast_options = opts;
+                            self.cast_selected_idx = 0;
+                            self.cast_overlay_open = true;
+                        }
+                    }
+                }
+                Action::AddFilterFromValue => {
+                    if matches!(self.tab, DetailsTab::UniqueValues) {
+                        // Determine current value string from unique_counts at selected_row
+                        if let Some((value, _count)) = self.unique_counts.get(self.selected_row)
+                            && let Some(col) = self.current_column_name()
+                        {
+                            let filter = ColumnFilter {
+                                column: col.to_string(),
+                                condition: FilterCondition::Equals { value: value.clone(), case_sensitive: false },
+                            };
+                            return Some(Action::AddFilterCondition(filter));
+                        }
+                    }
+                }
+                Action::ExportCurrentTab => {
+                    match self.tab {
+                        DetailsTab::UniqueValues => {
+                            let headers = vec!["Value".to_string(), "Count".to_string()];
+                            let rows: Vec<Vec<String>> = self.unique_counts.iter().map(|(v, c)| vec![v.clone(), c.to_string()]).collect();
+                            let suggested = self.current_column_name()
+                                .map(|c| format!("unique_values_{c}.csv"))
+                                .or_else(|| Some("unique_values.csv".to_string()));
+                            self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
+                        }
+                        DetailsTab::Columns => {
+                            let headers = vec!["Column".to_string(), "Type".to_string()];
+                            let rows: Vec<Vec<String>> = self.columns_info.iter().map(|(n, t)| vec![n.clone(), t.clone()]).collect();
+                            let suggested = Some("columns.csv".to_string());
+                            self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
+                        }
+                        DetailsTab::Describe => {
+                            let headers = vec!["Column".to_string(), "count".to_string(), "mean".to_string(), "std".to_string(), "median".to_string(), "min".to_string(), "max".to_string()];
+                            let rows: Vec<Vec<String>> = self.describe_rows.iter().map(|r| vec![
+                                r.column.clone(),
+                                r.count.to_string(),
+                                r.mean.map(|v| format!("{v}")).unwrap_or_default(),
+                                r.std.map(|v| format!("{v}")).unwrap_or_default(),
+                                r.median.map(|v| format!("{v}")).unwrap_or_default(),
+                                r.min.map(|v| format!("{v}")).unwrap_or_default(),
+                                r.max.map(|v| format!("{v}")).unwrap_or_default(),
+                            ]).collect();
+                            let suggested = Some("describe.csv".to_string());
+                            self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
+                        }
+                        DetailsTab::Heatmap => { /* no export for heatmap */ }
+                    }
+                }
+                Action::NavigateHeatmapLeft => {
+                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
+                        if self.heatmap_x_col_idx == 0 { self.heatmap_x_col_idx = self.heatmap_cols.len().saturating_sub(1); } else { self.heatmap_x_col_idx -= 1; }
+                    }
+                }
+                Action::NavigateHeatmapRight => {
+                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
+                        let n = self.heatmap_cols.len().max(1);
+                        self.heatmap_x_col_idx = (self.heatmap_x_col_idx + 1) % n;
+                    }
+                }
+                Action::NavigateHeatmapUp => {
+                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
+                        if self.heatmap_y_col_idx == 0 { self.heatmap_y_col_idx = self.heatmap_cols.len().saturating_sub(1); } else { self.heatmap_y_col_idx -= 1; }
+                    }
+                }
+                Action::NavigateHeatmapDown => {
+                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
+                        let n = self.heatmap_cols.len().max(1);
+                        self.heatmap_y_col_idx = (self.heatmap_y_col_idx + 1) % n;
+                    }
+                }
+                Action::NavigateHeatmapPageUp => {
+                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
+                        let step = std::cmp::max(1, self.heatmap_cols.len() / 5);
+                        self.heatmap_y_col_idx = self.heatmap_y_col_idx.saturating_sub(step);
+                    }
+                }
+                Action::NavigateHeatmapPageDown => {
+                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
+                        let step = std::cmp::max(1, self.heatmap_cols.len() / 5);
+                        let n = self.heatmap_cols.len();
+                        self.heatmap_y_col_idx = (self.heatmap_y_col_idx.saturating_add(step)).min(n.saturating_sub(1));
+                    }
+                }
+                Action::NavigateHeatmapHome => {
+                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
+                        self.heatmap_x_col_idx = 0;
+                        self.heatmap_y_col_idx = 0;
+                    }
+                }
+                Action::NavigateHeatmapEnd => {
+                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
+                        let last = self.heatmap_cols.len().saturating_sub(1);
+                        self.heatmap_x_col_idx = last;
+                        self.heatmap_y_col_idx = last;
+                    }
+                }
+                Action::ScrollStatsLeft => {
+                    if matches!(self.tab, DetailsTab::Describe) {
+                        self.describe_col_offset = self.describe_col_offset.saturating_sub(1);
+                    }
+                }
+                Action::ScrollStatsRight => {
+                    if matches!(self.tab, DetailsTab::Describe) {
+                        // Max 5 (0..=5) since there are 6 stats columns
+                        if self.describe_col_offset < 5 { self.describe_col_offset += 1; }
+                    }
+                }
                 _ => {}
             }
         }
 
-        match self.focus {
-            FocusField::ColumnDropdown => {
-                match key.code {
-                    KeyCode::Tab => { self.focus = FocusField::Table; }
-                    KeyCode::Left => {
-                        if matches!(self.tab, DetailsTab::UniqueValues) && !self.columns.is_empty() {
-                            if self.selected_column_idx == 0 { self.selected_column_idx = self.columns.len() - 1; } else { self.selected_column_idx -= 1; }
-                            self.recompute_unique_counts();
-                        }
-                    }
-                    KeyCode::Right => {
-                        if matches!(self.tab, DetailsTab::UniqueValues) && !self.columns.is_empty() {
-                            self.selected_column_idx = (self.selected_column_idx + 1) % self.columns.len();
-                            self.recompute_unique_counts();
-                        }
-                    }
-                    KeyCode::Esc => return Some(Action::DialogClose),
-                    _ => {}
-                }
-            }
-            FocusField::Table => {
-                match key.code {
-                    // Heatmap axes navigation
-                    KeyCode::Left if matches!(self.tab, DetailsTab::Heatmap) => {
-                        if !self.columns.is_empty() {
-                            if self.heatmap_x_col_idx == 0 { self.heatmap_x_col_idx = self.heatmap_cols.len().saturating_sub(1); } else { self.heatmap_x_col_idx -= 1; }
-                        }
-                    }
-                    KeyCode::Right if matches!(self.tab, DetailsTab::Heatmap) => {
-                        if !self.columns.is_empty() {
-                            let n = self.heatmap_cols.len().max(1);
-                            self.heatmap_x_col_idx = (self.heatmap_x_col_idx + 1) % n;
-                        }
-                    }
-                    // Unique Values: change selected column with Left/Right even when table focused
-                    KeyCode::Left if matches!(self.tab, DetailsTab::UniqueValues) => {
-                        if !self.columns.is_empty() {
-                            if self.selected_column_idx == 0 { self.selected_column_idx = self.columns.len().saturating_sub(1); } else { self.selected_column_idx -= 1; }
-                            self.recompute_unique_counts();
-                        }
-                    }
-                    KeyCode::Right if matches!(self.tab, DetailsTab::UniqueValues) => {
-                        if !self.columns.is_empty() {
-                            let n = self.columns.len().max(1);
-                            self.selected_column_idx = (self.selected_column_idx + 1) % n;
-                            self.recompute_unique_counts();
-                        }
-                    }
-                    KeyCode::Up if matches!(self.tab, DetailsTab::Heatmap) => {
-                        if !self.columns.is_empty() {
-                            if self.heatmap_y_col_idx == 0 { self.heatmap_y_col_idx = self.heatmap_cols.len().saturating_sub(1); } else { self.heatmap_y_col_idx -= 1; }
-                        }
-                    }
-                    KeyCode::Down if matches!(self.tab, DetailsTab::Heatmap) => {
-                        if !self.columns.is_empty() {
-                            let n = self.heatmap_cols.len().max(1);
-                            self.heatmap_y_col_idx = (self.heatmap_y_col_idx + 1) % n;
-                        }
-                    }
-                    KeyCode::PageUp if matches!(self.tab, DetailsTab::Heatmap) => {
-                        if !self.heatmap_cols.is_empty() {
-                            let step = std::cmp::max(1, self.heatmap_cols.len() / 5);
-                            self.heatmap_y_col_idx = self.heatmap_y_col_idx.saturating_sub(step);
-                        }
-                    }
-                    KeyCode::PageDown if matches!(self.tab, DetailsTab::Heatmap) => {
-                        if !self.heatmap_cols.is_empty() {
-                            let step = std::cmp::max(1, self.heatmap_cols.len() / 5);
-                            let n = self.heatmap_cols.len();
-                            self.heatmap_y_col_idx = (self.heatmap_y_col_idx.saturating_add(step)).min(n.saturating_sub(1));
-                        }
-                    }
-                    KeyCode::Home if matches!(self.tab, DetailsTab::Heatmap) => {
-                        if !self.heatmap_cols.is_empty() {
-                            self.heatmap_x_col_idx = 0;
-                            self.heatmap_y_col_idx = 0;
-                        }
-                    }
-                    KeyCode::End if matches!(self.tab, DetailsTab::Heatmap) => {
-                        if !self.heatmap_cols.is_empty() {
-                            let last = self.heatmap_cols.len().saturating_sub(1);
-                            self.heatmap_x_col_idx = last;
-                            self.heatmap_y_col_idx = last;
-                        }
-                    }
-                    KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
-					// Page down
-					let list_len = match self.tab { DetailsTab::UniqueValues => self.unique_counts.len(), DetailsTab::Columns => self.columns_info.len(), DetailsTab::Describe => self.describe_rows.len(), DetailsTab::Heatmap => 0 };
-                        if list_len == 0 { return None; }
-                        let page = max_rows.max(1);
-                        let new_selected = (self.selected_row + page).min(list_len.saturating_sub(1));
-                        self.selected_row = new_selected;
-                        // Ensure selection is visible
-                        let visible_end = self.scroll_offset + max_rows.saturating_sub(1);
-                        if self.selected_row > visible_end {
-                            self.scroll_offset = self.selected_row.saturating_sub(max_rows.saturating_sub(1));
-                        }
-                    }
-                    KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
-					// Page up
-					let list_len = match self.tab { DetailsTab::UniqueValues => self.unique_counts.len(), DetailsTab::Columns => self.columns_info.len(), DetailsTab::Describe => self.describe_rows.len(), DetailsTab::Heatmap => 0 };
-                        if list_len == 0 { return None; }
-                        let page = max_rows.max(1);
-                        let new_selected = self.selected_row.saturating_sub(page);
-                        self.selected_row = new_selected;
-                        if self.selected_row < self.scroll_offset {
-                            self.scroll_offset = self.selected_row;
-                        }
-                    }
-                    KeyCode::Tab => {
-                        if matches!(self.tab, DetailsTab::UniqueValues) {
-                            self.focus = FocusField::ColumnDropdown;
-                        } else {
-                            self.focus = FocusField::Table;
-                        }
-                    }
-                    KeyCode::Up => {
-                        if self.selected_row > 0 { self.selected_row -= 1; }
-                        if self.selected_row < self.scroll_offset { self.scroll_offset = self.selected_row; }
-                    }
-                    KeyCode::Down => {
-					let list_len = match self.tab { DetailsTab::UniqueValues => self.unique_counts.len(), DetailsTab::Columns => self.columns_info.len(), DetailsTab::Describe => self.describe_rows.len(), DetailsTab::Heatmap => 0 };
-                        let max_idx = list_len.saturating_sub(1);
-                        if self.selected_row < max_idx { self.selected_row += 1; }
-                        let visible_end = self.scroll_offset + max_rows.saturating_sub(1);
-                        if self.selected_row > visible_end { self.scroll_offset = self.selected_row.saturating_sub(max_rows.saturating_sub(1)); }
-                    }
-                    KeyCode::Left => {
-                        if matches!(self.tab, DetailsTab::Describe) {
-                            self.describe_col_offset = self.describe_col_offset.saturating_sub(1);
-                        }
-                    }
-                    KeyCode::Right => {
-                        if matches!(self.tab, DetailsTab::Describe) {
-                            // Max 5 (0..=5) since there are 6 stats columns
-                            if self.describe_col_offset < 5 { self.describe_col_offset += 1; }
-                        }
-                    }
-                    KeyCode::Home => { self.selected_row = 0; self.scroll_offset = 0; }
-                    KeyCode::End => {
-					let list_len = match self.tab { DetailsTab::UniqueValues => self.unique_counts.len(), DetailsTab::Columns => self.columns_info.len(), DetailsTab::Describe => self.describe_rows.len(), DetailsTab::Heatmap => 0 };
-                        if list_len > 0 {
-                            self.selected_row = list_len - 1;
-                            if self.selected_row >= max_rows { self.scroll_offset = self.selected_row.saturating_sub(max_rows.saturating_sub(1)); }
-                        }
-                    }
-                    KeyCode::Esc => return Some(Action::DialogClose),
-                    _ => {}
-                }
-            }
+        // Fallback for character input or other unhandled keys
+        if let KeyCode::Char(_c) = key.code {
+            // Handle character input if needed
         }
         None
     }
@@ -1329,7 +1403,10 @@ impl DataFrameDetailsDialog {
 
 impl Component for DataFrameDetailsDialog {
     fn register_action_handler(&mut self, _tx: tokio::sync::mpsc::UnboundedSender<Action>) -> Result<()> { Ok(()) }
-    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { Ok(()) }
+    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { 
+        self.config = _config; 
+        Ok(()) 
+    }
     fn init(&mut self, _area: ratatui::layout::Size) -> Result<()> { Ok(()) }
     fn handle_events(&mut self, _event: Option<crate::tui::Event>) -> Result<Option<Action>> { Ok(None) }
     fn handle_key_event(&mut self, _key: KeyEvent) -> Result<Option<Action>> { Ok(None) }

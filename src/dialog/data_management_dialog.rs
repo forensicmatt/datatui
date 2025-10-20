@@ -1,5 +1,4 @@
 //! DataManagementDialog: Dialog for managing all imported data sources and datasets
-
 use std::ffi::OsStr;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Table, Row, Cell, Paragraph, Wrap};
@@ -12,9 +11,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 use polars::prelude::*;
 use color_eyre::Result;
-use crossterm::event::{KeyEvent, MouseEvent, KeyCode};
+use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::Frame;
 use ratatui::layout::Size;
+use tracing::{debug, info, warn, error};
 use tokio::sync::mpsc::UnboundedSender;
 use crate::components::Component;
 use crate::data_import_types::DataImportConfig;
@@ -84,14 +84,70 @@ pub struct DataSource {
 }
 
 impl DataSource {
+    /// Derive a concise glob-like summary name from multiple file names.
+    /// Example: [flaws_cloudtrail00.json, flaws_cloudtrail01.json] -> flaws_cloudtrail0*.json
+    fn summarize_filenames(names: &[String]) -> Option<String> {
+        if names.is_empty() { return None; }
+        if names.len() == 1 { return Some(names[0].clone()); }
+
+        // Determine common extension if all share the same ext
+        let exts: Vec<Option<&str>> = names.iter().map(|n| n.rsplit_once('.').map(|(_, ext)| ext)).collect();
+        let common_ext: Option<&str> = if exts.iter().all(|e| *e == exts[0]) { exts[0] } else { None };
+
+        let stems: Vec<&str> = match common_ext {
+            Some(ext) => names.iter().map(|n| n.strip_suffix(&format!(".{ext}")).unwrap_or(n.as_str())).collect(),
+            None => names.iter().map(|n| n.as_str()).collect(),
+        };
+
+        // Longest common prefix
+        let mut prefix_len = 0usize;
+        if let Some(first) = stems.first() {
+            'outer: for i in 0..first.len() {
+                let c = first.as_bytes()[i];
+                for s in &stems[1..] {
+                    if i >= s.len() || s.as_bytes()[i] != c { break 'outer; }
+                }
+                prefix_len += 1;
+            }
+        }
+        // Longest common suffix
+        let mut suffix_len = 0usize;
+        if let Some(first) = stems.first() {
+            let fb = first.as_bytes();
+            'outer2: for i in 0..first.len() {
+                let c = fb[fb.len() - 1 - i];
+                for s in &stems[1..] {
+                    let sb = s.as_bytes();
+                    if i >= s.len() || sb[s.len() - 1 - i] != c { break 'outer2; }
+                }
+                suffix_len += 1;
+            }
+        }
+        // Prevent overlap
+        let min_len = stems.iter().map(|s| s.len()).min().unwrap_or(0);
+        if prefix_len + suffix_len > min_len { suffix_len = min_len.saturating_sub(prefix_len); }
+
+        let first = stems[0];
+        let prefix = &first[..prefix_len];
+        let suffix = if suffix_len > 0 { &first[first.len() - suffix_len..] } else { "" };
+
+        let core = if prefix_len == min_len { first.to_string() } else { format!("{}*{}", prefix, suffix) };
+        let with_ext = if let Some(ext) = common_ext { format!("{}.{}", core, ext) } else { core };
+        Some(with_ext)
+    }
+
     /// Create a new DataSource from a DataImportConfig
     pub fn from_import_config(id: usize, config: &DataImportConfig) -> Self {
         let (name, file_path, import_type, datasets) = match config {
             DataImportConfig::Text(text_config) => {
-                let name = text_config.file_path.file_name()
-                    .unwrap_or_else(|| OsStr::new("Unknown"))
-                    .to_string_lossy()
-                    .to_string();
+                let name = if !text_config.additional_paths.is_empty() {
+                    let mut all: Vec<String> = Vec::with_capacity(1 + text_config.additional_paths.len());
+                    if let Some(f) = text_config.file_path.file_name() { all.push(f.to_string_lossy().to_string()); }
+                    for p in &text_config.additional_paths { if let Some(f) = p.file_name() { all.push(f.to_string_lossy().to_string()); } }
+                    Self::summarize_filenames(&all).unwrap_or_else(|| text_config.file_path.file_name().unwrap_or_else(|| OsStr::new("Unknown")).to_string_lossy().to_string())
+                } else {
+                    text_config.file_path.file_name().unwrap_or_else(|| OsStr::new("Unknown")).to_string_lossy().to_string()
+                };
                 let datasets = vec![Dataset {
                     id: Uuid::new_v4().to_string(),
                     name: name.clone(),
@@ -120,12 +176,27 @@ impl DataSource {
                 (name, excel_config.file_path.to_string_lossy().to_string(), "Excel File".to_string(), datasets)
             }
             DataImportConfig::Sqlite(sqlite_config) => {
-                let name = sqlite_config.file_path.file_name()
+                let file_name = sqlite_config.file_path.file_name()
                     .unwrap_or_else(|| OsStr::new("Unknown"))
                     .to_string_lossy()
                     .to_string();
-                let datasets = if sqlite_config.options.import_all_tables {
-                    vec![Dataset {
+                
+                let (name, datasets) = if let Some(table_name) = &sqlite_config.table_name {
+                    // Specific table import - create a single dataset for this table
+                    let dataset_name = format!("{file_name} - {table_name}");
+                    let datasets = vec![Dataset {
+                        id: Uuid::new_v4().to_string(),
+                        name: table_name.clone(),
+                        alias: None,
+                        row_count: 0,
+                        column_count: 0,
+                        status: DatasetStatus::Pending,
+                        error_message: None,
+                    }];
+                    (dataset_name, datasets)
+                } else {
+                    // Legacy behavior - should not be used with the new add_data_source logic
+                    let datasets = vec![Dataset {
                         id: Uuid::new_v4().to_string(),
                         name: "All Tables".to_string(),
                         alias: None,
@@ -133,19 +204,11 @@ impl DataSource {
                         column_count: 0,
                         status: DatasetStatus::Pending,
                         error_message: None,
-                    }]
-                } else {
-                    sqlite_config.options.selected_tables.iter().map(|table| Dataset {
-                        id: Uuid::new_v4().to_string(),
-                        name: table.clone(),
-                        alias: None,
-                        row_count: 0,
-                        column_count: 0,
-                        status: DatasetStatus::Pending,
-                        error_message: None,
-                    }).collect()
+                    }];
+                    (file_name, datasets)
                 };
-                (name, sqlite_config.file_path.to_string_lossy().to_string(), "SQLite Database".to_string(), datasets)
+                
+                (name, sqlite_config.file_path.to_string_lossy().to_string(), "SQLite Table".to_string(), datasets)
             }
             DataImportConfig::Parquet(parquet_config) => {
                 let name = parquet_config.file_path.file_name()
@@ -164,10 +227,14 @@ impl DataSource {
                 (name, parquet_config.file_path.to_string_lossy().to_string(), "Parquet File".to_string(), datasets)
             }
             DataImportConfig::Json(json_config) => {
-                let name = json_config.file_path.file_name()
-                    .unwrap_or_else(|| OsStr::new("Unknown"))
-                    .to_string_lossy()
-                    .to_string();
+                let name = if !json_config.additional_paths.is_empty() {
+                    let mut all: Vec<String> = Vec::with_capacity(1 + json_config.additional_paths.len());
+                    if let Some(f) = json_config.file_path.file_name() { all.push(f.to_string_lossy().to_string()); }
+                    for p in &json_config.additional_paths { if let Some(f) = p.file_name() { all.push(f.to_string_lossy().to_string()); } }
+                    Self::summarize_filenames(&all).unwrap_or_else(|| json_config.file_path.file_name().unwrap_or_else(|| OsStr::new("Unknown")).to_string_lossy().to_string())
+                } else {
+                    json_config.file_path.file_name().unwrap_or_else(|| OsStr::new("Unknown")).to_string_lossy().to_string()
+                };
                 let datasets = vec![Dataset {
                     id: Uuid::new_v4().to_string(),
                     name: name.clone(),
@@ -228,19 +295,32 @@ impl DataSource {
         self.failed_datasets = self.datasets.iter().filter(|d| d.status == DatasetStatus::Failed).count();
     }
 
-    /// Load all datasets from this data source into DataFrames
+    /// Load datasets from this data source into DataFrames, skipping failed ones and
+    /// ignoring per-dataset load errors so the caller can proceed rendering available tabs.
     pub fn load_dataframes(&self) -> Result<HashMap<String, LoadedDataset>> {
         let mut result = HashMap::new();
 
         for dataset in &self.datasets {
-            // only attempt to load datasets marked Pending or with empty cache entry
-            let df_arc = self.load_dataset(dataset)?;
-            let loaded_dataset = LoadedDataset {
-                data_source: self.clone(),
-                dataset: dataset.clone(),
-                dataframe: df_arc,
-            };
-            result.insert(dataset.id.clone(), loaded_dataset);
+            // Skip datasets that are known to have failed
+            if dataset.status == DatasetStatus::Failed {
+                continue;
+            }
+
+            match self.load_dataset(dataset) {
+                Ok(df_arc) => {
+                    let loaded_dataset = LoadedDataset {
+                        data_source: self.clone(),
+                        dataset: dataset.clone(),
+                        dataframe: df_arc,
+                    };
+                    result.insert(dataset.id.clone(), loaded_dataset);
+                }
+                Err(e) => {
+                    // Do not propagate error; just skip this dataset so UI can still close/sync
+                    warn!("Skipping dataset '{}' due to load error: {}", dataset.name, e);
+                    continue;
+                }
+            }
         }
 
         Ok(result)
@@ -301,15 +381,99 @@ impl DataSource {
                     match reader.finish() {
                         Ok(lf) => match lf.collect() {
                             Ok(df_ok) => {
-                                let warning = if coerced.is_empty() {
-                                    None
-                                } else {
-                                    Some(format!(
-                                        "CSV dtype inference failed; coerced columns to Utf8: {}",
-                                        coerced.iter().cloned().collect::<Vec<_>>().join(", ")
-                                    ))
-                                };
-                                break (df_ok, warning);
+                                let mut df_accum = df_ok;
+                                // If merge and additional_paths present, append others
+                                if text_config.merge && !text_config.additional_paths.is_empty() {
+                                    // Helper: align and stack rows preserving column names; promote mixed types to Utf8
+                                    fn align_and_vstack(mut left: DataFrame, right: DataFrame) -> color_eyre::Result<DataFrame> {
+                                        use std::collections::HashMap;
+                                        use polars::prelude::*;
+                                        let left_names: Vec<String> = left.get_column_names().into_iter().map(|s| s.to_string()).collect();
+                                        let right_names: Vec<String> = right.get_column_names().into_iter().map(|s| s.to_string()).collect();
+                                        let mut all_names: Vec<String> = left_names.clone();
+                                        for n in &right_names { if !all_names.contains(n) { all_names.push(n.clone()); } }
+
+                                        let mut left_types: HashMap<String, DataType> = HashMap::new();
+                                        for n in &left_names { if let Ok(s) = left.column(n) { left_types.insert(n.clone(), s.dtype().clone()); } }
+                                        let mut right_types: HashMap<String, DataType> = HashMap::new();
+                                        for n in &right_names { if let Ok(s) = right.column(n) { right_types.insert(n.clone(), s.dtype().clone()); } }
+
+                                        let mut target: HashMap<String, DataType> = HashMap::new();
+                                        for n in &all_names {
+                                            match (left_types.get(n), right_types.get(n)) {
+                                                (Some(lt), Some(rt)) if lt == rt => { target.insert(n.clone(), lt.clone()); }
+                                                _ => { target.insert(n.clone(), DataType::String); }
+                                            }
+                                        }
+
+                                        // align left
+                                        let mut lcols: Vec<Column> = Vec::with_capacity(all_names.len());
+                                        for n in &all_names {
+                                            let t = target.get(n).unwrap();
+                                            if let Ok(s) = left.column(n) {
+                                                let sc = if s.dtype() == t { s.clone() } else { s.cast(t).map_err(|e| color_eyre::eyre::eyre!(format!("Cast error '{}' to {:?}: {}", n, t, e)))? };
+                                                lcols.push(sc.into_column());
+                                            } else {
+                                                let ser = Series::new(n.as_str().into(), vec![String::new(); left.height()]);
+                                                let sc = if &DataType::String == t { ser } else { ser.cast(t).unwrap_or(ser) };
+                                                lcols.push(sc.into_column());
+                                            }
+                                        }
+                                        let left_aligned = DataFrame::new(lcols).map_err(|e| color_eyre::eyre::eyre!(format!("Failed to build aligned left DF: {}", e)))?;
+
+                                        // align right
+                                        let mut rcols: Vec<Column> = Vec::with_capacity(all_names.len());
+                                        for n in &all_names {
+                                            let t = target.get(n).unwrap();
+                                            if let Ok(s) = right.column(n) {
+                                                let sc = if s.dtype() == t { s.clone() } else { s.cast(t).map_err(|e| color_eyre::eyre::eyre!(format!("Cast error '{}' to {:?}: {}", n, t, e)))? };
+                                                rcols.push(sc.into_column());
+                                            } else {
+                                                let ser = Series::new(n.as_str().into(), vec![String::new(); right.height()]);
+                                                let sc = if &DataType::String == t { ser } else { ser.cast(t).unwrap_or(ser) };
+                                                rcols.push(sc.into_column());
+                                            }
+                                        }
+                                        let right_aligned = DataFrame::new(rcols).map_err(|e| color_eyre::eyre::eyre!(format!("Failed to build aligned right DF: {}", e)))?;
+                                        left = left_aligned.vstack(&right_aligned).map_err(|e| color_eyre::eyre::eyre!(format!("Failed to concatenate CSV parts: {}", e)))?;
+                                        Ok(left)
+                                    }
+
+                                    for (idx_extra, p) in text_config.additional_paths.iter().enumerate() {
+                                        let mut rdr = LazyCsvReader::new(p)
+                                            .map_parse_options(|_opts| parse_options.clone())
+                                            .with_has_header(text_config.options.has_header)
+                                            .with_infer_schema_length(Some(100_000));
+
+                                        if !coerced.is_empty() {
+                                            let schema = Schema::from_iter(
+                                                coerced.iter().map(|c| {
+                                                    let col_name = c.as_str().into();
+                                                    let _dtype = DataType::String;
+                                                    Field::new(col_name, _dtype)
+                                                })
+                                            );
+                                            let schema_ref = std::sync::Arc::new(schema);
+                                            rdr = rdr.with_dtype_overwrite(Some(schema_ref));
+                                        }
+                                        let df_next = rdr.finish().and_then(|lf2| lf2.collect())
+                                            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to merge CSV part {} ({}): {}", idx_extra + 1, p.display(), e)))?;
+                                        // Align schemas and vstack
+                                        df_accum = align_and_vstack(df_accum, df_next)?;
+                                        // update sub-progress for gauge
+                                        // Note: this is coarse; we count each collected file as one step
+                                        // The Render handler interpolates busy_progress using current_sub_done/total
+                                        // Increment here so next Render reflects progress
+                                        // (Ignore errors; visualization best-effort)
+                                        // Safety clamp
+                                        // This update requires &mut self; we are in &self method, so skip direct update here.
+                                    }
+                                }
+                                let warning = if coerced.is_empty() { None } else { Some(format!(
+                                    "CSV dtype inference failed; coerced columns to Utf8: {}",
+                                    coerced.iter().cloned().collect::<Vec<_>>().join(", ")
+                                ))};
+                                break (df_accum, warning);
                             }
                             Err(e) => {
                                 tracing::error!("CSV dtype inference failed: {:?}", e);
@@ -422,8 +586,225 @@ impl DataSource {
                     (df_excel, None)
                 }
             }
-            DataImportConfig::Sqlite(_) => {
-                return Err(color_eyre::eyre::eyre!("SQLite import not yet supported"));
+            DataImportConfig::Sqlite(sqlite_config) => {
+                use rusqlite::Connection;
+                use polars::prelude::*;
+                use rusqlite::types::ValueRef;
+                
+                // Open SQLite database connection
+                let conn = Connection::open(&sqlite_config.file_path)
+                    .map_err(|e| color_eyre::eyre::eyre!("Failed to open SQLite database: {}", e))?;
+                
+                // Determine which table to import
+                let table_name = if let Some(specific_table) = &sqlite_config.table_name {
+                    // Import the specific table
+                    specific_table.clone()
+                } else {
+                    // Use the original logic for backward compatibility
+                    let tables_to_import = if sqlite_config.options.import_all_tables {
+                        // Get all user tables from the database
+                        let mut stmt = conn.prepare(
+                            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                        ).map_err(|e| color_eyre::eyre::eyre!("Failed to prepare SQL statement: {}", e))?;
+                        
+                        let table_rows = stmt.query_map([], |row| {
+                            row.get::<_, String>(0)
+                        }).map_err(|e| color_eyre::eyre::eyre!("Failed to execute query: {}", e))?;
+                        
+                        let mut tables = Vec::new();
+                        for table_result in table_rows {
+                            let table_name = table_result
+                                .map_err(|e| color_eyre::eyre::eyre!("Failed to read table name: {}", e))?;
+                            tables.push(table_name);
+                        }
+                        tables
+                    } else {
+                        sqlite_config.options.selected_tables.clone()
+                    };
+                    
+                    if tables_to_import.is_empty() {
+                        return Err(color_eyre::eyre::eyre!("No tables selected for import"));
+                    }
+                    
+                    // Import the first table as the primary DataFrame
+                    tables_to_import[0].clone()
+                };
+                
+                // Query all data from the table
+                let query = format!("SELECT * FROM [{}]", table_name.replace("'", "''"));
+                let mut stmt = conn.prepare(&query)
+                    .map_err(|e| color_eyre::eyre::eyre!("Failed to prepare query for table '{}': {}", table_name, e))?;
+                
+                // Get column information
+                let column_count = stmt.column_count();
+                let column_names: Vec<String> = (0..column_count)
+                    .map(|i| stmt.column_name(i).unwrap_or("unknown").to_string())
+                    .collect();
+                
+                // Fetch all rows as typed values, infer column dtypes, and build DataFrame without string-casting
+                #[derive(Clone, Debug)]
+                enum SqlValue {
+                    Null,
+                    Integer(i64),
+                    Real(f64),
+                    Text(String),
+                    Blob(Vec<u8>),
+                }
+
+                #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+                enum ColType {
+                    Unknown,
+                    Int64,
+                    Float64,
+                    Utf8,
+                }
+
+                let rows = stmt
+                    .query_map([], |row| {
+                        let mut values: Vec<SqlValue> = Vec::with_capacity(column_count);
+                        for i in 0..column_count {
+                            let v = match row.get_ref(i)? {
+                                ValueRef::Null => SqlValue::Null,
+                                ValueRef::Integer(x) => SqlValue::Integer(x),
+                                ValueRef::Real(f) => SqlValue::Real(f),
+                                ValueRef::Text(bytes) => {
+                                    let s = std::str::from_utf8(bytes).unwrap_or("").to_string();
+                                    SqlValue::Text(s)
+                                }
+                                ValueRef::Blob(b) => SqlValue::Blob(b.to_vec()),
+                            };
+                            values.push(v);
+                        }
+                        Ok(values)
+                    })
+                    .map_err(|e| color_eyre::eyre::eyre!("Failed to execute query: {}", e))?;
+
+                let mut data_rows: Vec<Vec<SqlValue>> = Vec::new();
+                for row_result in rows {
+                    let row = row_result
+                        .map_err(|e| color_eyre::eyre::eyre!("Failed to read row: {}", e))?;
+                    data_rows.push(row);
+                }
+
+                // Infer column types with simple promotion rules and boolean detection
+                let mut col_types: Vec<ColType> = vec![ColType::Unknown; column_count];
+                let mut bool_candidate: Vec<bool> = vec![true; column_count];
+                for row in &data_rows {
+                    for (i, val) in row.iter().enumerate() {
+                        match val {
+                            SqlValue::Null => {}
+                            SqlValue::Integer(x) => {
+                                match col_types[i] {
+                                    ColType::Unknown => col_types[i] = ColType::Int64,
+                                    ColType::Float64 | ColType::Utf8 | ColType::Int64 => {}
+                                }
+                                if *x != 0 && *x != 1 { bool_candidate[i] = false; }
+                            }
+                            SqlValue::Real(_) => {
+                                match col_types[i] {
+                                    ColType::Unknown | ColType::Int64 => col_types[i] = ColType::Float64,
+                                    ColType::Float64 | ColType::Utf8 => {}
+                                }
+                                bool_candidate[i] = false;
+                            }
+                            SqlValue::Text(_) => {
+                                col_types[i] = ColType::Utf8;
+                                bool_candidate[i] = false;
+                            }
+                            SqlValue::Blob(_) => {
+                                // Fallback to Utf8 for blobs to avoid losing other types; encode as debug string
+                                col_types[i] = ColType::Utf8;
+                                bool_candidate[i] = false;
+                            }
+                        }
+                    }
+                }
+
+                // Default unknown columns to Utf8 (all-null becomes Utf8 with None values)
+                for ct in &mut col_types { if *ct == ColType::Unknown { *ct = ColType::Utf8; } }
+
+                // Build columns by dtype, preserving native numeric/bool types
+                let mut columns = Vec::with_capacity(column_count as usize);
+                for (i, col_name) in column_names.iter().enumerate() {
+                    match col_types[i] {
+                        ColType::Int64 if bool_candidate[i] => {
+                            let data: Vec<Option<bool>> = data_rows
+                                .iter()
+                                .map(|row| match row[i] {
+                                    SqlValue::Null => None,
+                                    SqlValue::Integer(x) => Some(x != 0),
+                                    _ => None,
+                                })
+                                .collect();
+                            let series = Series::new(col_name.clone().into(), data);
+                            columns.push(series.into());
+                        }
+                        ColType::Int64 => {
+                            let data: Vec<Option<i64>> = data_rows
+                                .iter()
+                                .map(|row| match row[i] {
+                                    SqlValue::Null => None,
+                                    SqlValue::Integer(x) => Some(x),
+                                    _ => None,
+                                })
+                                .collect();
+                            let series = Series::new(col_name.clone().into(), data);
+                            columns.push(series.into());
+                        }
+                        ColType::Float64 => {
+                            let data: Vec<Option<f64>> = data_rows
+                                .iter()
+                                .map(|row| match row[i] {
+                                    SqlValue::Null => None,
+                                    SqlValue::Integer(x) => Some(x as f64),
+                                    SqlValue::Real(f) => Some(f),
+                                    _ => None,
+                                })
+                                .collect();
+                            let series = Series::new(col_name.clone().into(), data);
+                            columns.push(series.into());
+                        }
+                        ColType::Unknown => {
+                            // All-null or unresolved columns: treat as Utf8 with None
+                            let data: Vec<Option<String>> = data_rows
+                                .iter()
+                                .map(|row| match &row[i] {
+                                    SqlValue::Null => None,
+                                    SqlValue::Integer(x) => Some(x.to_string()),
+                                    SqlValue::Real(f) => Some(f.to_string()),
+                                    SqlValue::Text(s) => Some(s.clone()),
+                                    SqlValue::Blob(b) => Some(format!("{b:?}")),
+                                })
+                                .collect();
+                            let series = Series::new(col_name.clone().into(), data);
+                            columns.push(series.into());
+                        }
+                        ColType::Utf8 => {
+                            let data: Vec<Option<String>> = data_rows
+                                .iter()
+                                .map(|row| match &row[i] {
+                                    SqlValue::Null => None,
+                                    SqlValue::Integer(x) => Some(x.to_string()),
+                                    SqlValue::Real(f) => Some(f.to_string()),
+                                    SqlValue::Text(s) => Some(s.clone()),
+                                    SqlValue::Blob(b) => Some(format!("{b:?}")),
+                                })
+                                .collect();
+                            let series = Series::new(col_name.clone().into(), data);
+                            columns.push(series.into());
+                        }
+                    }
+                }
+                
+                let df_sqlite = DataFrame::new(columns)
+                    .map_err(|e| {
+                        error!("Failed to build DataFrame from SQLite table '{}': {}", table_name, e);
+                        color_eyre::eyre::eyre!(
+                            "Failed to build DataFrame from SQLite table '{}': {}", table_name, e
+                        )
+                })?;
+                
+                (df_sqlite, Some(table_name.clone()))
             }
             DataImportConfig::Parquet(parquet_config) => {
                 let df_pq = polars::prelude::ParquetReader::new(std::fs::File::open(&parquet_config.file_path)?)
@@ -439,47 +820,68 @@ impl DataSource {
                 use std::io::{BufRead, BufReader, Read};
                 use serde_json::Value as JsonValue;
 
-                let path = &json_config.file_path;
                 let mut objects: Vec<serde_json::Map<String, JsonValue>> = Vec::new();
-                if json_config.options.ndjson {
-                    let file = std::fs::File::open(path)
-                        .map_err(|e| color_eyre::eyre::eyre!("Failed to open NDJSON file: {e}"))?;
-                    let reader = BufReader::new(file);
-                    for line_res in reader.lines() {
-                        let line = line_res.map_err(|e| color_eyre::eyre::eyre!("Failed to read NDJSON line: {e}"))?;
-                        if line.trim().is_empty() { continue; }
-                        let val: JsonValue = serde_json::from_str(&line)
-                            .map_err(|e| color_eyre::eyre::eyre!("Failed to parse NDJSON line as JSON object: {e}"))?;
-                        if let JsonValue::Object(map) = val {
-                            objects.push(map);
-                        } else {
-                            return Err(color_eyre::eyre::eyre!("NDJSON line is not a JSON object"));
-                        }
-                    }
-                } else {
-                    let mut file = std::fs::File::open(path)
-                        .map_err(|e| color_eyre::eyre::eyre!("Failed to open JSON file: {e}"))?;
-                    let mut buf = String::new();
-                    file.read_to_string(&mut buf)
-                        .map_err(|e| color_eyre::eyre::eyre!("Failed to read JSON file: {e}"))?;
-                    let val: JsonValue = serde_json::from_str(&buf)
-                        .map_err(|e| color_eyre::eyre::eyre!("Failed to parse JSON: {e}"))?;
-                    match val {
-                        JsonValue::Array(arr) => {
-                            for v in arr {
-                                if let JsonValue::Object(map) = v {
-                                    objects.push(map);
-                                } else {
-                                    return Err(color_eyre::eyre::eyre!("JSON array elements must be objects"));
-                                }
+                let read_json_file = |path: &std::path::Path| -> color_eyre::Result<Vec<serde_json::Map<String, JsonValue>>> {
+                    let mut local_objects: Vec<serde_json::Map<String, JsonValue>> = Vec::new();
+                    if json_config.options.ndjson {
+                        let file = std::fs::File::open(path)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to open NDJSON file '{}': {}", path.display(), e)))?;
+                        let reader = BufReader::new(file);
+                        for line_res in reader.lines() {
+                            let line = line_res.map_err(|e| color_eyre::eyre::eyre!(format!("Failed to read NDJSON line from '{}': {}", path.display(), e)))?;
+                            if line.trim().is_empty() { continue; }
+                            let val: JsonValue = serde_json::from_str(&line)
+                                .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to parse NDJSON line as JSON object in '{}': {}", path.display(), e)))?;
+                            if let JsonValue::Object(map) = val { local_objects.push(map); } else {
+                                return Err(color_eyre::eyre::eyre!(format!("NDJSON line in '{}' is not a JSON object", path.display())));
                             }
                         }
-                        JsonValue::Object(map) => {
-                            objects.push(map);
+                    } else {
+                        let mut file = std::fs::File::open(path)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to open JSON file '{}': {}", path.display(), e)))?;
+                        let mut buf = String::new();
+                        file.read_to_string(&mut buf)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to read JSON file '{}': {}", path.display(), e)))?;
+                        let root_val: JsonValue = serde_json::from_str(&buf)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to parse JSON in '{}': {}", path.display(), e)))?;
+
+                        // Apply JMESPath records expression (default '@') to select records
+                        let records_expr = json_config.options.records_expr.clone();
+                        let rt = crate::jmes::new_runtime();
+                        let expr = rt.compile(&records_expr)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("JMESPath compile error for records_expr '{}' in '{}': {}", records_expr, path.display(), e)))?;
+                        let var = jmespath::Variable::try_from(root_val)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to convert JSON to JMES variable ({}): {}", path.display(), e)))?;
+                        let result = expr.search(&var)
+                            .map_err(|e| color_eyre::eyre::eyre!(format!("JMESPath search error for records_expr in '{}': {}", path.display(), e)))?;
+
+                        let selected_json: JsonValue = serde_json::from_str(&result.to_string())
+                            .unwrap_or(JsonValue::Null);
+
+                        match selected_json {
+                            JsonValue::Array(arr) => {
+                                for v in arr {
+                                    if let JsonValue::Object(map) = v { local_objects.push(map); } else {
+                                        return Err(color_eyre::eyre::eyre!("JMESPath result array must contain only objects"));
+                                    }
+                                }
+                            }
+                            JsonValue::Object(map) => { local_objects.push(map); }
+                            JsonValue::Null => { /* no records in this file */ }
+                            _ => { return Err(color_eyre::eyre::eyre!("JMESPath result must be an object or array of objects")); }
                         }
-                        _ => {
-                            return Err(color_eyre::eyre::eyre!("Top-level JSON must be object or array of objects"));
-                        }
+                    }
+                    Ok(local_objects)
+                };
+
+                // Primary file
+                objects.extend(read_json_file(&json_config.file_path)?);
+                // If merge is requested, append objects from additional_paths
+                if json_config.merge {
+                    for p in &json_config.additional_paths {
+                        let more = read_json_file(p)?;
+                        objects.extend(more);
+                        // See note above for CSV; sub-progress increment handled in Render via counts
                     }
                 }
 
@@ -550,6 +952,37 @@ pub struct DataManagementDialog {
     pub alias_edit_dialog: Option<AliasEditDialog>,
     #[serde(skip)]
     pub message_dialog: Option<MessageDialog>,
+    #[serde(skip)]
+    pub config: Config,
+    // Busy/progress overlay for queued imports
+    #[serde(skip)]
+    pub busy_active: bool,
+    #[serde(skip)]
+    pub busy_message: String,
+    #[serde(skip)]
+    pub busy_progress: f64,
+    #[serde(skip)]
+    pub queue_total: usize,
+    #[serde(skip)]
+    pub queue_done: usize,
+    #[serde(skip)]
+    pub pending_queue: Vec<(usize, String)>, // (source_id, dataset_name)
+    #[serde(skip)]
+    pub load_errors: Vec<String>,
+    #[serde(skip)]
+    pub current_loading: Option<String>,
+    // Per-dataset intra-progress when a dataset consists of multiple files (globs)
+    #[serde(skip)]
+    pub current_sub_total: usize,
+    #[serde(skip)]
+    pub current_sub_done: usize,
+    // JSON merge state for incremental per-file processing
+    #[serde(skip)]
+    pub current_json_pending: Vec<std::path::PathBuf>,
+    #[serde(skip)]
+    pub current_json_objects: Vec<serde_json::Map<String, serde_json::Value>>, 
+    #[serde(skip)]
+    pub current_json_options: Option<crate::dialog::json_options_dialog::JsonImportOptions>,
 }
 
 impl Default for DataManagementDialog {
@@ -557,6 +990,82 @@ impl Default for DataManagementDialog {
 }
 
 impl DataManagementDialog {
+    /// Read one JSON file into a vector of object maps using current options
+    fn read_json_file_incremental(path: &std::path::Path, opts: &crate::dialog::json_options_dialog::JsonImportOptions) -> color_eyre::Result<Vec<serde_json::Map<String, serde_json::Value>>> {
+        use std::io::{BufRead, BufReader, Read};
+        use serde_json::Value as JsonValue;
+        let mut out: Vec<serde_json::Map<String, JsonValue>> = Vec::new();
+        if opts.ndjson {
+            let file = std::fs::File::open(path)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to open NDJSON file '{}': {}", path.display(), e)))?;
+            let reader = BufReader::new(file);
+            for line_res in reader.lines() {
+                let line = line_res.map_err(|e| color_eyre::eyre::eyre!(format!("Failed to read NDJSON line from '{}': {}", path.display(), e)))?;
+                if line.trim().is_empty() { continue; }
+                let val: JsonValue = serde_json::from_str(&line)
+                    .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to parse NDJSON line as JSON object in '{}': {}", path.display(), e)))?;
+                if let JsonValue::Object(map) = val { out.push(map); } else {
+                    return Err(color_eyre::eyre::eyre!(format!("NDJSON line in '{}' is not a JSON object", path.display())));
+                }
+            }
+        } else {
+            let mut file = std::fs::File::open(path)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to open JSON file '{}': {}", path.display(), e)))?;
+            let mut buf = String::new();
+            file.read_to_string(&mut buf)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to read JSON file '{}': {}", path.display(), e)))?;
+            let root_val: JsonValue = serde_json::from_str(&buf)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to parse JSON in '{}': {}", path.display(), e)))?;
+
+            let rt = crate::jmes::new_runtime();
+            let expr = rt.compile(&opts.records_expr)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("JMESPath compile error for records_expr '{}' in '{}': {}", opts.records_expr, path.display(), e)))?;
+            let var = jmespath::Variable::try_from(root_val)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to convert JSON to JMES variable ({}): {}", path.display(), e)))?;
+            let result = expr.search(&var)
+                .map_err(|e| color_eyre::eyre::eyre!(format!("JMESPath search error for records_expr in '{}': {}", path.display(), e)))?;
+            let selected_json: JsonValue = serde_json::from_str(&result.to_string()).unwrap_or(JsonValue::Null);
+            match selected_json {
+                JsonValue::Array(arr) => {
+                    for v in arr { if let JsonValue::Object(map) = v { out.push(map); } }
+                }
+                JsonValue::Object(map) => { out.push(map); }
+                JsonValue::Null => {}
+                _ => { return Err(color_eyre::eyre::eyre!("JMESPath result must be an object or array of objects")); }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Build DF from accumulated JSON object maps (string-typed columns)
+    fn build_df_from_json_maps_local(
+        objs: &[serde_json::Map<String, serde_json::Value>]
+    ) -> color_eyre::Result<polars::prelude::DataFrame> {
+        use std::collections::BTreeSet;
+        let mut keys: BTreeSet<String> = BTreeSet::new();
+        for o in objs { for k in o.keys() { keys.insert(k.clone()); } }
+        let mut columns: Vec<polars::prelude::Column> = Vec::with_capacity(keys.len());
+        for key in keys.iter() {
+            let mut col_vals: Vec<String> = Vec::with_capacity(objs.len());
+            for obj in objs {
+                let v = obj.get(key).cloned().unwrap_or(serde_json::Value::Null);
+                let s = match v {
+                    serde_json::Value::Null => String::new(),
+                    serde_json::Value::Bool(b) => b.to_string(),
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                };
+                col_vals.push(s);
+            }
+            let s = polars::prelude::Series::new(key.as_str().into(), col_vals);
+            columns.push(s.into());
+        }
+        let df = polars::prelude::DataFrame::new(columns)
+            .map_err(|e| color_eyre::eyre::eyre!(format!("Failed to build DataFrame from JSON: {}", e)))?;
+        Ok(df)
+    }
+
     /// Create a new DataManagementDialog
     pub fn new() -> Self {
         Self {
@@ -567,14 +1076,104 @@ impl DataManagementDialog {
             data_import_dialog: None,
             alias_edit_dialog: None,
             message_dialog: None,
+            config: Config::default(),
+            busy_active: false,
+            busy_message: String::new(),
+            busy_progress: 0.0,
+            queue_total: 0,
+            queue_done: 0,
+            pending_queue: Vec::new(),
+            load_errors: Vec::new(),
+            current_loading: None,
+            current_sub_total: 0,
+            current_sub_done: 0,
+            current_json_pending: Vec::new(),
+            current_json_objects: Vec::new(),
+            current_json_options: None,
         }
+    }
+
+    /// Build instructions string from configured keybindings (Global + DataManagement)
+    fn build_instructions_from_config(&self) -> String {
+        self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Escape),
+            (crate::config::Mode::DataManagement, crate::action::Action::EditSelectedAlias),
+            (crate::config::Mode::DataManagement, crate::action::Action::DeleteSelectedSource),
+            (crate::config::Mode::DataManagement, crate::action::Action::OpenDataImportDialog),
+            (crate::config::Mode::DataManagement, crate::action::Action::LoadAllPendingDatasets),
+        ])
     }
 
     /// Add a new data source from a DataImportConfig
     pub fn add_data_source(&mut self, config: DataImportConfig) {
+        // Special handling for SQLite to create individual data sources for each table
+        if let DataImportConfig::Sqlite(sqlite_config) = &config {
+            if sqlite_config.options.import_all_tables {
+                // Create a separate DataSource for each table
+                if let Ok(table_names) = DataManagementDialog::get_sqlite_table_names(&sqlite_config.file_path) {
+                    for table_name in table_names {
+                        let table_config = crate::data_import_types::DataImportConfig::sqlite_table(
+                            sqlite_config.file_path.clone(),
+                            sqlite_config.options.clone(),
+                            table_name
+                        );
+                        let id = self.data_sources.len();
+                        let data_source: DataSource = DataSource::from_import_config(id, &table_config);
+                        self.data_sources.push(data_source);
+                    }
+                    return;
+                } else {
+                    // Fallback to original behavior if we can't read tables
+                    let id = self.data_sources.len();
+                    let data_source: DataSource = DataSource::from_import_config(id, &config);
+                    self.data_sources.push(data_source);
+                    return;
+                }
+            } else if !sqlite_config.options.selected_tables.is_empty() {
+                // Create a separate DataSource for each selected table
+                for table_name in &sqlite_config.options.selected_tables {
+                    let table_config = crate::data_import_types::DataImportConfig::sqlite_table(
+                        sqlite_config.file_path.clone(),
+                        sqlite_config.options.clone(),
+                        table_name.clone()
+                    );
+                    let id = self.data_sources.len();
+                    let data_source: DataSource = DataSource::from_import_config(id, &table_config);
+                    self.data_sources.push(data_source);
+                }
+                return;
+            }
+        }
+        
+        // Default behavior for all other import types
         let id = self.data_sources.len();
         let data_source: DataSource = DataSource::from_import_config(id, &config);
         self.data_sources.push(data_source);
+    }
+
+    /// Get table names from a SQLite database
+    fn get_sqlite_table_names(file_path: &std::path::PathBuf) -> Result<Vec<String>> {
+        use rusqlite::Connection;
+        
+        let conn = Connection::open(file_path)
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to open SQLite database: {}", e))?;
+        
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).map_err(|e| color_eyre::eyre::eyre!("Failed to prepare SQL statement: {}", e))?;
+        
+        let table_rows = stmt.query_map([], |row| {
+            row.get::<_, String>(0)
+        }).map_err(|e| color_eyre::eyre::eyre!("Failed to execute query: {}", e))?;
+        
+        let mut tables = Vec::new();
+        for table_result in table_rows {
+            let table_name = table_result
+                .map_err(|e| color_eyre::eyre::eyre!("Failed to read table name: {}", e))?;
+            tables.push(table_name);
+        }
+        
+        Ok(tables)
     }
 
     /// Extend or merge data sources with the provided list
@@ -726,13 +1325,197 @@ impl DataManagementDialog {
                 }
             }
         }
-        
-        // After processing, if any errors occurred, display them to the user
-        if !load_errors.is_empty() {
-            let message = load_errors.join("\n");
-            self.message_dialog = Some(MessageDialog::with_title(message, "Dataset Load Errors"));
+
+        Ok(())
+    }
+
+    /// Begin queued import of all pending datasets, showing a busy overlay and
+    /// processing one dataset per Render update.
+    pub fn begin_queued_import(&mut self) -> Result<()> {
+        // Build queue of all Pending datasets
+        self.pending_queue.clear();
+        self.load_errors.clear();
+        for data_source in &self.data_sources {
+            for dataset in &data_source.datasets {
+                if dataset.status == DatasetStatus::Pending {
+                    self.pending_queue.push((data_source.id, dataset.name.clone()));
+                }
+            }
         }
-        
+        self.queue_total = self.pending_queue.len();
+        self.queue_done = 0;
+        self.current_loading = None;
+        if self.queue_total == 0 {
+            return Ok(());
+        }
+        self.busy_active = true;
+        self.busy_message = format!("Importing datasets (0/{})", self.queue_total);
+        self.busy_progress = 0.0;
+        self.current_sub_total = 0;
+        self.current_sub_done = 0;
+        Ok(())
+    }
+
+    /// Process the next dataset in the queue. Should be called on Render after UI draw
+    /// so the overlay is visible while the load happens.
+    pub fn process_next_in_queue(&mut self) -> Result<()> {
+        if !self.busy_active { return Ok(()); }
+        if let Some((source_id, dataset_name)) = self.pending_queue.first().cloned() {
+            // Phase 1: show message for the current item, compute sub counts, then return to allow a frame to render it
+            if self.current_loading.as_deref() != Some(&dataset_name) {
+                self.current_loading = Some(dataset_name.clone());
+                self.current_sub_total = 1; self.current_sub_done = 0;
+                if let Some(ds_ref) = self.data_sources.iter().find(|s| s.id == source_id) {
+                    match &ds_ref.data_import_config {
+                        DataImportConfig::Text(cfg) => {
+                            self.current_sub_total = 1 + cfg.additional_paths.len();
+                        }
+                        DataImportConfig::Json(cfg) => {
+                            self.current_sub_total = 1 + if cfg.merge { cfg.additional_paths.len() } else { 0 };
+                        }
+                        _ => {}
+                    }
+                }
+                let display_done = self.queue_done.min(self.queue_total);
+                if self.current_sub_total > 1 {
+                    self.busy_message = format!("Loading '{}' file {}/{} (dataset {}/{})",
+                        dataset_name, self.current_sub_done + 1, self.current_sub_total, display_done + 1, self.queue_total);
+                } else {
+                    self.busy_message = format!("Loading '{}' ({}/{})", dataset_name, display_done + 1, self.queue_total);
+                }
+                return Ok(());
+            }
+            // Mark Processing and clear previous error
+            self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Processing);
+            self.update_dataset_error(source_id, &dataset_name, None);
+
+            // Find source and dataset snapshot
+            if let Some(ds_ref) = self.data_sources.iter().find(|s| s.id == source_id) {
+                let dataset_cloned = ds_ref.datasets.iter().find(|d| d.name == dataset_name).cloned();
+                if let Some(dataset) = dataset_cloned {
+                    // If this dataset maps to a multi-file JSON source, initialize incremental processing
+                    match &ds_ref.data_import_config {
+                        DataImportConfig::Json(cfg) if cfg.merge && !cfg.additional_paths.is_empty() => {
+                            // Initialize pending list only once per dataset
+                            if self.current_json_pending.is_empty() && self.current_sub_done == 0 {
+                                self.current_sub_total = 1 + cfg.additional_paths.len();
+                                self.current_json_pending.clear();
+                                self.current_json_pending.push(cfg.file_path.clone());
+                                self.current_json_pending.extend(cfg.additional_paths.clone());
+                                self.current_json_options = Some(cfg.options.clone());
+                                self.current_json_objects.clear();
+                            }
+
+                            // Process one JSON file per Render tick
+                            if let Some(path) = self.current_json_pending.first().cloned() {
+                                let jsons = Self::read_json_file_incremental(&path, self.current_json_options.as_ref().unwrap())?;
+                                self.current_json_objects.extend(jsons);
+                                let _ = self.current_json_pending.remove(0);
+                                self.current_sub_done = self.current_sub_done.saturating_add(1);
+                                // Update message to reflect file sub-progress
+                                let display_done = self.queue_done.min(self.queue_total);
+                                self.busy_message = format!("Loading '{}' file {}/{} (dataset {}/{})",
+                                    dataset_name, self.current_sub_done.min(self.current_sub_total), self.current_sub_total,
+                                    display_done + 1, self.queue_total);
+                                // Re-queue current dataset to continue on next Render
+                                return Ok(());
+                            }
+
+                            // Fallback: if no pending, finalize below
+                        }
+                        DataImportConfig::Text(cfg) => {
+                            self.current_sub_total = 1 + cfg.additional_paths.len();
+                        }
+                        _ => {
+                            self.current_sub_total = 1;
+                        }
+                    }
+
+                    // If we staged JSON incremental, keep accumulating until all files are processed
+                    if let DataImportConfig::Json(cfg) = &ds_ref.data_import_config {
+                        if cfg.merge && !cfg.additional_paths.is_empty() {
+                            // If still have pending files, bail out now; next Render will continue
+                            if !self.current_json_pending.is_empty() {
+                                return Ok(());
+                            }
+                            // Finalize DataFrame from accumulated objects
+                            let df = Self::build_df_from_json_maps_local(&self.current_json_objects)?;
+                            self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Imported);
+                            self.update_dataset_data(source_id, &dataset_name, df.height(), df.width());
+                            // Clear staged state
+                            self.current_json_objects.clear();
+                            self.current_json_options = None;
+                            self.current_sub_total = 0; self.current_sub_done = 0;
+                        } else {
+                            match ds_ref.load_dataset(&dataset) {
+                                Ok(dataframe) => {
+                                    self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Imported);
+                                    let row_count = dataframe.height();
+                                    let column_count = dataframe.width();
+                                    self.update_dataset_data(source_id, &dataset_name, row_count, column_count);
+                                }
+                                Err(e) => {
+                                    self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Failed);
+                                    self.update_dataset_error(source_id, &dataset_name, Some(e.to_string()));
+                                    if let Some(ds_ref_name) = self.data_sources.iter().find(|s| s.id == source_id).map(|s| s.name.clone()) {
+                                        self.load_errors.push(format!("Source '{ds_ref_name}', Dataset '{dataset_name}': {e}"));
+                                    } else {
+                                        self.load_errors.push(format!("Dataset '{dataset_name}': {e}"));
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        match ds_ref.load_dataset(&dataset) {
+                            Ok(dataframe) => {
+                                self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Imported);
+                                let row_count = dataframe.height();
+                                let column_count = dataframe.width();
+                                self.update_dataset_data(source_id, &dataset_name, row_count, column_count);
+                            }
+                            Err(e) => {
+                                self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Failed);
+                                self.update_dataset_error(source_id, &dataset_name, Some(e.to_string()));
+                                if let Some(ds_ref_name) = self.data_sources.iter().find(|s| s.id == source_id).map(|s| s.name.clone()) {
+                                    self.load_errors.push(format!("Source '{ds_ref_name}', Dataset '{dataset_name}': {e}"));
+                                } else {
+                                    self.load_errors.push(format!("Dataset '{dataset_name}': {e}"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Dequeue and update counters/message
+            let _ = self.pending_queue.remove(0);
+            self.queue_done = self.queue_done.saturating_add(1);
+            self.current_loading = None;
+            self.current_sub_total = 0;
+            self.current_sub_done = 0;
+            if self.queue_done < self.queue_total {
+                // Peek next item to show name if available
+                if let Some((_, next_name)) = self.pending_queue.first() {
+                    self.busy_message = format!("Loading '{}' ({}/{})", next_name, self.queue_done + 1, self.queue_total);
+                } else {
+                    self.busy_message = format!("Importing datasets ({}/{})", self.queue_done, self.queue_total);
+                }
+            } else {
+                // Completed
+                self.busy_active = false;
+                self.busy_message.clear();
+                self.busy_progress = 0.0;
+                if !self.load_errors.is_empty() {
+                    let message = self.load_errors.join("\n");
+                    error!("Dataset Load Errors: {}", message);
+
+                    let mut msg = MessageDialog::with_title(message, "Dataset Load Errors");
+                    msg.register_config_handler(self.config.clone())?;
+                    self.message_dialog = Some(msg);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -741,8 +1524,8 @@ impl DataManagementDialog {
         // Clear the background for the popup
         Clear.render(area, buf);
 
-        let instructions = "Up/Down: Navigate  Ctrl+e: Edit Alias  Ctrl+d: Delete Source  Ctrl+a: Add Data Source  Ctrl+i: Toggle Instructions / View Error  Esc: Close";
-        let layout = split_dialog_area(area, self.show_instructions, Some(instructions));
+        let instructions = if self.show_instructions { self.build_instructions_from_config() } else { String::new() };
+        let layout = split_dialog_area(area, self.show_instructions, if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
         
@@ -765,7 +1548,7 @@ impl DataManagementDialog {
                 area.height.saturating_sub(margin_y * 2),
             );
             self.render_datasets_table(inner_area, buf);
-            self.render_instructions(instructions, instructions_area, buf);
+            self.render_instructions(&instructions, instructions_area, buf);
             import_dialog.render(import_dialog_area, buf);
         } else if let Some(ref alias_dialog) = self.alias_edit_dialog {
             // Create a smaller centered dialog area for alias editing
@@ -778,16 +1561,52 @@ impl DataManagementDialog {
                 dialog_height,
             );
             self.render_datasets_table(inner_area, buf);
-            self.render_instructions(instructions, instructions_area, buf);
+            self.render_instructions(&instructions, instructions_area, buf);
             alias_dialog.render(alias_dialog_area, buf);
         } else {
             self.render_datasets_table(inner_area, buf);
-            self.render_instructions(instructions, instructions_area, buf);
+            self.render_instructions(&instructions, instructions_area, buf);
         }
 
         // Overlay message dialog if active
         if let Some(ref msg) = self.message_dialog {
-            msg.render(area, buf);
+            // Calculate a centered area for the message dialog, sized to fit the message content.
+            // We'll use a similar approach as MessageDialog::modal_area, but do it here for overlay.
+            let max_width = area.width.clamp(30, 60);
+            let wrap_width = max_width.saturating_sub(4) as usize;
+            let wrapped_lines = textwrap::wrap(&msg.message, wrap_width);
+            let content_lines = wrapped_lines.len() as u16;
+            let height = content_lines
+                .saturating_add(4) // borders + padding
+                .clamp(5, area.height.saturating_sub(4));
+            let width = max_width;
+            let x = area.x + (area.width.saturating_sub(width)) / 2;
+            let y = area.y + (area.height.saturating_sub(height)) / 2;
+            let msg_area = Rect { x, y, width, height };
+            Clear.render(msg_area, buf);
+            msg.render(msg_area, buf);
+        }
+
+        // Render busy/progress overlay if active (always on top)
+        if self.busy_active {
+            use ratatui::widgets::Gauge;
+            let popup_area = Rect::new(
+                area.x + area.width / 6,
+                area.y + area.height / 2 - 2,
+                area.width - area.width / 3,
+                5,
+            );
+            Clear.render(popup_area, buf);
+            let ratio = if self.queue_total > 0 {
+                (self.queue_done as f64 / self.queue_total as f64).clamp(0.0, 1.0)
+            } else {
+                self.busy_progress.clamp(0.0, 1.0)
+            };
+            let gauge = Gauge::default()
+                .block(Block::default().title(self.busy_message.clone()).borders(Borders::ALL))
+                .ratio(ratio)
+                .label("Importing...");
+            gauge.render(popup_area, buf);
         }
     }
 
@@ -876,6 +1695,11 @@ impl Component for DataManagementDialog {
     }
 
     fn register_config_handler(&mut self, _config: Config) -> Result<()> {
+        self.config = _config;
+        // Propagate to child dialogs if they exist
+        if let Some(ref mut d) = self.data_import_dialog { let _ = d.register_config_handler(self.config.clone()); }
+        if let Some(ref mut d) = self.alias_edit_dialog { let _ = d.register_config_handler(self.config.clone()); }
+        if let Some(ref mut d) = self.message_dialog { let _ = d.register_config_handler(self.config.clone()); }
         Ok(())
     }
 
@@ -892,141 +1716,140 @@ impl Component for DataManagementDialog {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        let result = if key.kind == crossterm::event::KeyEventKind::Press {
-            // Handle message dialog if it's open
-            if let Some(ref mut msg) = self.message_dialog {
-                if let Some(action) = msg.handle_key_event(key)? {
-                    match action {
-                        Action::DialogClose => {
-                            self.message_dialog = None;
-                            return Ok(None);
-                        }
-                        _ => return Ok(Some(action)),
-                    }
-                }
-                return Ok(None);
-            }
-            // Handle alias edit dialog if it's open
-            if let Some(ref mut alias_dialog) = self.alias_edit_dialog {
-                if let Some(action) = alias_dialog.handle_key_event(key)? {
-                    match action {
-                        Action::DialogClose => {
-                            self.alias_edit_dialog = None;
-                            return Ok(None);
-                        }
-                        Action::EditDatasetAlias { source_id, dataset_id, alias } => {
-                            // Update the dataset alias
-                            self.update_dataset_alias(source_id, &dataset_id, alias);
-                            self.alias_edit_dialog = None;
-                            return Ok(None);
-                        }
-                        _ => {
-                            return Ok(Some(action));
-                        }
-                    }
-                }
-                return Ok(None);
-            }
+        debug!("DataManagementDialog handle_key_event: {:?}", key);
 
-            // Handle data import dialog if it's open
-            if let Some(ref mut import_dialog) = self.data_import_dialog {
-                if let Some(action) = import_dialog.handle_key_event(key)? {
-                    match action {
-                        Action::CloseDataImportDialog => {
-                            self.data_import_dialog = None;
-                            return Ok(None);
-                        }
-                        Action::AddDataImportConfig { config } => {
-                            // Add the data source from the import config
-                            self.add_data_source(config);
-                            self.data_import_dialog = None;
-                            // Auto-load all pending datasets after adding data source
-                            if let Err(e) = self.load_all_pending_datasets() { return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {e}")))); }
-                            return Ok(None);
-                        }
-                        Action::ConfirmDataImport => {
-                            // Handle the confirmation action and auto-load data
-                            self.data_import_dialog = None;
-                            // Auto-load all pending datasets after import
-                            if let Err(e) = self.load_all_pending_datasets() { return Ok(Some(Action::Error(format!("Failed to auto-load datasets: {e}")))); }
-                            return Ok(Some(action));
-                        }
-                        _ => {
-                            return Ok(Some(action));
-                        }
+        // Handle message dialog if it's open
+        if let Some(ref mut msg) = self.message_dialog {
+            if let Some(action) = msg.handle_key_event(key)? {
+                match action {
+                    Action::DialogClose => {
+                        self.message_dialog = None;
+                        return Ok(None);
+                    }
+                    _ => return Ok(Some(action)),
+                }
+            }
+            return Ok(None);
+        }
+
+        // Handle alias edit dialog if it's open
+        if let Some(ref mut alias_dialog) = self.alias_edit_dialog {
+            if let Some(action) = alias_dialog.handle_key_event(key)? {
+                match action {
+                    Action::DialogClose => {
+                        self.alias_edit_dialog = None;
+                        return Ok(None);
+                    }
+                    Action::EditDatasetAlias { source_id, dataset_id, alias } => {
+                        // Update the dataset alias
+                        self.update_dataset_alias(source_id, &dataset_id, alias);
+                        self.alias_edit_dialog = None;
+                        return Ok(None);
+                    }
+                    _ => {
+                        return Ok(Some(action));
                     }
                 }
-                return Ok(None);
             }
+            return Ok(None);
+        }
 
-            // Handle main dialog events when data import dialog is not open
-            match key.code {
-                KeyCode::Up => {
+        // Handle data import dialog if it's open
+        if let Some(ref mut import_dialog) = self.data_import_dialog {
+            if let Some(action) = import_dialog.handle_key_event(key)? {
+                match action {
+                    Action::CloseDataImportDialog => {
+                        self.data_import_dialog = None;
+                        return Ok(None);
+                    }
+                    Action::AddDataImportConfig { config } => {
+                        // Add the data source from the import config
+                        self.add_data_source(config);
+                        self.data_import_dialog = None;
+                    // Begin queued import; progress advances on Render updates
+                    let _ = self.begin_queued_import();
+                    return Ok(None);
+                    }
+                    Action::ConfirmDataImport => {
+                        // Handle the confirmation action and auto-load data
+                        self.data_import_dialog = None;
+                    // Begin queued import; progress advances on Render updates
+                    let _ = self.begin_queued_import();
+                    return Ok(None);
+                    }
+                    _ => {
+                        return Ok(Some(action));
+                    }
+                }
+            }
+            return Ok(None);
+        }
+        
+        if let Some(nav_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            debug!("DataManagementDialog action_for_key<Global>: {:?}", nav_action);
+            match nav_action {
+                Action::Escape => {
+                    return Ok(Some(Action::CloseDataManagementDialog));
+                }
+                Action::Up => {
                     if self.selected_dataset_index > 0 {
                         self.selected_dataset_index = self.selected_dataset_index.saturating_sub(1);
                     }
-                    None
+                    return Ok(None);
                 }
-                KeyCode::Down => {
+                Action::Down => {
                     let total_datasets = self.get_all_datasets().len();
                     if self.selected_dataset_index < total_datasets.saturating_sub(1) {
                         self.selected_dataset_index = self.selected_dataset_index.saturating_add(1);
                     }
-                    None
-                }
-                KeyCode::Esc => {
-                    Some(Action::CloseDataManagementDialog)
-                }
-                KeyCode::Char('d') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Delete selected dataset's source
-                    if let Some((source_id, _source, _dataset)) = self.selected_dataset() {
-                        self.remove_data_source(source_id);
-                        Some(Action::RemoveDataSource { source_id })
-                    } else {
-                        None
-                    }
-                }
-                KeyCode::Char('a') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Open data import dialog
-                    self.data_import_dialog = Some(DataImportDialog::new());
                     return Ok(None);
                 }
-                KeyCode::Char('l') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Load all pending datasets
+                _ => {
+                    info!("DataManagementDialog unhandled Global action: {:?} for key: {:?}", nav_action, key);
+                }
+            }
+        }
+
+        if let Some(dm_action) = self.config.action_for_key(crate::config::Mode::DataManagement, key) {
+            debug!("DataManagementDialog action_for_key<DataManagement>: {:?}", dm_action);
+            match dm_action {
+                Action::DeleteSelectedSource => {
+                    if let Some((source_id, _source, _dataset)) = self.selected_dataset() {
+                        self.remove_data_source(source_id);
+                        return Ok(Some(Action::RemoveDataSource { source_id }));
+                    }
+                    return Ok(None);
+                }
+                Action::OpenDataImportDialog => {
+                    let mut _dialog = DataImportDialog::new();
+                    _dialog.register_config_handler(self.config.clone())?;
+                    self.data_import_dialog = Some(_dialog);
+                    return Ok(None);
+                }
+                Action::LoadAllPendingDatasets => {
                     self.load_all_pending_datasets()?;
                     return Ok(None);
                 }
-                KeyCode::Char('e') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // Edit alias for selected dataset
+                Action::EditSelectedAlias => {
                     if let Some((source_id, _source, dataset)) = self.selected_dataset() {
-                        self.alias_edit_dialog = Some(AliasEditDialog::new(
+                        let mut _dialog = AliasEditDialog::new(
                             source_id,
                             dataset.id.clone(),
                             dataset.name.clone(),
                             dataset.alias.clone(),
-                        ));
+                        );
+                        _dialog.register_config_handler(self.config.clone())?;
+                        self.alias_edit_dialog = Some(_dialog);
                     }
                     return Ok(None);
                 }
-                KeyCode::Char('i') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    // If selected dataset is Failed, show its error message in a MessageDialog
-                    if let Some((_source_id, _source, dataset)) = self.selected_dataset()
-                        && dataset.status == DatasetStatus::Failed
-                    {
-                        let msg = dataset.error_message.clone().unwrap_or_else(|| "No error message available".to_string());
-                        self.message_dialog = Some(MessageDialog::with_title(msg, format!("{}: Failed", dataset.name)));
-                        return Ok(None);
-                    }
-                    // Otherwise, toggle instructions per global key binding
-                    self.show_instructions = !self.show_instructions;
-                    return Ok(None);
+                _ => {
+                    info!("DataManagementDialog unhandled DataManagement action: {:?} for key: {:?}", dm_action, key);
                 }
-                _ => None,
             }
-        } else {
-            None
-        };
-        Ok(result)
+        }
+
+        Ok(None)
     }
 
     fn handle_mouse_event(&mut self, _mouse: MouseEvent) -> Result<Option<Action>> {
@@ -1034,7 +1857,63 @@ impl Component for DataManagementDialog {
     }
 
     fn update(&mut self, _action: Action) -> Result<Option<Action>> {
-        Ok(None)
+        match _action {
+            Action::Tick => {
+                if self.busy_active {
+                    self.busy_progress += 0.02;
+                    if self.busy_progress >= 1.0 { self.busy_progress = 0.0; }
+                }
+                Ok(None)
+            }
+            Action::Render => {
+                if self.busy_active {
+                    // Process the next item after the overlay has been drawn
+                    self.process_next_in_queue()?;
+                    // Advance sub-progress smoothly while processing multi-file datasets
+                    if self.current_sub_total > 1 {
+                        // We approximate sub_done by scanning currently loading source config
+                        if let Some(current) = self.current_loading.clone() {
+                            if let Some((_, src, _)) = self.get_all_datasets().into_iter().find(|(_, _s, d)| d.name == current) {
+                                match &src.data_import_config {
+                                    DataImportConfig::Text(cfg) => {
+                                        self.current_sub_total = 1 + cfg.additional_paths.len();
+                                    }
+                                    DataImportConfig::Json(cfg) => {
+                                        self.current_sub_total = 1 + if cfg.merge { cfg.additional_paths.len() } else { 0 };
+                                    }
+                                    _ => { self.current_sub_total = 1; }
+                                }
+                            }
+                        }
+                        let base = self.queue_done as f64 / (self.queue_total.max(1) as f64);
+                        // Heuristic: bump sub_done proportionally to elapsed progress animation
+                        // Ensures the bar moves within the current dataset window
+                        let sub_ratio = ((self.busy_progress - base) / (1.0 / (self.queue_total.max(1) as f64))).clamp(0.0, 1.0);
+                        let next_base = (self.queue_done.saturating_add(1)) as f64 / (self.queue_total.max(1) as f64);
+                        // Interpolate between current dataset window [base, next_base)
+                        self.busy_progress = (base + (next_base - base) * sub_ratio).clamp(0.0, 1.0);
+                    }
+                }
+                Ok(None)
+            }
+            Action::StartBlockingImport => {
+                // Run a blocking import loop that updates the gauge after each dataset
+                while self.busy_active {
+                    // Draw updated UI first
+                    // Signal outer loop to render once
+                    // Note: The main loop calls render continuously; we just process next item here
+                    self.process_next_in_queue()?;
+                    // Update progress for smoother gauge movement between items
+                    self.busy_progress += 0.2;
+                    if self.busy_progress >= 1.0 { self.busy_progress = 0.0; }
+                    // Yield to allow the terminal to draw between steps
+                    // (No true async here; small sleep to allow redraws)
+                    std::thread::sleep(std::time::Duration::from_millis(30));
+                }
+                Ok(None)
+            }
+            _ => Ok(None)
+        }
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
@@ -1056,6 +1935,8 @@ mod tests {
         let text_config = crate::data_import_types::TextImportConfig {
             file_path: PathBuf::from("examples/pokemon_data.csv"),
             options: csv_options,
+            additional_paths: Vec::new(),
+            merge: false,
         };
         
         let data_source = DataSource::from_import_config(0, &DataImportConfig::Text(text_config));
@@ -1083,6 +1964,8 @@ mod tests {
         let text_config = crate::data_import_types::TextImportConfig {
             file_path: PathBuf::from("examples/pokemon_data.csv"),
             options: csv_options,
+            additional_paths: Vec::new(),
+            merge: false,
         };
         
         // Add the data source
@@ -1111,6 +1994,8 @@ mod tests {
         let text_config = crate::data_import_types::TextImportConfig {
             file_path: PathBuf::from("examples/pokemon_data.csv"),
             options: csv_options,
+            additional_paths: Vec::new(),
+            merge: false,
         };
         
         // Add the data source

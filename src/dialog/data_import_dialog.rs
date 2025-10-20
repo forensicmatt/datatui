@@ -9,7 +9,7 @@ use crate::action::Action;
 use crate::config::Config;
 use crate::tui::Event;
 use color_eyre::Result;
-use crossterm::event::{KeyEvent, MouseEvent, KeyCode};
+use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::Frame;
 use ratatui::layout::Size;
 use tokio::sync::mpsc::UnboundedSender;
@@ -113,6 +113,8 @@ pub struct DataImportDialog {
     pub parquet_options_dialog: Option<ParquetOptionsDialog>,
     #[serde(skip)]
     pub json_options_dialog: Option<JsonOptionsDialog>,
+    #[serde(skip)]
+    pub config: Config,
 }
 
 impl Default for DataImportDialog {
@@ -134,6 +136,7 @@ impl DataImportDialog {
             sqlite_options_dialog: None,
             parquet_options_dialog: None,
             json_options_dialog: None,
+            config: Config::default(),
         }
     }
 
@@ -429,30 +432,45 @@ impl DataImportDialog {
                     file_path,
                     CsvImportOptions::default()
                 ));
+                if let Some(ref mut d) = self.csv_options_dialog {
+                    let _ = d.register_config_handler(self.config.clone());
+                }
             }
             Some(DataSourceType::Excel) => {
                 self.xlsx_options_dialog = Some(XlsxOptionsDialog::new(
                     file_path,
                     XlsxImportOptions::default()
                 ));
+                if let Some(ref mut d) = self.xlsx_options_dialog {
+                    let _ = d.register_config_handler(self.config.clone());
+                }
             }
             Some(DataSourceType::Sqlite) => {
                 self.sqlite_options_dialog = Some(SqliteOptionsDialog::new(
                     file_path,
                     SqliteImportOptions::default()
                 ));
+                if let Some(ref mut d) = self.sqlite_options_dialog {
+                    let _ = d.register_config_handler(self.config.clone());
+                }
             }
             Some(DataSourceType::Parquet) => {
                 self.parquet_options_dialog = Some(ParquetOptionsDialog::new(
                     file_path,
                     ParquetImportOptions::default()
                 ));
+                if let Some(ref mut d) = self.parquet_options_dialog {
+                    let _ = d.register_config_handler(self.config.clone());
+                }
             }
             Some(DataSourceType::Json) => {
                 self.json_options_dialog = Some(JsonOptionsDialog::new(
                     file_path,
                     JsonImportOptions::default()
                 ));
+                if let Some(ref mut d) = self.json_options_dialog {
+                    let _ = d.register_config_handler(self.config.clone());
+                }
             }
             None => {}
         }
@@ -465,6 +483,13 @@ impl Component for DataImportDialog {
     }
 
     fn register_config_handler(&mut self, _config: Config) -> Result<()> {
+        self.config = _config;
+        // Propagate to child dialogs if they exist
+        if let Some(ref mut d) = self.csv_options_dialog { let _ = d.register_config_handler(self.config.clone()); }
+        if let Some(ref mut d) = self.xlsx_options_dialog { let _ = d.register_config_handler(self.config.clone()); }
+        if let Some(ref mut d) = self.sqlite_options_dialog { let _ = d.register_config_handler(self.config.clone()); }
+        if let Some(ref mut d) = self.parquet_options_dialog { let _ = d.register_config_handler(self.config.clone()); }
+        if let Some(ref mut d) = self.json_options_dialog { let _ = d.register_config_handler(self.config.clone()); }
         Ok(())
     }
 
@@ -481,220 +506,179 @@ impl Component for DataImportDialog {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        let result = if key.kind == crossterm::event::KeyEventKind::Press {
-            // Handle option dialogs first
-            if let Some(ref mut csv_dialog) = self.csv_options_dialog {
-                if let Some(action) = csv_dialog.handle_key_event(key)? {
-                    match action {
-                        Action::CloseCsvOptionsDialog => {
-                            self.csv_options_dialog = None;
-                            self.previous_mode();
-                            return Ok(None);
-                        }
-                        Action::AddDataImportConfig { config: _ } => {
-                            // Add the data source from the import config
-                            self.csv_options_dialog = None;
-                            self.next_mode();
-                            return Ok(Some(action));
-                        }
-                        _ => {
-                            return Ok(Some(action));
-                        }
+        // Handle option dialogs first
+        if let Some(ref mut csv_dialog) = self.csv_options_dialog {
+            if let Some(action) = csv_dialog.handle_key_event(key)? {
+                match action {
+                    Action::CloseCsvOptionsDialog => {
+                        self.csv_options_dialog = None;
+                        self.previous_mode();
+                        return Ok(None);
+                    }
+                    Action::AddDataImportConfig { config: _ } => {
+                        // Add the data source from the import config
+                        self.csv_options_dialog = None;
+                        self.next_mode();
+                        return Ok(Some(action));
+                    }
+                    _ => {
+                        return Ok(Some(action));
                     }
                 }
-                return Ok(None);
             }
+            return Ok(None);
+        }
 
-            if let Some(ref mut xlsx_dialog) = self.xlsx_options_dialog {
-                if let Some(action) = xlsx_dialog.handle_key_event(key)? {
-                    match action {
-                        Action::CloseXlsxOptionsDialog => {
-                            self.xlsx_options_dialog = None;
-                            self.previous_mode();
-                            return Ok(None);
-                        }
-                        Action::AddDataImportConfig { config: _ } => {
-                            // Add the data source from the import config
-                            self.xlsx_options_dialog = None;
-                            self.next_mode();
-                            return Ok(Some(action));
-                        }
-                        _ => {
-                            return Ok(Some(action));
-                        }
+        if let Some(ref mut xlsx_dialog) = self.xlsx_options_dialog {
+            if let Some(action) = xlsx_dialog.handle_key_event(key)? {
+                match action {
+                    Action::CloseXlsxOptionsDialog => {
+                        self.xlsx_options_dialog = None;
+                        self.previous_mode();
+                        return Ok(None);
+                    }
+                    Action::AddDataImportConfig { config: _ } => {
+                        // Add the data source from the import config
+                        self.xlsx_options_dialog = None;
+                        self.next_mode();
+                        return Ok(Some(action));
+                    }
+                    _ => {
+                        return Ok(Some(action));
                     }
                 }
-                return Ok(None);
             }
+            return Ok(None);
+        }
 
-            if let Some(ref mut sqlite_dialog) = self.sqlite_options_dialog {
-                if let Some(action) = sqlite_dialog.handle_key_event(key)? {
-                    match action {
-                        Action::CloseSqliteOptionsDialog => {
-                            self.sqlite_options_dialog = None;
-                            self.previous_mode();
-                            return Ok(None);
-                        }
-                        Action::AddDataImportConfig { config: _ } => {
-                            // Add the data source from the import config
-                            self.sqlite_options_dialog = None;
-                            self.next_mode();
-                            return Ok(Some(action));
-                        }
-                        _ => {
-                            return Ok(Some(action));
-                        }
+        if let Some(ref mut sqlite_dialog) = self.sqlite_options_dialog {
+            if let Some(action) = sqlite_dialog.handle_key_event(key)? {
+                match action {
+                    Action::CloseSqliteOptionsDialog => {
+                        self.sqlite_options_dialog = None;
+                        self.previous_mode();
+                        return Ok(None);
+                    }
+                    Action::AddDataImportConfig { config: _ } => {
+                        // Add the data source from the import config
+                        self.sqlite_options_dialog = None;
+                        self.next_mode();
+                        return Ok(Some(action));
+                    }
+                    _ => {
+                        return Ok(Some(action));
                     }
                 }
-                return Ok(None);
             }
+            return Ok(None);
+        }
 
-            if let Some(ref mut parquet_dialog) = self.parquet_options_dialog {
-                if let Some(action) = parquet_dialog.handle_key_event(key)? {
-                    match action {
-                        Action::CloseParquetOptionsDialog => {
-                            self.parquet_options_dialog = None;
-                            self.previous_mode();
-                            return Ok(None);
-                        }
-                        Action::AddDataImportConfig { config: _ } => {
-                            // Add the data source from the import config
-                            self.parquet_options_dialog = None;
-                            self.next_mode();
-                            return Ok(Some(action));
-                        }
-                        _ => {
-                            return Ok(Some(action));
-                        }
+        if let Some(ref mut parquet_dialog) = self.parquet_options_dialog {
+            if let Some(action) = parquet_dialog.handle_key_event(key)? {
+                match action {
+                    Action::CloseParquetOptionsDialog => {
+                        self.parquet_options_dialog = None;
+                        self.previous_mode();
+                        return Ok(None);
+                    }
+                    Action::AddDataImportConfig { config: _ } => {
+                        // Add the data source from the import config
+                        self.parquet_options_dialog = None;
+                        self.next_mode();
+                        return Ok(Some(action));
+                    }
+                    _ => {
+                        return Ok(Some(action));
                     }
                 }
-                return Ok(None);
             }
+            return Ok(None);
+        }
 
-            if let Some(ref mut json_dialog) = self.json_options_dialog {
-                if let Some(action) = json_dialog.handle_key_event(key)? {
-                    match action {
-                        Action::CloseJsonOptionsDialog => {
-                            self.json_options_dialog = None;
-                            self.previous_mode();
-                            return Ok(None);
-                        }
-                        Action::AddDataImportConfig { config: _ } => {
-                            // Add the data source from the import config
-                            self.json_options_dialog = None;
-                            self.next_mode();
-                            return Ok(Some(action));
-                        }
-                        _ => {
-                            return Ok(Some(action));
-                        }
+        if let Some(ref mut json_dialog) = self.json_options_dialog {
+            if let Some(action) = json_dialog.handle_key_event(key)? {
+                match action {
+                    Action::CloseJsonOptionsDialog => {
+                        self.json_options_dialog = None;
+                        self.previous_mode();
+                        return Ok(None);
+                    }
+                    Action::AddDataImportConfig { config: _ } => {
+                        // Add the data source from the import config
+                        self.json_options_dialog = None;
+                        self.next_mode();
+                        return Ok(Some(action));
+                    }
+                    _ => {
+                        return Ok(Some(action));
                     }
                 }
-                return Ok(None);
             }
+            return Ok(None);
+        }
 
-            // Handle main dialog events when option dialogs are not open
-            match self.mode {
-                DataImportDialogMode::DataSourceSelection => {
-                    match key.code {
-                        KeyCode::Up => {
-                            if self.data_source_selection_index > 0 {
-                                self.data_source_selection_index = self.data_source_selection_index.saturating_sub(1);
-                            }
-                            None
-                        }
-                        KeyCode::Down => {
-                            if self.data_source_selection_index < 4 { // 5 options: Text, Excel, SQLite, Parquet, JSON
-                                self.data_source_selection_index = self.data_source_selection_index.saturating_add(1);
-                            }
-                            None
-                        }
-                        KeyCode::Enter => {
-                            let data_sources = [
-                                DataSourceType::Text,
-                                DataSourceType::Excel,
-                                DataSourceType::Sqlite,
-                                DataSourceType::Parquet,
-                                DataSourceType::Json,
-                            ];
-                            if let Some(selected) = data_sources.get(self.data_source_selection_index) {
-                                self.selected_data_source = Some(selected.clone());
-                                self.create_options_dialog();
-                                self.next_mode();
-                            }
-                            None
-                        }
-                        KeyCode::Esc => {
-                            Some(Action::CloseDataImportDialog)
-                        }
-                        _ => None,
-                    }
+        // Config-driven: handle Global actions (navigation/escape)
+        if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            match global_action {
+                Action::Escape => {
+                    return Ok(Some(Action::CloseDataImportDialog));
                 }
-                DataImportDialogMode::CsvOptions => {
-                    // This should not be reached as CSV options dialog should be active
-                    match key.code {
-                        KeyCode::Esc => {
-                            Some(Action::CloseDataImportDialog)
-                        }
-                        _ => None,
+                Action::Up => {
+                    if self.mode == DataImportDialogMode::DataSourceSelection && self.data_source_selection_index > 0 {
+                        self.data_source_selection_index = self.data_source_selection_index.saturating_sub(1);
                     }
+                    return Ok(None);
                 }
-                DataImportDialogMode::XlsxOptions => {
-                    // This should not be reached as XLSX options dialog should be active
-                    match key.code {
-                        KeyCode::Esc => {
-                            Some(Action::CloseDataImportDialog)
-                        }
-                        _ => None,
+                Action::Down => {
+                    if self.mode == DataImportDialogMode::DataSourceSelection && self.data_source_selection_index < 4 {
+                        self.data_source_selection_index = self.data_source_selection_index.saturating_add(1);
                     }
+                    return Ok(None);
                 }
-                DataImportDialogMode::SqliteOptions => {
-                    // This should not be reached as SQLite options dialog should be active
-                    match key.code {
-                        KeyCode::Esc => {
-                            Some(Action::CloseDataImportDialog)
+                _ => {}
+            }
+        }
+
+        // Config-driven: handle DataImport-specific actions
+        if let Some(import_action) = self.config.action_for_key(crate::config::Mode::DataImport, key) {
+            match import_action {
+                Action::DataImportSelect => {
+                    if self.mode == DataImportDialogMode::DataSourceSelection {
+                        let data_sources = [
+                            DataSourceType::Text,
+                            DataSourceType::Excel,
+                            DataSourceType::Sqlite,
+                            DataSourceType::Parquet,
+                            DataSourceType::Json,
+                        ];
+                        if let Some(selected) = data_sources.get(self.data_source_selection_index) {
+                            self.selected_data_source = Some(selected.clone());
+                            self.create_options_dialog();
+                            self.next_mode();
                         }
-                        _ => None,
                     }
+                    return Ok(None);
                 }
-                DataImportDialogMode::ParquetOptions => {
-                    // This should not be reached as Parquet options dialog should be active
-                    match key.code {
-                        KeyCode::Esc => {
-                            Some(Action::CloseDataImportDialog)
-                        }
-                        _ => None,
-                    }
+                Action::ConfirmDataImport => {
+                    return Ok(Some(Action::ConfirmDataImport));
                 }
-                DataImportDialogMode::JsonOptions => {
-                    // This should not be reached as JSON options dialog should be active
-                    match key.code {
-                        KeyCode::Esc => {
-                            Some(Action::CloseDataImportDialog)
-                        }
-                        _ => None,
+                Action::DataImportBack => {
+                    if self.mode == DataImportDialogMode::Confirmation {
+                        self.previous_mode();
+                        return Ok(None);
                     }
+                    return Ok(None);
                 }
-                DataImportDialogMode::Confirmation => {
-                    match key.code {
-                        KeyCode::Char('y') => {
-                            Some(Action::ConfirmDataImport)
-                        }
-                        KeyCode::Char('n') => {
-                            self.previous_mode();
-                            None
-                        }
-                        KeyCode::Esc => {
-                            Some(Action::CloseDataImportDialog)
-                        }
-                        _ => None,
-                    }
+                Action::CloseDataImportDialog => {
+                    return Ok(Some(Action::CloseDataImportDialog));
+                }
+                _ => {
+                    return Ok(Some(import_action));
                 }
             }
-        } else {
-            None
-        };
-        Ok(result)
+        }
+
+        Ok(None)
     }
 
     fn handle_mouse_event(&mut self, _mouse: MouseEvent) -> Result<Option<Action>> {

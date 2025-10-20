@@ -4,6 +4,7 @@ use strum::Display;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap, BorderType};
 use crate::action::Action;
+use crate::config::Config;
 
 use crate::components::Component;
 use color_eyre::Result;
@@ -56,7 +57,7 @@ pub enum FilterDialogMode {
     Add,
     Edit(usize), // index of filter being edited
     AddGroup,    // new: for group creation
-    FileBrowser(FileBrowserDialog), // new: for save/load
+    FileBrowser(Box<FileBrowserDialog>), // new: for save/load
 }
 
 /// FilterDialogField: Enum for filtering dialog fields
@@ -89,6 +90,7 @@ pub struct FilterDialog {
     pub add_insertion_path: Option<Vec<usize>>,
     pub add_group_and: bool, // new: true=AND, false=OR for AddGroup mode
     pub show_instructions: bool, // new: show instructions area (default true)
+    pub config: Config,
 }
 
 impl FilterDialog {
@@ -109,6 +111,7 @@ impl FilterDialog {
             add_insertion_path: None,
             add_group_and: true,
             show_instructions: true,
+            config: Config::default(),
         }
     }
 
@@ -135,13 +138,8 @@ impl FilterDialog {
     pub fn render(&self, area: Rect, buf: &mut Buffer) -> usize {
         Clear.render(area, buf);
 
-        let instructions  = match &self.mode {
-            FilterDialogMode::List => "a:Add  e:Edit  d:Del  g:Group  Enter:OK  Ctrl+s:Save  Ctrl+o:Load  Ctrl+r:Reset  Esc:Cancel  ←/→:In/Out",
-            FilterDialogMode::Add => "Enter:OK  Esc:Cancel",
-            FilterDialogMode::Edit(_) => "Enter:OK  Esc:Cancel",
-            FilterDialogMode::AddGroup => "Tab:Toggle AND/OR  Enter:OK  Esc:Cancel",
-            FilterDialogMode::FileBrowser(_) => "Enter:OK  Esc:Cancel",
-        };
+        // Build dynamic instructions from config
+        let instructions = self.build_instructions_from_config();
 
         // Outer container with double border and title "Filter"
         let outer_block = Block::default()
@@ -151,7 +149,7 @@ impl FilterDialog {
         let inner_area = outer_block.inner(area);
         outer_block.render(area, buf);
 
-        let layout = split_dialog_area(inner_area, self.show_instructions, Some(instructions));
+        let layout = split_dialog_area(inner_area, self.show_instructions, if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
 
@@ -298,265 +296,58 @@ impl FilterDialog {
 
     /// Handle a key event. Returns Some(Action) if the dialog should close and apply, None otherwise.
     pub fn handle_key_event(&mut self, key: KeyEvent, max_rows: usize) -> Option<Action> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crossterm::event::KeyCode;
         
-        // Handle Ctrl+I to toggle instructions
-        if key.kind == KeyEventKind::Press
-            && key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                self.show_instructions = !self.show_instructions;
-                return None;
-            }
-        
-        match &mut self.mode {
-            FilterDialogMode::List => {
-                let mut lines = Vec::new();
-                let mut path = Vec::new();
-                self.root_expr.render_lines(&mut path, &self.selected_path, 0, &mut lines);
-                let idx = lines.iter().position(|(_, _, is_selected, _)| *is_selected).unwrap_or(0);
-
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Up => {
-                            if !lines.is_empty() {
-                                let new_idx = if idx == 0 { lines.len() - 1 } else { idx - 1 };
-                                self.selected_path = lines[new_idx].3.clone();
-                                if new_idx < self.scroll_offset {
-                                    self.scroll_offset = new_idx;
-                                }
-                            }
-                        }
-                        KeyCode::Down => {
-                            if !lines.is_empty() {
-                                let new_idx = if idx + 1 >= lines.len() { 0 } else { idx + 1 };
-                                self.selected_path = lines[new_idx].3.clone();
-                                if new_idx >= self.scroll_offset + max_rows {
-                                    self.scroll_offset = new_idx + 1 - max_rows;
-                                }
-                            }
-                        }
-                        KeyCode::Left => {
-                            if !self.selected_path.is_empty() {
-                                self.selected_path.pop();
-                            }
-                        }
-                        KeyCode::Right => {
-                            let node = self.root_expr.get_mut(&self.selected_path);
-                            if let Some(FilterExpr::And(children)) | Some(FilterExpr::Or(children)) = node
-                                && !children.is_empty() {
-                                    self.selected_path.push(0);
-                                }
-                        }
-                        KeyCode::Char('a') => {
-                            let node = self.root_expr.get_mut(&self.selected_path);
-                            match node {
-                                Some(FilterExpr::And(children)) | Some(FilterExpr::Or(children)) => {
-                                    // Add as last child of selected group
-                                    let mut insertion_path = self.selected_path.clone();
-                                    insertion_path.push(children.len());
-                                    self.mode = FilterDialogMode::Add;
-                                    self.add_insertion_path = Some(insertion_path);
-                                    self.focus_field = FilterDialogField::Column;
-                                    self.add_condition = None;
-                                    self.add_value.clear();
-                                    self.add_case_sensitive = false;
-                                }
-                                Some(FilterExpr::Condition(_)) => {
-                                    if let Some(parent_path) = parent_path_of(&self.selected_path) {
-                                        let mut sibling_path = parent_path.clone();
-                                        if let Some(last) = sibling_path.last_mut() {
-                                            *last += 1;
-                                        }
-                                        self.mode = FilterDialogMode::Add;
-                                        self.add_insertion_path = Some(sibling_path);
-                                        self.focus_field = FilterDialogField::Column;
-                                        self.add_condition = None;
-                                        self.add_value.clear();
-                                        self.add_case_sensitive = false;
+        // Handle FileBrowser mode first - if file browser is open, pass keys to it
+        if let FilterDialogMode::FileBrowser(browser) = &mut self.mode {
+            if let Some(action) = browser.handle_key_event(key) {
+                match action {
+                    FileBrowserAction::Selected(path) => {
+                        match browser.mode {
+                            FileBrowserMode::Save => {
+                                match self.save_to_file(&path) {
+                                    Ok(_) => {
+                                        self.mode = FilterDialogMode::List;
+                                    }
+                                    Err(e) => {
+                                        self.mode = FilterDialogMode::List;
+                                        error!("Failed to save filter: {}", e);
                                     }
                                 }
-                                _ => {}
+                            }
+                            FileBrowserMode::Load => {
+                                match self.load_from_file(&path) {
+                                    Ok(_) => {
+                                        self.mode = FilterDialogMode::List;
+                                    }
+                                    Err(e) => {
+                                        self.mode = FilterDialogMode::List;
+                                        error!("Failed to load filter: {}", e);
+                                    }
+                                }
                             }
                         }
-                        KeyCode::Char('e') => {
-                            let node = self.root_expr.get_mut(&self.selected_path);
-                            match node {
-                                Some(FilterExpr::Condition(col_filter)) => {
-                                    self.mode = FilterDialogMode::Edit(idx);
-                                    self.add_insertion_path = Some(self.selected_path.clone());
-                                    self.focus_field = FilterDialogField::Column;
-                                    self.add_column_index = self.columns.iter().position(|c| c == &col_filter.column).unwrap_or(0);
-                                    self.add_condition = Some(col_filter.condition.clone());
-                                    self.add_value = match &col_filter.condition {
-                                        FilterCondition::Contains { value, .. } => value.clone(),
-                                        FilterCondition::Regex { pattern, .. } => pattern.clone(),
-                                        FilterCondition::Equals { value, .. } => value.clone(),
-                                        FilterCondition::GreaterThan { value } => value.clone(),
-                                        FilterCondition::LessThan { value } => value.clone(),
-                                        FilterCondition::GreaterThanOrEqual { value } => value.clone(),
-                                        FilterCondition::LessThanOrEqual { value } => value.clone(),
-                                        FilterCondition::IsEmpty => "".to_string(),
-                                        FilterCondition::IsNotEmpty => "".to_string(),
-                                        FilterCondition::NotNull => "".to_string(),
-                                        FilterCondition::IsNull => "".to_string(),
-                                    };
-                                    self.add_case_sensitive = match &col_filter.condition {
-                                        FilterCondition::Contains { case_sensitive, .. }
-                                        | FilterCondition::Regex { case_sensitive, .. }
-                                        | FilterCondition::Equals { case_sensitive, .. } => *case_sensitive,
-                                        _ => false
-                                    };
-                                }
-                                Some(FilterExpr::And(children)) => {
-                                    let new_children = children.clone();
-                                    *node.unwrap() = FilterExpr::Or(new_children);
-                                }
-                                Some(FilterExpr::Or(children)) => {
-                                    let new_children = children.clone();
-                                    *node.unwrap() = FilterExpr::And(new_children);
-                                }
-                                _ => {}
-                            }
-                        }
-                        KeyCode::Char('d') => {
-                            let new_sel = remove_node_at(&mut self.root_expr, &self.selected_path);
-                            self.selected_path = new_sel;
-                        }
-                        KeyCode::Char('g') => {
-                            let node = self.root_expr.get_mut(&self.selected_path);
-                            match node {
-                                Some(FilterExpr::And(_)) | Some(FilterExpr::Or(_)) => {
-                                    self.mode = FilterDialogMode::AddGroup;
-                                    self.add_insertion_path = Some(self.selected_path.clone());
-                                    self.add_group_and = true;
-                                }
-                                Some(FilterExpr::Condition(_)) => {
-                                    // Wrap the selected filter in a new group
-                                    self.mode = FilterDialogMode::AddGroup;
-                                    self.add_insertion_path = Some(self.selected_path.clone());
-                                    self.add_group_and = true;
-                                }
-                                _ => {}
-                            }
-                        }
-                        KeyCode::Enter => {
-                            // Apply fitler: emit action with current filters
-                            return Some(Action::FilterDialogApplied(self.root_expr.clone()));
-                        }
-                        KeyCode::Esc => {
-                            return Some(Action::DialogClose);
-                        }
-                        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            // Open file browser in Save mode
-                            let browser = FileBrowserDialog::new(None, Some(vec!["json"]), false, FileBrowserMode::Save);
-                            self.mode = FilterDialogMode::FileBrowser(browser);
-                        }
-                        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            // Open file browser in Load mode
-                            let browser = FileBrowserDialog::new(None, Some(vec!["json"]), false, FileBrowserMode::Load);
-                            self.mode = FilterDialogMode::FileBrowser(browser);
-                        }
-                        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            // Reset/clear all filters
-                            self.root_expr = FilterExpr::And(vec![]);
-                            self.selected_path.clear();
-                            self.scroll_offset = 0;
-                        }
-                        _ => {}
+                    }
+                    FileBrowserAction::Cancelled => {
+                        self.mode = FilterDialogMode::List;
                     }
                 }
             }
-            FilterDialogMode::Add => {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Down => {
-                            self.focus_field = match self.focus_field {
-                                FilterDialogField::Column => FilterDialogField::Type,
-                                FilterDialogField::Type => FilterDialogField::Value,
-                                FilterDialogField::Value => FilterDialogField::CaseSensitive,
-                                FilterDialogField::CaseSensitive => FilterDialogField::Column,
-                            };
+            return None;
+        }
+        
+        // First, honor config-driven actions (Global + Filter)
+        if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            match global_action {
+                Action::Escape => {
+                    return Some(Action::DialogClose);
+                }
+                Action::Enter => {
+                    match &self.mode {
+                        FilterDialogMode::List => {
+                            return Some(Action::FilterDialogApplied(self.root_expr.clone()));
                         }
-                        KeyCode::Up => {
-                            self.focus_field = match self.focus_field {
-                                FilterDialogField::Column => FilterDialogField::CaseSensitive,
-                                FilterDialogField::Type => FilterDialogField::Column,
-                                FilterDialogField::Value => FilterDialogField::Type,
-                                FilterDialogField::CaseSensitive => FilterDialogField::Value,
-                            };
-                        }
-                        KeyCode::Left => {
-                            match self.focus_field {
-                                FilterDialogField::Column => {
-                                    if self.columns.is_empty() {
-                                        self.add_column_index = 0;
-                                    } else if self.add_column_index == 0 {
-                                        self.add_column_index = self.columns.len() - 1;
-                                    } else {
-                                        self.add_column_index -= 1;
-                                    }
-                                }
-                                FilterDialogField::Type => {
-                                    self.add_condition = match self.add_condition {
-                                        Some(FilterCondition::Contains { .. }) | None => Some(FilterCondition::NotNull),
-                                        Some(FilterCondition::NotNull) => Some(FilterCondition::IsNotEmpty),
-                                        Some(FilterCondition::IsNotEmpty) => Some(FilterCondition::IsNull),
-                                        Some(FilterCondition::IsNull) => Some(FilterCondition::IsEmpty),
-                                        Some(FilterCondition::IsEmpty) => Some(FilterCondition::LessThanOrEqual { value: self.add_value.clone() }),
-                                        Some(FilterCondition::LessThanOrEqual { .. }) => Some(FilterCondition::LessThan { value: self.add_value.clone() }),
-                                        Some(FilterCondition::LessThan { .. }) => Some(FilterCondition::GreaterThanOrEqual { value: self.add_value.clone() }),
-                                        Some(FilterCondition::GreaterThanOrEqual { .. }) => Some(FilterCondition::GreaterThan { value: self.add_value.clone() }),
-                                        Some(FilterCondition::GreaterThan { .. }) => Some(FilterCondition::Equals { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::Equals { .. }) => Some(FilterCondition::Regex { pattern: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::Regex { .. }) => Some(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                    };
-                                }
-                                FilterDialogField::CaseSensitive => {
-                                    self.add_case_sensitive = !self.add_case_sensitive;
-                                }
-                                _ => {}
-                            }
-                        }
-                        KeyCode::Right => {
-                            match self.focus_field {
-                                FilterDialogField::Column => {
-                                    if self.columns.is_empty() {
-                                        self.add_column_index = 0;
-                                    } else {
-                                        self.add_column_index = (self.add_column_index + 1) % self.columns.len();
-                                    }
-                                }
-                                FilterDialogField::Type => {
-                                    self.add_condition = match self.add_condition {
-                                        Some(FilterCondition::Contains { .. }) => Some(FilterCondition::Regex { pattern: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::Regex { .. }) => Some(FilterCondition::Equals { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::Equals { .. }) => Some(FilterCondition::GreaterThan { value: self.add_value.clone() }),
-                                        Some(FilterCondition::GreaterThan { .. }) => Some(FilterCondition::GreaterThanOrEqual { value: self.add_value.clone() }),
-                                        Some(FilterCondition::GreaterThanOrEqual { .. }) => Some(FilterCondition::LessThan { value: self.add_value.clone() }),
-                                        Some(FilterCondition::LessThan { .. }) => Some(FilterCondition::LessThanOrEqual { value: self.add_value.clone() }),
-                                        Some(FilterCondition::LessThanOrEqual { .. }) => Some(FilterCondition::IsEmpty),
-                                        Some(FilterCondition::IsEmpty) => Some(FilterCondition::IsNull),
-                                        Some(FilterCondition::IsNull) => Some(FilterCondition::IsNotEmpty),
-                                        Some(FilterCondition::IsNotEmpty) => Some(FilterCondition::NotNull),
-                                        Some(FilterCondition::NotNull) | None => Some(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                    };
-                                }
-                                FilterDialogField::CaseSensitive => {
-                                    self.add_case_sensitive = !self.add_case_sensitive;
-                                }
-                                _ => {}
-                            }
-                        }
-                        KeyCode::Char(c) => {
-                            if self.focus_field == FilterDialogField::Value {
-                                self.add_value.push(c);
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            if self.focus_field == FilterDialogField::Value {
-                                self.add_value.pop();
-                            }
-                        }
-                        KeyCode::Enter => {
+                        FilterDialogMode::Add | FilterDialogMode::Edit(_) => {
                             let column = self.columns.get(self.add_column_index).cloned().unwrap_or_default();
                             let condition = match self.add_condition.clone().unwrap_or(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }) {
                                 FilterCondition::Contains { .. } => FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive },
@@ -587,27 +378,64 @@ impl FilterDialog {
                             }
                             self.mode = FilterDialogMode::List;
                             self.add_insertion_path = None;
+                            return None;
                         }
-                        KeyCode::Esc => {
+                        FilterDialogMode::AddGroup => {
+                            if let Some(path) = self.add_insertion_path.clone() {
+                                let node = self.root_expr.get_mut(&path);
+                                match node {
+                                    Some(FilterExpr::Condition(_)) => {
+                                        let replaced = std::mem::replace(node.unwrap(), FilterExpr::And(vec![]));
+                                        match replaced {
+                                            FilterExpr::Condition(cf) => {
+                                                let group = if self.add_group_and {
+                                                    FilterExpr::And(vec![FilterExpr::Condition(cf.clone())])
+                                                } else {
+                                                    FilterExpr::Or(vec![FilterExpr::Condition(cf.clone())])
+                                                };
+                                                replace_condition_at(&mut self.root_expr, &path, group);
+                                                self.selected_path = path;
+                                            }
+                                            _ => unreachable!(),
+                                        }
+                                    }
+                                    Some(FilterExpr::And(children)) | Some(FilterExpr::Or(children)) => {
+                                        let mut child_path = path.clone();
+                                        child_path.push(children.len());
+                                        let group = if self.add_group_and {
+                                            FilterExpr::And(vec![])
+                                        } else {
+                                            FilterExpr::Or(vec![])
+                                        };
+                                        insert_condition_at(&mut self.root_expr, &child_path, group);
+                                        self.selected_path = child_path;
+                                    }
+                                    _ => {}
+                                }
+                            }
                             self.mode = FilterDialogMode::List;
                             self.add_insertion_path = None;
+                            return None;
                         }
                         _ => {}
                     }
                 }
-            }
-            FilterDialogMode::Edit(_idx) => {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Down => {
-                            self.focus_field = match self.focus_field {
-                                FilterDialogField::Column => FilterDialogField::Type,
-                                FilterDialogField::Type => FilterDialogField::Value,
-                                FilterDialogField::Value => FilterDialogField::CaseSensitive,
-                                FilterDialogField::CaseSensitive => FilterDialogField::Column,
-                            };
+                Action::Up => {
+                    match &self.mode {
+                        FilterDialogMode::List => {
+                            let mut lines = Vec::new();
+                            let mut path = Vec::new();
+                            self.root_expr.render_lines(&mut path, &self.selected_path, 0, &mut lines);
+                            let idx = lines.iter().position(|(_, _, is_selected, _)| *is_selected).unwrap_or(0);
+                            if !lines.is_empty() {
+                                let new_idx = if idx == 0 { lines.len() - 1 } else { idx - 1 };
+                                self.selected_path = lines[new_idx].3.clone();
+                                if new_idx < self.scroll_offset {
+                                    self.scroll_offset = new_idx;
+                                }
+                            }
                         }
-                        KeyCode::Up => {
+                        FilterDialogMode::Add | FilterDialogMode::Edit(_) => {
                             self.focus_field = match self.focus_field {
                                 FilterDialogField::Column => FilterDialogField::CaseSensitive,
                                 FilterDialogField::Type => FilterDialogField::Column,
@@ -615,7 +443,45 @@ impl FilterDialog {
                                 FilterDialogField::CaseSensitive => FilterDialogField::Value,
                             };
                         }
-                        KeyCode::Left => {
+                        _ => {}
+                    }
+                    return None;
+                }
+                Action::Down => {
+                    match &self.mode {
+                        FilterDialogMode::List => {
+                            let mut lines = Vec::new();
+                            let mut path = Vec::new();
+                            self.root_expr.render_lines(&mut path, &self.selected_path, 0, &mut lines);
+                            let idx = lines.iter().position(|(_, _, is_selected, _)| *is_selected).unwrap_or(0);
+                            if !lines.is_empty() {
+                                let new_idx = if idx + 1 >= lines.len() { 0 } else { idx + 1 };
+                                self.selected_path = lines[new_idx].3.clone();
+                                if new_idx >= self.scroll_offset + max_rows {
+                                    self.scroll_offset = new_idx + 1 - max_rows;
+                                }
+                            }
+                        }
+                        FilterDialogMode::Add | FilterDialogMode::Edit(_) => {
+                            self.focus_field = match self.focus_field {
+                                FilterDialogField::Column => FilterDialogField::Type,
+                                FilterDialogField::Type => FilterDialogField::Value,
+                                FilterDialogField::Value => FilterDialogField::CaseSensitive,
+                                FilterDialogField::CaseSensitive => FilterDialogField::Column,
+                            };
+                        }
+                        _ => {}
+                    }
+                    return None;
+                }
+                Action::Left => {
+                    match &self.mode {
+                        FilterDialogMode::List => {
+                            if !self.selected_path.is_empty() {
+                                self.selected_path.pop();
+                            }
+                        }
+                        FilterDialogMode::Add | FilterDialogMode::Edit(_) => {
                             match self.focus_field {
                                 FilterDialogField::Column => {
                                     if self.columns.is_empty() {
@@ -647,7 +513,20 @@ impl FilterDialog {
                                 _ => {}
                             }
                         }
-                        KeyCode::Right => {
+                        _ => {}
+                    }
+                    return None;
+                }
+                Action::Right => {
+                    match &self.mode {
+                        FilterDialogMode::List => {
+                            let node = self.root_expr.get_mut(&self.selected_path);
+                            if let Some(FilterExpr::And(children)) | Some(FilterExpr::Or(children)) = node
+                                && !children.is_empty() {
+                                    self.selected_path.push(0);
+                                }
+                        }
+                        FilterDialogMode::Add | FilterDialogMode::Edit(_) => {
                             match self.focus_field {
                                 FilterDialogField::Column => {
                                     if self.columns.is_empty() {
@@ -677,135 +556,196 @@ impl FilterDialog {
                                 _ => {}
                             }
                         }
-                        KeyCode::Char(c) => {
-                            if self.focus_field == FilterDialogField::Value {
-                                self.add_value.push(c);
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            if self.focus_field == FilterDialogField::Value {
-                                self.add_value.pop();
-                            }
-                        }
-                        KeyCode::Enter => {
-                            let column = self.columns.get(self.add_column_index).cloned().unwrap_or_default();
-                            let condition = match self.add_condition.clone().unwrap_or(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }) {
-                                FilterCondition::Contains { .. } => FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive },
-                                FilterCondition::Regex { .. } => FilterCondition::Regex { pattern: self.add_value.clone(), case_sensitive: self.add_case_sensitive },
-                                FilterCondition::Equals { .. } => FilterCondition::Equals { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive },
-                                FilterCondition::GreaterThan { .. } => FilterCondition::GreaterThan { value: self.add_value.clone() },
-                                FilterCondition::LessThan { .. } => FilterCondition::LessThan { value: self.add_value.clone() },
-                                FilterCondition::GreaterThanOrEqual { .. } => FilterCondition::GreaterThanOrEqual { value: self.add_value.clone() },
-                                FilterCondition::LessThanOrEqual { .. } => FilterCondition::LessThanOrEqual { value: self.add_value.clone() },
-                                FilterCondition::IsEmpty => FilterCondition::IsEmpty,
-                                FilterCondition::IsNotEmpty => FilterCondition::IsNotEmpty,
-                                FilterCondition::NotNull => FilterCondition::NotNull,
-                                FilterCondition::IsNull => FilterCondition::IsNull,
-                            };
-                            let filter = ColumnFilter { column, condition };
-                            if let Some(path) = self.add_insertion_path.clone()
-                                && let FilterDialogMode::Edit(_) = self.mode {
-                                    replace_condition_at(&mut self.root_expr, &path, FilterExpr::Condition(filter));
-                                    self.selected_path = path;
-                                }
-                            self.mode = FilterDialogMode::List;
-                            self.add_insertion_path = None;
-                        }
-                        KeyCode::Esc => {
-                            self.mode = FilterDialogMode::List;
-                            self.add_insertion_path = None;
-                        }
                         _ => {}
                     }
+                    return None;
                 }
+                Action::Backspace => {
+                    if matches!(&self.mode, FilterDialogMode::Add | FilterDialogMode::Edit(_))
+                        && self.focus_field == FilterDialogField::Value {
+                            self.add_value.pop();
+                        }
+                    return None;
+                }
+                Action::ToggleInstructions => {
+                    self.show_instructions = !self.show_instructions;
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
+        // Next, check for Filter mode specific actions
+        if let Some(filter_action) = self.config.action_for_key(crate::config::Mode::Filter, key) {
+            match filter_action {
+                Action::AddFilter => {
+                    if matches!(self.mode, FilterDialogMode::List) {
+                        let node = self.root_expr.get_mut(&self.selected_path);
+                        match node {
+                            Some(FilterExpr::And(children)) | Some(FilterExpr::Or(children)) => {
+                                let mut insertion_path = self.selected_path.clone();
+                                insertion_path.push(children.len());
+                                self.mode = FilterDialogMode::Add;
+                                self.add_insertion_path = Some(insertion_path);
+                                self.focus_field = FilterDialogField::Column;
+                                self.add_condition = None;
+                                self.add_value.clear();
+                                self.add_case_sensitive = false;
+                            }
+                            Some(FilterExpr::Condition(_)) => {
+                                if let Some(parent_path) = parent_path_of(&self.selected_path) {
+                                    let mut sibling_path = parent_path.clone();
+                                    if let Some(last) = sibling_path.last_mut() {
+                                        *last += 1;
+                                    }
+                                    self.mode = FilterDialogMode::Add;
+                                    self.add_insertion_path = Some(sibling_path);
+                                    self.focus_field = FilterDialogField::Column;
+                                    self.add_condition = None;
+                                    self.add_value.clear();
+                                    self.add_case_sensitive = false;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    return None;
+                }
+                Action::EditFilter => {
+                    if matches!(self.mode, FilterDialogMode::List) {
+                        let mut lines = Vec::new();
+                        let mut path = Vec::new();
+                        self.root_expr.render_lines(&mut path, &self.selected_path, 0, &mut lines);
+                        let idx = lines.iter().position(|(_, _, is_selected, _)| *is_selected).unwrap_or(0);
+                        let node = self.root_expr.get_mut(&self.selected_path);
+                        match node {
+                            Some(FilterExpr::Condition(col_filter)) => {
+                                self.mode = FilterDialogMode::Edit(idx);
+                                self.add_insertion_path = Some(self.selected_path.clone());
+                                self.focus_field = FilterDialogField::Column;
+                                self.add_column_index = self.columns.iter().position(|c| c == &col_filter.column).unwrap_or(0);
+                                self.add_condition = Some(col_filter.condition.clone());
+                                self.add_value = match &col_filter.condition {
+                                    FilterCondition::Contains { value, .. } => value.clone(),
+                                    FilterCondition::Regex { pattern, .. } => pattern.clone(),
+                                    FilterCondition::Equals { value, .. } => value.clone(),
+                                    FilterCondition::GreaterThan { value } => value.clone(),
+                                    FilterCondition::LessThan { value } => value.clone(),
+                                    FilterCondition::GreaterThanOrEqual { value } => value.clone(),
+                                    FilterCondition::LessThanOrEqual { value } => value.clone(),
+                                    FilterCondition::IsEmpty => "".to_string(),
+                                    FilterCondition::IsNotEmpty => "".to_string(),
+                                    FilterCondition::NotNull => "".to_string(),
+                                    FilterCondition::IsNull => "".to_string(),
+                                };
+                                self.add_case_sensitive = match &col_filter.condition {
+                                    FilterCondition::Contains { case_sensitive, .. }
+                                    | FilterCondition::Regex { case_sensitive, .. }
+                                    | FilterCondition::Equals { case_sensitive, .. } => *case_sensitive,
+                                    _ => false
+                                };
+                            }
+                            Some(FilterExpr::And(children)) => {
+                                let new_children = children.clone();
+                                *node.unwrap() = FilterExpr::Or(new_children);
+                            }
+                            Some(FilterExpr::Or(children)) => {
+                                let new_children = children.clone();
+                                *node.unwrap() = FilterExpr::And(new_children);
+                            }
+                            _ => {}
+                        }
+                    }
+                    return None;
+                }
+                Action::DeleteFilter => {
+                    if matches!(self.mode, FilterDialogMode::List) {
+                        let new_sel = remove_node_at(&mut self.root_expr, &self.selected_path);
+                        self.selected_path = new_sel;
+                    }
+                    return None;
+                }
+                Action::AddFilterGroup => {
+                    if matches!(self.mode, FilterDialogMode::List) {
+                        let node = self.root_expr.get_mut(&self.selected_path);
+                        match node {
+                            Some(FilterExpr::And(_)) | Some(FilterExpr::Or(_)) => {
+                                self.mode = FilterDialogMode::AddGroup;
+                                self.add_insertion_path = Some(self.selected_path.clone());
+                                self.add_group_and = true;
+                            }
+                            Some(FilterExpr::Condition(_)) => {
+                                self.mode = FilterDialogMode::AddGroup;
+                                self.add_insertion_path = Some(self.selected_path.clone());
+                                self.add_group_and = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    return None;
+                }
+                Action::SaveFilter => {
+                    if matches!(self.mode, FilterDialogMode::List) {
+                        let mut browser = FileBrowserDialog::new(None, Some(vec!["json"]), false, FileBrowserMode::Save);
+                        browser.register_config_handler(self.config.clone());
+                        self.mode = FilterDialogMode::FileBrowser(Box::new(browser));
+                    }
+                    return None;
+                }
+                Action::LoadFilter => {
+                    if matches!(self.mode, FilterDialogMode::List) {
+                        let mut browser = FileBrowserDialog::new(None, Some(vec!["json"]), false, FileBrowserMode::Load);
+                        browser.register_config_handler(self.config.clone());
+                        self.mode = FilterDialogMode::FileBrowser(Box::new(browser));
+                    }
+                    return None;
+                }
+                Action::ResetFilters => {
+                    if matches!(self.mode, FilterDialogMode::List) {
+                        self.root_expr = FilterExpr::And(vec![]);
+                        self.selected_path.clear();
+                        self.scroll_offset = 0;
+                    }
+                    return None;
+                }
+                Action::ToggleFilterGroupType => {
+                    if matches!(self.mode, FilterDialogMode::AddGroup) {
+                        self.add_group_and = !self.add_group_and;
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
+        match &mut self.mode {
+            FilterDialogMode::List => {
+                let mut lines = Vec::new();
+                let mut path = Vec::new();
+                self.root_expr.render_lines(&mut path, &self.selected_path, 0, &mut lines);
+                let _idx = lines.iter().position(|(_, _, is_selected, _)| *is_selected).unwrap_or(0);
+
+                // Fallback for any unhandled keys in List mode
+            }
+            FilterDialogMode::Add => {
+                if key.kind == KeyEventKind::Press
+                    && let KeyCode::Char(c) = key.code
+                        && self.focus_field == FilterDialogField::Value {
+                            self.add_value.push(c);
+                        }
+            }
+            FilterDialogMode::Edit(_idx) => {
+                if key.kind == KeyEventKind::Press
+                    && let KeyCode::Char(c) = key.code
+                        && self.focus_field == FilterDialogField::Value {
+                            self.add_value.push(c);
+                        }
             }
             FilterDialogMode::AddGroup => {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Tab => {
-                            self.add_group_and = !self.add_group_and;
-                        }
-                        KeyCode::Enter => {
-                            if let Some(path) = self.add_insertion_path.clone() {
-                                // Check if path points to a condition or a group
-                                let node = self.root_expr.get_mut(&path);
-                                match node {
-                                    Some(FilterExpr::Condition(_)) => {
-                                        // Wrap the condition in a new group
-                                        let replaced = std::mem::replace(node.unwrap(), FilterExpr::And(vec![]));
-                                        match replaced {
-                                            FilterExpr::Condition(cf) => {
-                                                let group = if self.add_group_and {
-                                                    FilterExpr::And(vec![FilterExpr::Condition(cf.clone())])
-                                                } else {
-                                                    FilterExpr::Or(vec![FilterExpr::Condition(cf.clone())])
-                                                };
-                                                replace_condition_at(&mut self.root_expr, &path, group);
-                                                self.selected_path = path;
-                                            }
-                                            _ => unreachable!(),
-                                        }
-                                    }
-                                    Some(FilterExpr::And(children)) | Some(FilterExpr::Or(children)) => {
-                                        // Insert new group as last child
-                                        let mut child_path = path.clone();
-                                        child_path.push(children.len());
-                                        let group = if self.add_group_and {
-                                            FilterExpr::And(vec![])
-                                        } else {
-                                            FilterExpr::Or(vec![])
-                                        };
-                                        insert_condition_at(&mut self.root_expr, &child_path, group);
-                                        self.selected_path = child_path;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            self.mode = FilterDialogMode::List;
-                            self.add_insertion_path = None;
-                        }
-                        KeyCode::Esc => {
-                            self.mode = FilterDialogMode::List;
-                            self.add_insertion_path = None;
-                        }
-                        _ => {}
-                    }
-                }
+                // All AddGroup functionality handled by config actions above
             }
-            FilterDialogMode::FileBrowser(browser) => {
-                if let Some(action) = browser.handle_key_event(key) {
-                    match action {
-                        FileBrowserAction::Selected(path) => {
-                            match browser.mode {
-                                FileBrowserMode::Save => {
-                                    match self.save_to_file(&path) {
-                                        Ok(_) => {
-                                            self.mode = FilterDialogMode::List;
-                                        }
-                                        Err(e) => {
-                                            self.mode = FilterDialogMode::List;
-                                            error!("Failed to save filter: {}", e);
-                                        }
-                                    }
-                                }
-                                FileBrowserMode::Load => {
-                                    match self.load_from_file(&path) {
-                                        Ok(_) => {
-                                            self.mode = FilterDialogMode::List;
-                                        }
-                                        Err(e) => {
-                                            self.mode = FilterDialogMode::List;
-                                            error!("Failed to load filter: {}", e);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        FileBrowserAction::Cancelled => {
-                            self.mode = FilterDialogMode::List;
-                        }
-                    }
-                }
+            FilterDialogMode::FileBrowser(_) => {
+                // FileBrowser mode is handled at the top of the function
             }
         }
         None
@@ -831,15 +771,53 @@ impl FilterDialog {
         self.set_root_expr(expr);
         Ok(())
     }
+
+    /// Build instructions string from configured keybindings for Filter mode
+    fn build_instructions_from_config(&self) -> String {
+        match &self.mode {
+            FilterDialogMode::List => {
+                self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Global, crate::action::Action::Enter),
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                    (crate::config::Mode::Filter, crate::action::Action::AddFilter),
+                    (crate::config::Mode::Filter, crate::action::Action::EditFilter),
+                    (crate::config::Mode::Filter, crate::action::Action::DeleteFilter),
+                    (crate::config::Mode::Filter, crate::action::Action::AddFilterGroup),
+                    (crate::config::Mode::Filter, crate::action::Action::SaveFilter),
+                    (crate::config::Mode::Filter, crate::action::Action::LoadFilter),
+                    (crate::config::Mode::Filter, crate::action::Action::ResetFilters),
+                ])
+            }
+            FilterDialogMode::Add => {
+                "Enter: OK  Esc: Cancel".to_string()
+            }
+            FilterDialogMode::Edit(_) => {
+                "Enter: OK  Esc: Cancel".to_string()
+            }
+            FilterDialogMode::AddGroup => {
+                let instructions = self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Filter, crate::action::Action::ToggleFilterGroupType),
+                    (crate::config::Mode::Global, crate::action::Action::Enter),
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                ]);
+                if instructions.is_empty() {
+                    "Enter: OK  Esc: Cancel".to_string()
+                } else {
+                    format!("{instructions}  Enter: OK  Esc: Cancel")
+                }
+            }
+            FilterDialogMode::FileBrowser(_) => {
+                "Enter: OK  Esc: Cancel".to_string()
+            }
+        }
+    }
 }
 
 impl Component for FilterDialog {
     fn register_action_handler(&mut self, _tx: tokio::sync::mpsc::UnboundedSender<Action>) -> Result<()> {
         Ok(())
     }
-    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> {
-        Ok(())
-    }
+    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { self.config = _config; Ok(()) }
     fn init(&mut self, _area: ratatui::layout::Size) -> Result<()> {
         Ok(())
     }

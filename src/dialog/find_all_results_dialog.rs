@@ -1,8 +1,9 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Table, Row, Cell, Clear, Paragraph, Wrap, BorderType};
 use crate::components::dialog_layout::split_dialog_area;
-use crossterm::event::{KeyEvent, KeyCode, KeyEventKind};
+use crossterm::event::{KeyEvent, KeyEventKind};
 use crate::action::Action;
+use crate::config::Config;
 
 #[derive(Debug)]
 pub struct FindAllResult {
@@ -20,6 +21,7 @@ pub struct FindAllResultsDialog {
     pub scroll_offset: usize,
     pub search_pattern: String, // Store the search pattern for 
     pub visable_rows: usize,
+    pub config: Config,
 }
 
 impl FindAllResultsDialog {
@@ -32,7 +34,27 @@ impl FindAllResultsDialog {
             scroll_offset: 0,
             search_pattern,
             visable_rows: 5,
+            config: Config::default(),
         }
+    }
+
+    /// Register config handler 
+    pub fn register_config_handler(&mut self, _config: Config) -> color_eyre::Result<()> { 
+        self.config = _config; 
+        Ok(()) 
+    }
+
+    /// Build instructions string from configured keybindings
+    fn build_instructions_from_config(&self) -> String {
+        self.config.actions_to_instructions(&[
+            (crate::config::Mode::Global, crate::action::Action::Escape),
+            (crate::config::Mode::Global, crate::action::Action::Enter),
+            (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+            (crate::config::Mode::FindAllResults, crate::action::Action::GoToFirst),
+            (crate::config::Mode::FindAllResults, crate::action::Action::GoToLast),
+            (crate::config::Mode::FindAllResults, crate::action::Action::PageUp),
+            (crate::config::Mode::FindAllResults, crate::action::Action::PageDown),
+        ])
     }
 
     /// Render the dialog with a scrollable table of results
@@ -48,7 +70,9 @@ impl FindAllResultsDialog {
         let inner_area = outer_block.inner(area);
         outer_block.render(area, buf);
 
-        let layout = split_dialog_area(inner_area, self.show_instructions, Some(&self.instructions));
+        let instructions = self.build_instructions_from_config();
+        let layout = split_dialog_area(inner_area, self.show_instructions, 
+            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
 
@@ -71,7 +95,7 @@ impl FindAllResultsDialog {
         
         // Render instructions area if available
         if let Some(instructions_area) = instructions_area {
-            let instructions_paragraph = Paragraph::new(&*self.instructions)
+            let instructions_paragraph = Paragraph::new(instructions.as_str())
                 .block(Block::default().borders(Borders::ALL).title("Instructions"))
                 .style(Style::default().fg(Color::Yellow))
                 .wrap(Wrap { trim: true });
@@ -256,16 +280,61 @@ impl FindAllResultsDialog {
             return None;
         }
         
-        // Handle Ctrl+I to toggle instructions
-        if key.code == KeyCode::Char('i') && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
-            self.show_instructions = !self.show_instructions;
-            return None;
+        // First, honor config-driven Global actions
+        if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            match global_action {
+                Action::Escape => return Some(Action::DialogClose),
+                Action::Enter => {
+                    // Go to the selected result in the main DataTable
+                    return self.results.get(self.selected).map(|result| Action::GoToResult {
+                        row: result.row,
+                        column: result.column.clone(),
+                    });
+                }
+                Action::Up => {
+                    // Move selection up
+                    if self.selected > 0 {
+                        self.selected -= 1;
+                        // Adjust scroll if needed
+                        self.update_scroll_offset(max_rows);
+                    }
+                    return None;
+                }
+                Action::Down => {
+                    // Move selection down
+                    if self.selected < self.results.len().saturating_sub(1) {
+                        self.selected += 1;
+                        // Adjust scroll if needed
+                        self.update_scroll_offset(max_rows);
+                    }
+                    return None;
+                }
+                Action::ToggleInstructions => {
+                    self.show_instructions = !self.show_instructions;
+                    return None;
+                }
+                _ => {}
+            }
         }
-        
-        match key.code {
-            KeyCode::Up => {
-                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
-                    // Page up (Ctrl+Up)
+
+        // Next, check for FindAllResults-specific actions
+        if let Some(dialog_action) = self.config.action_for_key(crate::config::Mode::FindAllResults, key) {
+            match dialog_action {
+                Action::GoToFirst => {
+                    // Go to first result
+                    self.selected = 0;
+                    self.scroll_offset = 0;
+                    return None;
+                }
+                Action::GoToLast => {
+                    // Go to last result
+                    self.selected = self.results.len().saturating_sub(1);
+                    // Adjust scroll to show the last result
+                    self.update_scroll_offset(max_rows);
+                    return None;
+                }
+                Action::PageUp => {
+                    // Page up navigation
                     let page_size = max_rows.saturating_sub(1);
                     if self.selected >= page_size {
                         self.selected -= page_size;
@@ -274,19 +343,10 @@ impl FindAllResultsDialog {
                         self.selected = 0;
                         self.scroll_offset = 0;
                     }
-                } else {
-                    // Move selection up
-                    if self.selected > 0 {
-                        self.selected -= 1;
-                        // Adjust scroll if needed
-                        self.update_scroll_offset(max_rows);
-                    }
+                    return None;
                 }
-                None
-            }
-            KeyCode::Down => {
-                if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
-                    // Page down (Ctrl+Down)
+                Action::PageDown => {
+                    // Page down navigation
                     let page_size = max_rows.saturating_sub(1);
                     let max_idx = self.results.len().saturating_sub(1);
                     if self.selected + page_size <= max_idx {
@@ -296,42 +356,13 @@ impl FindAllResultsDialog {
                     }
                     // Adjust scroll if needed
                     self.update_scroll_offset(max_rows);
-                } else {
-                    // Move selection down
-                    if self.selected < self.results.len().saturating_sub(1) {
-                        self.selected += 1;
-                        // Adjust scroll if needed
-                        self.update_scroll_offset(max_rows);
-                    }
+                    return None;
                 }
-                None
+                _ => {}
             }
-            KeyCode::Home => {
-                // Go to first result
-                self.selected = 0;
-                self.scroll_offset = 0;
-                None
-            }
-            KeyCode::End => {
-                // Go to last result
-                self.selected = self.results.len().saturating_sub(1);
-                // Adjust scroll to show the last result
-                self.update_scroll_offset(max_rows);
-                None
-            }
-            KeyCode::Enter => {
-                // Go to the selected result in the main DataTable
-                self.results.get(self.selected).map(|result| Action::GoToResult {
-                    row: result.row,
-                    column: result.column.clone(),
-                })
-            }
-            KeyCode::Esc => {
-                // Close the dialog
-                Some(Action::DialogClose)
-            }
-            _ => None,
         }
+
+        None
     }
 
     /// Get the currently selected result

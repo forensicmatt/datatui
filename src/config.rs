@@ -1,17 +1,48 @@
 #![allow(dead_code)] // Remove this once you start using the code
 
-use std::{collections::HashMap, env, path::PathBuf};
+use std::{collections::HashMap, env, fs, path::PathBuf};
 
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use derive_deref::{Deref, DerefMut};
-use directories::ProjectDirs;
 use lazy_static::lazy_static;
 use ratatui::style::{Color, Modifier, Style};
-use serde::{Deserialize, de::Deserializer};
-use tracing::error;
+use serde::{Deserialize, Serialize, de::Deserializer};
+ 
+use directories::BaseDirs;
 
-use crate::{action::Action, app::Mode};
+use crate::action::Action;
+
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Mode {
+    #[default]
+    DataTabManager,
+    Global,
+    DataTableContainer,
+    DataManagement,
+    DataImport,
+    CsvOptions,
+    Sort,
+    Filter,
+    Find,
+    FindAllResults,
+    JmesPath,
+    SqlDialog,
+    XlsxOptionsDialog,
+    ParquetOptionsDialog,
+    SqliteOptionsDialog,
+    FileBrowser,
+    ColumnWidthDialog,
+    JsonOptionsDialog,
+    AliasEdit,
+    ColumnOperationOptions,
+    ColumnOperations,
+    DataFrameDetails,
+    MessageDialog,
+    ProjectSettings,
+    TableExport,
+    KeybindingsDialog,
+}
 
 const CONFIG: &str = include_str!("../.config/config.json5");
 
@@ -46,7 +77,7 @@ lazy_static! {
 }
 
 impl Config {
-    pub fn new() -> Result<Self, config::ConfigError> {
+    pub fn from_path(config_path: Option<&PathBuf>) -> Result<Self, config::ConfigError> {
         let default_config: Config = json5::from_str(CONFIG).unwrap();
         let data_dir = get_data_dir();
         let config_dir = get_config_dir();
@@ -54,26 +85,23 @@ impl Config {
             .set_default("data_dir", data_dir.to_str().unwrap())?
             .set_default("config_dir", config_dir.to_str().unwrap())?;
 
-        let config_files = [
-            ("config.json5", config::FileFormat::Json5),
-            ("config.json", config::FileFormat::Json),
-            ("config.yaml", config::FileFormat::Yaml),
-            ("config.toml", config::FileFormat::Toml),
-            ("config.ini", config::FileFormat::Ini),
-        ];
-        let mut found_config = false;
-        for (file, format) in &config_files {
-            let source = config::File::from(config_dir.join(file))
-                .format(*format)
-                .required(false);
-            builder = builder.add_source(source);
-            if config_dir.join(file).exists() {
-                found_config = true
+        // Determine primary config file path
+        let home_cfg = default_home_config_path();
+        let selected_path = if let Some(p) = config_path {
+            expand_tilde(p)
+        } else {
+            // Ensure default file exists at ~/.datatui-config.json5
+            if !home_cfg.exists() {
+                // Write embedded defaults
+                if let Some(parent) = home_cfg.parent() { let _ = fs::create_dir_all(parent); }
+                let _ = fs::write(&home_cfg, CONFIG);
             }
-        }
-        if !found_config {
-            error!("No configuration file found. Application may not behave as expected");
-        }
+            home_cfg
+        };
+
+        builder = builder.add_source(
+            config::File::from(selected_path).format(config::FileFormat::Json5).required(true),
+        );
 
         let mut cfg: Self = builder.build()?.try_deserialize()?;
 
@@ -94,13 +122,285 @@ impl Config {
 
         Ok(cfg)
     }
+
+    /// Build instructions string from list of (mode, action) tuples
+    pub fn actions_to_instructions(&self, actions: &[(Mode, Action)]) -> String {
+        actions.iter()
+            .map(|(mode, action)| {
+                let friendly_name = self.action_to_friendly_name(action);
+                if let Some(key) = self.key_for_action(*mode, action) {
+                    format!("{key}: {friendly_name}")
+                } else {
+                    friendly_name.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ")
+    }
+
+    /// Convert an action to a friendly name
+    pub fn action_to_friendly_name(&self,action: &Action) -> &'static str {
+        match action {
+            // Global actions
+            Action::Escape => "Esc",
+            Action::Enter => "Enter",
+            Action::Backspace => "Backspace",
+            Action::Up => "Up",
+            Action::Down => "Down",
+            Action::Left => "Left",
+            Action::Right => "Right",
+            Action::Tab => "Tab",
+            Action::Paste => "Paste",
+            Action::ToggleInstructions => "Toggle Instructions",
+            Action::OpenKeybindings => "Key Bindings",
+
+            // DataTableContainer actions
+            Action::OpenSortDialog => "Sort",
+            Action::QuickSortCurrentColumn => "Quick Sort",
+            Action::OpenFilterDialog => "Filter",
+            Action::QuickFilterEqualsCurrentValue => "Quick Filter",
+            Action::MoveSelectedColumnLeft => "Move Column Left",
+            Action::MoveSelectedColumnRight => "Move Column Right",
+            Action::OpenSqlDialog => "SQL",
+            Action::OpenJmesDialog => "JMESPath",
+            Action::OpenColumnOperationsDialog => "Column Ops",
+            Action::OpenFindDialog => "Find",
+            Action::OpenDataframeDetailsDialog => "Details",
+            Action::OpenColumnWidthDialog => "Column Width",
+            Action::OpenDataExportDialog => "Export",
+            Action::CopySelectedCell => "Copy",
+            
+            // DataTabManager actions
+            Action::OpenProjectSettingsDialog => "Settings",
+            Action::OpenDataManagementDialog => "Data Management",
+            Action::MoveTabToFront => "Move Tab Front",
+            Action::MoveTabToBack => "Move Tab Back",
+            Action::MoveTabLeft => "Move Tab Left",
+            Action::MoveTabRight => "Move Tab Right",
+            Action::PrevTab => "Prev Tab",
+            Action::NextTab => "Next Tab",
+            Action::SyncTabs => "Sync Tabs",
+            
+            // Dialog actions
+            Action::DeleteSelectedSource => "Delete Source",
+            Action::LoadAllPendingDatasets => "Load All",
+            Action::EditSelectedAlias => "Edit Alias",
+            Action::OpenDataImportDialog => "Import",
+            Action::ConfirmDataImport => "Confirm Import",
+            Action::DataImportSelect => "Select",
+            Action::DataImportBack => "Back",
+            Action::OpenFileBrowser => "Browse Files",
+            
+            // Sort dialog actions
+            Action::ToggleSortDirection => "Toggle Sort",
+            Action::RemoveSortColumn => "Remove Sort",
+            Action::AddSortColumn => "Add Sort",
+            
+            // Filter dialog actions
+            Action::AddFilter => "Add Filter",
+            Action::EditFilter => "Edit Filter",
+            Action::DeleteFilter => "Delete Filter",
+            Action::AddFilterGroup => "Add Group",
+            Action::SaveFilter => "Save Filter",
+            Action::LoadFilter => "Load Filter",
+            Action::ResetFilters => "Reset Filters",
+            Action::ToggleFilterGroupType => "Toggle Group",
+            
+            // Find dialog actions
+            Action::ToggleSpace => "Toggle Space",
+            Action::Delete => "Delete",
+            Action::GoToFirst => "First",
+            Action::GoToLast => "Last",
+            Action::PageUp => "Page Up",
+            Action::PageDown => "Page Down",
+            
+            // SQL dialog actions
+            Action::SelectAllText => "Select All",
+            Action::CopyText => "Copy Text",
+            Action::RunQuery => "Run Query",
+            Action::CreateNewDataset => "New Dataset",
+            Action::RestoreDataFrame => "Restore",
+            Action::OpenSqlFileBrowser => "Browse SQL",
+            Action::ClearText => "Clear",
+            Action::PasteText => "Paste Text",
+            
+            // File browser actions
+            Action::FileBrowserPageUp => "Page Up",
+            Action::FileBrowserPageDown => "Page Down",
+            Action::ConfirmOverwrite => "Confirm",
+            Action::DenyOverwrite => "Deny",
+            Action::NavigateToParent => "Parent Dir",
+            
+            // Column width dialog actions
+            Action::ToggleAutoExpand => "Auto Expand",
+            Action::ToggleColumnHidden => "Hide Column",
+            Action::MoveColumnUp => "Move Up",
+            Action::MoveColumnDown => "Move Down",
+            
+            // JMESPath dialog actions
+            Action::AddColumn => "Add Column",
+            Action::EditColumn => "Edit Column",
+            Action::DeleteColumn => "Delete Column",
+            Action::ApplyTransform => "Apply",
+            
+            // ColumnOperationOptions dialog actions
+            Action::ToggleField => "Toggle Field",
+            Action::ToggleButtons => "Toggle Buttons",
+            
+            // DataFrameDetails dialog actions
+            Action::SwitchToNextTab => "Next Tab",
+            Action::SwitchToPrevTab => "Prev Tab",
+            Action::ChangeColumnLeft => "Change Column Left",
+            Action::ChangeColumnRight => "Change Column Right",
+            Action::OpenSortChoice => "Open Sort Choice",
+            Action::OpenCastOverlay => "Open Cast Overlay",
+            Action::AddFilterFromValue => "Add Filter From Value",
+            Action::ExportCurrentTab => "Export Current Tab",
+            Action::NavigateHeatmapLeft => "Heatmap Left",
+            Action::NavigateHeatmapRight => "Heatmap Right",
+            Action::NavigateHeatmapUp => "Heatmap Up",
+            Action::NavigateHeatmapDown => "Heatmap Down",
+            Action::NavigateHeatmapPageUp => "Heatmap Page Up",
+            Action::NavigateHeatmapPageDown => "Heatmap Page Down",
+            Action::NavigateHeatmapHome => "Heatmap Home",
+            Action::NavigateHeatmapEnd => "Heatmap End",
+            Action::ScrollStatsLeft => "Scroll Stats Left",
+            Action::ScrollStatsRight => "Scroll Stats Right",
+            
+            // ProjectSettings dialog actions
+            Action::ToggleDataViewerOption => "Toggle Option",
+            // DataExport dialog actions
+            Action::ToggleFormat => "Toggle Format",
+            
+            // TableExport dialog actions
+            Action::CopyFilePath => "Copy Path",
+            Action::ExportTable => "Export",
+            // KeybindingsDialog actions
+            Action::OpenGroupingDropdown => "Open Grouping",
+            Action::SelectNextGrouping => "Next Group",
+            Action::SelectPrevGrouping => "Prev Group",
+            Action::StartRebinding => "Start Rebind",
+            Action::ConfirmRebinding => "Apply Rebind",
+            Action::CancelRebinding => "Cancel Rebind",
+            Action::ClearBinding => "Clear Binding",
+            Action::SaveKeybindings => "Save Keybindings",
+            Action::ResetKeybindings => "Reset Keybindings",
+            Action::SaveKeybindingsAs => "Save As",
+            
+            // XlsxOptionsDialog actions
+            Action::OpenXlsxFileBrowser => "Open Xlsx File Browser",
+            Action::PasteFilePath => "Paste File Path",
+            Action::ToggleWorksheetLoad => "Toggle Worksheet Load",
+
+            // ParquetOptionsDialog actions
+            Action::OpenParquetFileBrowser => "Open Parquet File Browser",
+            Action::PasteParquetFilePath => "Paste Parquet File Path",
+            
+            // SqliteOptionsDialog actions
+            Action::OpenSqliteFileBrowser => "Open Sqlite File Browser",
+            Action::ToggleTableSelection => "Toggle Table Selection",
+            
+            // JsonOptionsDialog actions
+            Action::OpenJsonFileBrowser => "Open Json File Browser",
+            Action::PasteJsonFilePath => "Paste Json File Path",
+            Action::ToggleNdjson => "Toggle Ndjson",
+            Action::ToggleJsonAutodetect => "Toggle Autodetect",
+            Action::FinishJsonImport => "Finish Json Import",
+
+            // Other actions
+            Action::Quit => "Quit",
+            Action::Suspend => "Suspend",
+            Action::Help => "Help",
+            Action::DialogClose => "Close",
+            
+            // Default to the debug representation for unknown actions
+            _ => "Unknown",
+        }
+    }
+    
+    /// Resolve an action for a full key sequence for a given mode.
+    pub fn action_for_keys(&self, mode: Mode, keys: &[KeyEvent]) -> Option<Action> {
+        let map = self.keybindings.0.get(&mode)?;
+        map.get(&keys.to_vec()).cloned()
+    }
+
+    /// Resolve an action for a single key event for a given mode.
+    pub fn action_for_key(&self, mode: Mode, key: KeyEvent) -> Option<Action> {
+        if key.kind != crossterm::event::KeyEventKind::Press {
+            return None;
+        }
+        self.action_for_keys(mode, &[key])
+    }
+
+    /// Find the key for a given action in a specific mode
+    pub fn key_for_action(&self, mode: Mode, action: &Action) -> Option<String> {
+        let mode_bindings = self.keybindings.0.get(&mode)?;
+        for (key_sequence, bound_action) in mode_bindings.iter() {
+            if bound_action == action {
+                return Some(key_sequence.iter()
+                    .map(key_event_to_string)
+                    .collect::<Vec<_>>()
+                    .join(" "));
+            }
+        }
+        None
+    }
+
+    /// Reset keybindings back to application defaults
+    pub fn reset_keybindings_to_default(&mut self) {
+        if let Ok(default_cfg) = json5::from_str::<Config>(CONFIG) {
+            self.keybindings = default_cfg.keybindings;
+        }
+    }
+
+    /// Serialize only the keybindings portion to JSON5 compatible with the app config format
+    pub fn keybindings_to_json5(&self) -> String {
+        let mut out: HashMap<Mode, HashMap<String, Action>> = HashMap::new();
+        for (mode, inner) in self.keybindings.0.iter() {
+            let mut m: HashMap<String, Action> = HashMap::new();
+            for (seq, action) in inner.iter() {
+                let parts: Vec<String> = seq.iter().map(key_event_to_string).collect();
+                let key = format!("<{}>", parts.join("><"));
+                m.insert(key, action.clone());
+            }
+            out.insert(*mode, m);
+        }
+        #[derive(Serialize)]
+        struct KeybindingsExport<'a> {
+            keybindings: &'a HashMap<Mode, HashMap<String, Action>>,
+        }
+        let wrapper = KeybindingsExport { keybindings: &out };
+        // Pretty print with two-space indentation using serde_json (valid JSON5)
+        let mut buf = Vec::new();
+        let formatter = serde_json::ser::PrettyFormatter::with_indent(b"  ");
+        let mut ser = serde_json::Serializer::with_formatter(&mut buf, formatter);
+        if wrapper.serialize(&mut ser).is_ok() {
+            String::from_utf8(buf).unwrap_or_else(|_| "{\n  \"keybindings\": {}\n}".to_string())
+        } else {
+            "{\n  \"keybindings\": {}\n}".to_string()
+        }
+    }
+}
+
+fn expand_tilde(path: &PathBuf) -> PathBuf {
+    if let Some(s) = path.to_str() {
+        if s.starts_with("~") {
+            if let Some(base) = BaseDirs::new() { return PathBuf::from(s.replacen("~", base.home_dir().to_str().unwrap_or(""), 1)); }
+        }
+    }
+    path.clone()
+}
+
+fn default_home_config_path() -> PathBuf {
+    if let Some(base) = BaseDirs::new() {
+        return base.home_dir().join(".datatui-config.json5");
+    }
+    PathBuf::from(".datatui-config.json5")
 }
 
 pub fn get_data_dir() -> PathBuf {
     if let Some(s) = DATA_FOLDER.clone() {
         s
-    } else if let Some(proj_dirs) = project_directory() {
-        proj_dirs.data_local_dir().to_path_buf()
     } else {
         PathBuf::from(".").join(".data")
     }
@@ -109,15 +409,9 @@ pub fn get_data_dir() -> PathBuf {
 pub fn get_config_dir() -> PathBuf {
     if let Some(s) = CONFIG_FOLDER.clone() {
         s
-    } else if let Some(proj_dirs) = project_directory() {
-        proj_dirs.config_local_dir().to_path_buf()
     } else {
         PathBuf::from(".").join(".config")
     }
-}
-
-fn project_directory() -> Option<ProjectDirs> {
-    ProjectDirs::from("com", "kdheepak", env!("CARGO_PKG_NAME"))
 }
 
 #[derive(Clone, Debug, Default, Deref, DerefMut)]
@@ -130,12 +424,12 @@ impl<'de> Deserialize<'de> for KeyBindings {
     {
         let parsed_map = HashMap::<Mode, HashMap<String, Action>>::deserialize(deserializer)?;
 
-        let keybindings = parsed_map
+        let keybindings: HashMap<Mode, HashMap<Vec<KeyEvent>, Action>> = parsed_map
             .into_iter()
             .map(|(mode, inner_map)| {
-                let converted_inner_map = inner_map
+                let converted_inner_map: HashMap<Vec<KeyEvent>, Action> = inner_map
                     .into_iter()
-                    .map(|(key_str, cmd)| (parse_key_sequence(&key_str).unwrap(), cmd))
+                    .map(|(key_string, action)| (parse_key_sequence(&key_string).unwrap(), action))
                     .collect();
                 (mode, converted_inner_map)
             })
@@ -326,12 +620,12 @@ impl<'de> Deserialize<'de> for Styles {
     {
         let parsed_map = HashMap::<Mode, HashMap<String, String>>::deserialize(deserializer)?;
 
-        let styles = parsed_map
+        let styles: HashMap<Mode, HashMap<String, Style>> = parsed_map
             .into_iter()
             .map(|(mode, inner_map)| {
-                let converted_inner_map = inner_map
+                let converted_inner_map: HashMap<String, Style> = inner_map
                     .into_iter()
-                    .map(|(str, style)| (str, parse_style(&style)))
+                    .map(|(key, style_string)| (key, parse_style(&style_string)))
                     .collect();
                 (mode, converted_inner_map)
             })
@@ -496,21 +790,6 @@ mod tests {
     fn test_parse_color_unknown() {
         let color = parse_color("unknown");
         assert_eq!(color, None);
-    }
-
-    #[test]
-    fn test_config() -> Result<()> {
-        let c = Config::new()?;
-        assert_eq!(
-            c.keybindings
-                .0
-                .get(&Mode::Home)
-                .unwrap()
-                .get(&parse_key_sequence("<q>").unwrap_or_default())
-                .unwrap(),
-            &Action::Quit
-        );
-        Ok(())
     }
 
     #[test]
