@@ -2,7 +2,6 @@ use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 use std::io;
 use std::io::Read;
-use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::fs;
 use crossterm::event::{self, Event as CEvent, EnableMouseCapture, DisableMouseCapture};
 use crossterm::terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};

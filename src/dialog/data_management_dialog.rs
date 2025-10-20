@@ -1,5 +1,4 @@
 //! DataManagementDialog: Dialog for managing all imported data sources and datasets
-
 use std::ffi::OsStr;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Table, Row, Cell, Paragraph, Wrap};
@@ -16,8 +15,6 @@ use crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::Frame;
 use ratatui::layout::Size;
 use tracing::{debug, info, warn, error};
-use lazy_static::lazy_static;
-use std::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
 use crate::components::Component;
 use crate::data_import_types::DataImportConfig;
@@ -1876,7 +1873,7 @@ impl Component for DataManagementDialog {
                     if self.current_sub_total > 1 {
                         // We approximate sub_done by scanning currently loading source config
                         if let Some(current) = self.current_loading.clone() {
-                            if let Some((_, src, _)) = self.get_all_datasets().into_iter().find(|(_, s, d)| d.name == current) {
+                            if let Some((_, src, _)) = self.get_all_datasets().into_iter().find(|(_, _s, d)| d.name == current) {
                                 match &src.data_import_config {
                                     DataImportConfig::Text(cfg) => {
                                         self.current_sub_total = 1 + cfg.additional_paths.len();

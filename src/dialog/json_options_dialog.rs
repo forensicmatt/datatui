@@ -478,24 +478,11 @@ impl Component for JsonOptionsDialog {
                     }
                     Action::Right => {
                         if self.file_path_focused {
-                            // Check if cursor is at the end of the text
-                            let lines = self.file_path_input.lines();
-                            let cursor_pos = self.file_path_input.cursor();
-                            
-                            if cursor_pos.0 == lines.len().saturating_sub(1) && 
-                               cursor_pos.1 >= lines.last().unwrap_or(&String::new()).len() {
-                                // Cursor is at the end, move to browse button
-                                self.file_path_focused = false;
-                                self.records_expr_focused = true;
-                                self.browse_button_selected = false;
-                                self.finish_button_selected = false;
-                            } else {
-                                // Let the TextArea handle the right arrow normally
-                                use tui_textarea::Input as TuiInput;
-                                let input: TuiInput = key.into();
-                                self.file_path_input.input(input);
-                                self.update_file_path(self.file_path_input.lines().join("\n"));
-                            }
+                            // Always move focus from File Path to [Browse]
+                            self.file_path_focused = false;
+                            self.browse_button_selected = true;
+                            self.records_expr_focused = false;
+                            self.finish_button_selected = false;
                         } else if self.records_expr_focused {
                             // Only move to Browse when cursor is at end-of-text; otherwise move cursor right within field
                             let lines = self.records_expr_input.lines();
@@ -531,9 +518,10 @@ impl Component for JsonOptionsDialog {
                             self.records_expr_focused = false;
                             self.file_path_focused = false;
                         } else if self.browse_button_selected {
-                            // Move from browse button to records expr
-                            self.records_expr_focused = true;
+                            // Move from [Browse] button back to File Path
+                            self.file_path_focused = true;
                             self.browse_button_selected = false;
+                            self.records_expr_focused = false;
                         } else if self.file_path_focused {
                             // Let the TextArea handle the left arrow normally
                             use tui_textarea::Input as TuiInput;
@@ -558,17 +546,9 @@ impl Component for JsonOptionsDialog {
                             self.ndjson_option_selected = false;
                             self.records_expr_focused = true;
                         } else if self.records_expr_focused {
-                            // Only move up to File Path when cursor is at column 0 on first line
-                            let cursor_pos = self.records_expr_input.cursor();
-                            if cursor_pos.0 == 0 && cursor_pos.1 == 0 {
-                                self.records_expr_focused = false;
-                                self.file_path_focused = true;
-                            } else {
-                                // Let TextArea handle the left arrow normally when not at start
-                                use tui_textarea::Input as TuiInput;
-                                let input: TuiInput = key.into();
-                                self.records_expr_input.input(input);
-                            }
+                            // Always move focus to File Path when pressing Up from Records expression
+                            self.records_expr_focused = false;
+                            self.file_path_focused = true;
                         } else if self.finish_button_selected {
                             self.finish_button_selected = false;
                             self.browse_button_selected = true;
