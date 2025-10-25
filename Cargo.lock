@@ -1031,6 +1031,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
+ "toml 0.8.23",
  "tracing",
  "tracing-error",
  "tracing-subscriber",

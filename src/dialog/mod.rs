@@ -25,6 +25,7 @@ pub mod keybinding_capture_dialog;
 pub mod column_operations_dialog;
 pub mod column_operation_options_dialog;
 pub mod keybindings_dialog;
+pub mod llm_client_dialog;
 pub use filter_dialog::{FilterCondition, ColumnFilter};
 pub use column_width_dialog::ColumnWidthConfig;
 pub use find_dialog::{FindOptions, SearchMode};
@@ -57,3 +58,4 @@ pub use column_operations_dialog::{ColumnOperationsDialog, ColumnOperationsMode,
 pub use column_operation_options_dialog::{ColumnOperationOptionsDialog, ColumnOperationOptionsMode, ColumnOperationConfig, ClusterAlgorithm, KmeansOptions, DbscanOptions, OperationOptions};
 pub use keybindings_dialog::KeybindingsDialog;
 pub use keybinding_capture_dialog::KeybindingCaptureDialog;
+pub use llm_client_dialog::{LlmClientDialog, LlmClientConfig, LlmProvider, LlmConfig, AzureOpenAiConfig, OpenAIConfig, OllamaConfig};

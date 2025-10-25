@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize, de::Deserializer};
 use directories::BaseDirs;
 
 use crate::action::Action;
+use crate::dialog::llm_client_dialog::LlmConfig;
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
@@ -42,6 +43,7 @@ pub enum Mode {
     ProjectSettings,
     TableExport,
     KeybindingsDialog,
+    LlmClientDialog,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");
@@ -62,6 +64,8 @@ pub struct Config {
     pub keybindings: KeyBindings,
     #[serde(default)]
     pub styles: Styles,
+    #[serde(default)]
+    pub llm_config: Option<LlmConfig>,
 }
 
 lazy_static! {
@@ -120,7 +124,67 @@ impl Config {
             }
         }
 
+        // Load LLM config from llm-settings.toml (optional)
+        cfg.load_llm_config()?;
+
         Ok(cfg)
+    }
+
+    /// Load LLM configuration from llm-settings.toml file (optional)
+    fn load_llm_config(&mut self) -> Result<(), config::ConfigError> {
+        let config_dir = get_config_dir();
+        let llm_config_path = config_dir.join("llm-settings.toml");
+        
+        if llm_config_path.exists() {
+            match fs::read_to_string(&llm_config_path) {
+                Ok(content) => {
+                    match toml::from_str::<LlmConfig>(&content) {
+                        Ok(llm_config) => {
+                            self.llm_config = Some(llm_config);
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to parse LLM config file: {}", e);
+                            // Keep llm_config as None if parsing fails
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to read LLM config file: {}", e);
+                    // Keep llm_config as None if reading fails
+                }
+            }
+        }
+        // Don't create default LLM config file - let it be optional
+        
+        Ok(())
+    }
+
+    /// Save LLM configuration to llm-settings.toml file
+    pub fn save_llm_config(&self) -> Result<(), std::io::Error> {
+        if let Some(llm_config) = &self.llm_config {
+            let config_dir = get_config_dir();
+            let llm_config_path = config_dir.join("llm-settings.toml");
+            
+            if let Some(parent) = llm_config_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            
+            let toml_content = toml::to_string_pretty(llm_config)
+                .unwrap_or_else(|_| "# LLM Settings\n# This file contains configuration for LLM providers\n".to_string());
+            
+            fs::write(&llm_config_path, toml_content)
+        } else {
+            // No LLM config to save
+            Ok(())
+        }
+    }
+
+    /// Get LLM config or create default if none exists
+    pub fn get_or_create_llm_config(&mut self) -> &mut LlmConfig {
+        if self.llm_config.is_none() {
+            self.llm_config = Some(LlmConfig::default());
+        }
+        self.llm_config.as_mut().unwrap()
     }
 
     /// Build instructions string from list of (mode, action) tuples

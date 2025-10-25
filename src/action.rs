@@ -330,6 +330,14 @@ pub enum Action {
     ResetKeybindings,
     /// Save keybindings to a chosen file path
     SaveKeybindingsAs,
+    /// Open the LLM Client dialog
+    OpenLlmClientDialog,
+    /// Close the LLM Client dialog
+    CloseLlmClientDialog,
+    /// User applied LLM client dialog with configuration
+    LlmClientDialogApplied(crate::dialog::llm_client_dialog::LlmClientConfig),
+    /// User cancelled LLM client dialog
+    LlmClientDialogCancel,
 }
 
 #[cfg(test)]
