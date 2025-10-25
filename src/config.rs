@@ -13,6 +13,7 @@ use directories::BaseDirs;
 
 use crate::action::Action;
 use crate::dialog::llm_client_dialog::LlmConfig;
+use crate::style::StyleConfig;
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
@@ -64,6 +65,8 @@ pub struct Config {
     pub keybindings: KeyBindings,
     #[serde(default)]
     pub styles: Styles,
+    #[serde(default)]
+    pub style_config: StyleConfig,
     #[serde(default)]
     pub llm_config: Option<LlmConfig>,
 }

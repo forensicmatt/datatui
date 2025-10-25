@@ -335,7 +335,7 @@ pub enum Action {
     /// Close the LLM Client dialog
     CloseLlmClientDialog,
     /// User applied LLM client dialog with configuration
-    LlmClientDialogApplied(crate::dialog::llm_client_dialog::LlmClientConfig),
+    LlmClientDialogApplied(crate::dialog::llm_client_dialog::LlmConfig),
     /// User cancelled LLM client dialog
     LlmClientDialogCancel,
 }

@@ -1,4 +1,4 @@
-//! LlmClientDialog: Popup dialog for configuring LLM client providers
+//! LlmClientDialog: Main dialog for selecting and configuring LLM providers
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap, BorderType, List, ListItem, ListState};
 use crate::action::Action;
@@ -10,6 +10,10 @@ use crate::components::dialog_layout::split_dialog_area;
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use strum::Display;
+use crate::dialog::llm::{
+    AzureOpenAiConfigDialog, OpenAiConfigDialog,
+    OllamaConfigDialog, AzureOpenAiConfig, OpenAIConfig, OllamaConfig
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display)]
 pub enum LlmProvider {
@@ -31,7 +35,9 @@ impl LlmProvider {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LlmClientDialogMode {
     ProviderSelection,
-    Configuration,
+    AzureConfiguration,
+    OpenAIConfiguration,
+    OllamaConfiguration,
     Error(String),
 }
 
@@ -40,65 +46,16 @@ pub struct LlmClientDialog {
     pub mode: LlmClientDialogMode,
     pub selected_provider: LlmProvider,
     pub provider_list_state: ListState,
-    pub config_fields: LlmClientConfig,
     pub error_active: bool,
     pub show_instructions: bool,
     pub config: Config,
     pub llm_config: LlmConfig,
+    // Individual provider dialogs
+    pub azure_dialog: AzureOpenAiConfigDialog,
+    pub openai_dialog: OpenAiConfigDialog,
+    pub ollama_dialog: OllamaConfigDialog,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AzureOpenAiConfig {
-    pub api_key: String,
-    pub base_url: String,
-    pub deployment: String,
-    pub api_version: String,
-    pub model: String,
-}
-
-impl Default for AzureOpenAiConfig {
-    fn default() -> Self {
-        Self {
-            api_key: String::new(),
-            base_url: "https://your-resource.openai.azure.com/".to_string(),
-            deployment: String::new(),
-            api_version: "2024-02-15-preview".to_string(),
-            model: "gpt-4o".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OpenAIConfig {
-    pub api_key: String,
-    pub base_url: String,
-    pub model: String,
-}
-
-impl Default for OpenAIConfig {
-    fn default() -> Self {
-        Self {
-            api_key: String::new(),
-            base_url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-4o".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OllamaConfig {
-    pub host: String,
-    pub model: String,
-}
-
-impl Default for OllamaConfig {
-    fn default() -> Self {
-        Self {
-            host: "http://localhost:11434".to_string(),
-            model: "llama3.2".to_string(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LlmConfig {
@@ -145,33 +102,6 @@ impl LlmConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LlmClientConfig {
-    pub provider: LlmProvider,
-    pub api_key: String,
-    pub base_url: String,
-    pub model: String,
-    // Azure-specific fields
-    pub azure_deployment: String,
-    pub azure_api_version: String,
-    // Ollama-specific fields
-    pub ollama_host: String,
-}
-
-impl Default for LlmClientConfig {
-    fn default() -> Self {
-        Self {
-            provider: LlmProvider::OpenAI,
-            api_key: String::new(),
-            base_url: String::new(),
-            model: String::new(),
-            azure_deployment: String::new(),
-            azure_api_version: "2024-02-15-preview".to_string(),
-            ollama_host: "http://localhost:11434".to_string(),
-        }
-    }
-}
-
 impl Default for LlmClientDialog {
     fn default() -> Self { Self::new() }
 }
@@ -185,11 +115,13 @@ impl LlmClientDialog {
             mode: LlmClientDialogMode::ProviderSelection,
             selected_provider: LlmProvider::OpenAI,
             provider_list_state: list_state,
-            config_fields: LlmClientConfig::default(),
             error_active: false,
             show_instructions: true,
             config: Config::default(),
             llm_config: LlmConfig::default(),
+            azure_dialog: AzureOpenAiConfigDialog::new(),
+            openai_dialog: OpenAiConfigDialog::new(),
+            ollama_dialog: OllamaConfigDialog::new(),
         }
     }
 
@@ -197,15 +129,36 @@ impl LlmClientDialog {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
         
+        // Initialize provider dialogs with existing configs
+        let azure_dialog = if let Some(azure_config) = &llm_config.azure {
+            AzureOpenAiConfigDialog::new_with_config(config.clone(), azure_config.clone())
+        } else {
+            AzureOpenAiConfigDialog::new_with_config(config.clone(), AzureOpenAiConfig::default())
+        };
+        
+        let openai_dialog = if let Some(openai_config) = &llm_config.openai {
+            OpenAiConfigDialog::new_with_config(config.clone(), openai_config.clone())
+        } else {
+            OpenAiConfigDialog::new_with_config(config.clone(), OpenAIConfig::default())
+        };
+        
+        let ollama_dialog = if let Some(ollama_config) = &llm_config.ollama {
+            OllamaConfigDialog::new_with_config(config.clone(), ollama_config.clone())
+        } else {
+            OllamaConfigDialog::new_with_config(config.clone(), OllamaConfig::default())
+        };
+        
         Self {
             mode: LlmClientDialogMode::ProviderSelection,
             selected_provider: llm_config.selected_provider.clone(),
             provider_list_state: list_state,
-            config_fields: LlmClientConfig::default(),
             error_active: false,
             show_instructions: true,
             config,
             llm_config,
+            azure_dialog,
+            openai_dialog,
+            ollama_dialog,
         }
     }
 
@@ -219,7 +172,7 @@ impl LlmClientDialog {
             (crate::config::Mode::LlmClientDialog, crate::action::Action::Down),
             (crate::config::Mode::LlmClientDialog, crate::action::Action::Tab),
             (crate::config::Mode::LlmClientDialog, crate::action::Action::Backspace),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::LlmClientDialogApplied(LlmClientConfig::default())),
+            (crate::config::Mode::LlmClientDialog, crate::action::Action::LlmClientDialogApplied(LlmConfig::default())),
             (crate::config::Mode::LlmClientDialog, crate::action::Action::LlmClientDialogCancel),
         ])
     }
@@ -240,8 +193,17 @@ impl LlmClientDialog {
                 2 => LlmProvider::Ollama,
                 _ => LlmProvider::OpenAI,
             };
-            self.config_fields.provider = self.selected_provider.clone();
+            self.llm_config.selected_provider = self.selected_provider.clone();
         }
+    }
+
+    fn enter_configuration_mode(&mut self) {
+        self.update_selected_provider();
+        self.mode = match self.selected_provider {
+            LlmProvider::Azure => LlmClientDialogMode::AzureConfiguration,
+            LlmProvider::OpenAI => LlmClientDialogMode::OpenAIConfiguration,
+            LlmProvider::Ollama => LlmClientDialogMode::OllamaConfiguration,
+        };
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {
@@ -276,8 +238,14 @@ impl LlmClientDialog {
                     .highlight_symbol("> ");
                 ratatui::prelude::StatefulWidget::render(list, list_area, buf, &mut self.provider_list_state);
             }
-            LlmClientDialogMode::Configuration => {
-                self.render_configuration_form(content_area, buf, wrap_width);
+            LlmClientDialogMode::AzureConfiguration => {
+                self.azure_dialog.render(content_area, buf);
+            }
+            LlmClientDialogMode::OpenAIConfiguration => {
+                self.openai_dialog.render(content_area, buf);
+            }
+            LlmClientDialogMode::OllamaConfiguration => {
+                self.ollama_dialog.render(content_area, buf);
             }
             LlmClientDialogMode::Error(msg) => {
                 let y = content_area.y;
@@ -300,108 +268,6 @@ impl LlmClientDialog {
         1
     }
 
-    fn render_configuration_form(&self, area: Rect, buf: &mut Buffer, _wrap_width: usize) {
-        let block = Block::default()
-            .title(format!("Configure {}", self.selected_provider.display_name()))
-            .borders(Borders::ALL);
-        let form_area = block.inner(area);
-        block.render(area, buf);
-
-        let mut y = form_area.y;
-        let x = form_area.x;
-
-        // Provider info
-        buf.set_string(x, y, format!("Provider: {}", self.selected_provider.display_name()), 
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
-        y += 2;
-
-        // Get current config values based on selected provider
-        let (api_key, base_url, model) = match self.selected_provider {
-            LlmProvider::Azure => {
-                if let Some(azure_config) = &self.llm_config.azure {
-                    (
-                        &azure_config.api_key,
-                        &azure_config.base_url,
-                        &azure_config.model,
-                    )
-                } else {
-                    static EMPTY: String = String::new();
-                    (&EMPTY, &EMPTY, &EMPTY)
-                }
-            },
-            LlmProvider::OpenAI => {
-                if let Some(openai_config) = &self.llm_config.openai {
-                    (
-                        &openai_config.api_key,
-                        &openai_config.base_url,
-                        &openai_config.model,
-                    )
-                } else {
-                    static EMPTY: String = String::new();
-                    (&EMPTY, &EMPTY, &EMPTY)
-                }
-            },
-            LlmProvider::Ollama => {
-                if let Some(ollama_config) = &self.llm_config.ollama {
-                    (
-                        &ollama_config.host, // Use host as the "api_key" for Ollama
-                        &ollama_config.host,
-                        &ollama_config.model,
-                    )
-                } else {
-                    static EMPTY: String = String::new();
-                    (&EMPTY, &EMPTY, &EMPTY)
-                }
-            },
-        };
-
-        // Common fields
-        if self.selected_provider != LlmProvider::Ollama {
-            buf.set_string(x, y, "API Key:", Style::default().fg(Color::Yellow));
-            buf.set_string(x, y + 1, api_key, Style::default().fg(Color::White));
-            y += 3;
-        }
-
-        buf.set_string(x, y, if self.selected_provider == LlmProvider::Ollama { "Host:" } else { "Base URL:" }, 
-            Style::default().fg(Color::Yellow));
-        buf.set_string(x, y + 1, base_url, Style::default().fg(Color::White));
-        y += 3;
-
-        buf.set_string(x, y, "Model:", Style::default().fg(Color::Yellow));
-        buf.set_string(x, y + 1, model, Style::default().fg(Color::White));
-        y += 3;
-
-        // Provider-specific fields
-        match self.selected_provider {
-            LlmProvider::Azure => {
-                if let Some(azure_config) = &self.llm_config.azure {
-                    buf.set_string(x, y, "Azure Deployment:", Style::default().fg(Color::Yellow));
-                    buf.set_string(x, y + 1, &azure_config.deployment, Style::default().fg(Color::White));
-                    y += 3;
-
-                    buf.set_string(x, y, "Azure API Version:", Style::default().fg(Color::Yellow));
-                    buf.set_string(x, y + 1, &azure_config.api_version, Style::default().fg(Color::White));
-                } else {
-                    buf.set_string(x, y, "Azure Deployment:", Style::default().fg(Color::Yellow));
-                    buf.set_string(x, y + 1, "", Style::default().fg(Color::White));
-                    y += 3;
-
-                    buf.set_string(x, y, "Azure API Version:", Style::default().fg(Color::Yellow));
-                    buf.set_string(x, y + 1, "", Style::default().fg(Color::White));
-                }
-            }
-            LlmProvider::Ollama => {
-                // No additional fields for Ollama
-            }
-            LlmProvider::OpenAI => {
-                // No additional fields for OpenAI
-            }
-        }
-
-        y += 4;
-        buf.set_string(x, y, "Enter: Apply  Esc: Cancel  Tab: Back to Provider Selection", 
-            Style::default().fg(Color::Gray));
-    }
 
     /// Handle a key event. Returns Some(Action) if the dialog should close and apply, None otherwise.
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
@@ -438,8 +304,7 @@ impl LlmClientDialog {
                 if let Some(dialog_action) = &llm_dialog_action {
                     match dialog_action {
                         Action::Enter => {
-                            self.update_selected_provider();
-                            self.mode = LlmClientDialogMode::Configuration;
+                            self.enter_configuration_mode();
                             return None;
                         }
                         Action::Up => {
@@ -466,8 +331,7 @@ impl LlmClientDialog {
                         return Some(Action::DialogClose);
                     }
                     KeyCode::Enter => {
-                        self.update_selected_provider();
-                        self.mode = LlmClientDialogMode::Configuration;
+                        self.enter_configuration_mode();
                         return None;
                     }
                     KeyCode::Up => {
@@ -487,44 +351,58 @@ impl LlmClientDialog {
                     _ => {}
                 }
             }
-            LlmClientDialogMode::Configuration => {
-                // First, check Global actions
-                if let Some(global_action) = &optional_global_action {
-                    match global_action {
-                        Action::Escape => {
-                            return Some(Action::DialogClose);
+            LlmClientDialogMode::AzureConfiguration => {
+                // Delegate to Azure dialog
+                if let Some(action) = self.azure_dialog.handle_key_event(key) {
+                    match action {
+                        Action::LlmClientDialogApplied(config) => {
+                            // Update our llm_config with the new Azure config
+                            self.llm_config.azure = config.azure;
+                            self.llm_config.selected_provider = config.selected_provider;
+                            return Some(Action::LlmClientDialogApplied(self.llm_config.clone()));
                         }
-                        _ => {}
-                    }
-                }
-
-                // Next, check LlmClientDialog-specific actions
-                if let Some(dialog_action) = &llm_dialog_action {
-                    match dialog_action {
-                        Action::Enter => {
-                            return Some(Action::LlmClientDialogApplied(self.config_fields.clone()));
-                        }
-                        Action::Tab => {
+                        Action::DialogClose => {
                             self.mode = LlmClientDialogMode::ProviderSelection;
                             return None;
                         }
-                        _ => {}
+                        _ => return Some(action),
                     }
                 }
-
-                // Fallback for hardcoded keys
-                match key.code {
-                    KeyCode::Esc => {
-                        return Some(Action::DialogClose);
+            }
+            LlmClientDialogMode::OpenAIConfiguration => {
+                // Delegate to OpenAI dialog
+                if let Some(action) = self.openai_dialog.handle_key_event(key) {
+                    match action {
+                        Action::LlmClientDialogApplied(config) => {
+                            // Update our llm_config with the new OpenAI config
+                            self.llm_config.openai = config.openai;
+                            self.llm_config.selected_provider = config.selected_provider;
+                            return Some(Action::LlmClientDialogApplied(self.llm_config.clone()));
+                        }
+                        Action::DialogClose => {
+                            self.mode = LlmClientDialogMode::ProviderSelection;
+                            return None;
+                        }
+                        _ => return Some(action),
                     }
-                    KeyCode::Enter => {
-                        return Some(Action::LlmClientDialogApplied(self.config_fields.clone()));
+                }
+            }
+            LlmClientDialogMode::OllamaConfiguration => {
+                // Delegate to Ollama dialog
+                if let Some(action) = self.ollama_dialog.handle_key_event(key) {
+                    match action {
+                        Action::LlmClientDialogApplied(config) => {
+                            // Update our llm_config with the new Ollama config
+                            self.llm_config.ollama = config.ollama;
+                            self.llm_config.selected_provider = config.selected_provider;
+                            return Some(Action::LlmClientDialogApplied(self.llm_config.clone()));
+                        }
+                        Action::DialogClose => {
+                            self.mode = LlmClientDialogMode::ProviderSelection;
+                            return None;
+                        }
+                        _ => return Some(action),
                     }
-                    KeyCode::Tab => {
-                        self.mode = LlmClientDialogMode::ProviderSelection;
-                        return None;
-                    }
-                    _ => {}
                 }
             }
             LlmClientDialogMode::Error(_) => {
@@ -556,13 +434,25 @@ impl LlmClientDialog {
 
 impl Component for LlmClientDialog {
     fn register_action_handler(&mut self, _tx: tokio::sync::mpsc::UnboundedSender<Action>) -> Result<()> {
+        // Register with individual dialogs
+        self.azure_dialog.register_action_handler(_tx.clone())?;
+        self.openai_dialog.register_action_handler(_tx.clone())?;
+        self.ollama_dialog.register_action_handler(_tx)?;
         Ok(())
     }
     fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> {
-        self.config = _config;
+        self.config = _config.clone();
+        // Register with individual dialogs
+        self.azure_dialog.register_config_handler(_config.clone())?;
+        self.openai_dialog.register_config_handler(_config.clone())?;
+        self.ollama_dialog.register_config_handler(_config)?;
         Ok(())
     }
     fn init(&mut self, _area: ratatui::layout::Size) -> Result<()> {
+        // Initialize individual dialogs
+        self.azure_dialog.init(_area)?;
+        self.openai_dialog.init(_area)?;
+        self.ollama_dialog.init(_area)?;
         Ok(())
     }
     fn handle_events(&mut self, _event: Option<crate::tui::Event>) -> Result<Option<Action>> {

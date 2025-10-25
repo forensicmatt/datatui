@@ -11,6 +11,17 @@ pub struct StyleConfig {
     pub error: Style,
     pub table_row_even: Style,
     pub table_row_odd: Style,
+    pub cursor: CursorStyle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CursorStyle {
+    /// Style for block cursor (used in simple text input fields)
+    pub block: Style,
+    /// Style for highlighted character cursor (used in search/find fields)
+    pub highlighted: Style,
+    /// Style for hidden cursor (used when field is not focused)
+    pub hidden: Style,
 }
 
 impl Default for StyleConfig {
@@ -24,6 +35,17 @@ impl Default for StyleConfig {
             error: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             table_row_even: Style::default().bg(Color::Rgb(30, 30, 30)), // dark gray
             table_row_odd: Style::default().bg(Color::Rgb(40, 40, 40)),  // slightly lighter gray
+            cursor: CursorStyle::default(),
+        }
+    }
+}
+
+impl Default for CursorStyle {
+    fn default() -> Self {
+        Self {
+            block: Style::default().fg(Color::Black).bg(Color::White),
+            highlighted: Style::default().fg(Color::Black).bg(Color::Yellow),
+            hidden: Style::default().fg(Color::Gray),
         }
     }
 }
@@ -61,6 +83,36 @@ impl StyleConfig {
         self.table_row_odd = style;
         self
     }
+    pub fn with_cursor(mut self, cursor: CursorStyle) -> Self {
+        self.cursor = cursor;
+        self
+    }
+}
+
+impl CursorStyle {
+    /// Get the block cursor style
+    pub fn block(&self) -> Style {
+        self.block
+    }
+    
+    /// Get the highlighted cursor style
+    pub fn highlighted(&self) -> Style {
+        self.highlighted
+    }
+    
+    /// Get the hidden cursor style
+    pub fn hidden(&self) -> Style {
+        self.hidden
+    }
+    
+    /// Create a custom cursor style
+    pub fn new(block: Style, highlighted: Style, hidden: Style) -> Self {
+        Self {
+            block,
+            highlighted,
+            hidden,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -77,11 +129,16 @@ mod tests {
         assert_eq!(style.table_border.fg, Some(Color::Gray));
         assert_eq!(style.selected_row.fg, Some(Color::Black));
         assert_eq!(style.selected_row.bg, Some(Color::Yellow));
-        assert_eq!(style.dialog.fg, Some(Color::Cyan));
+        assert_eq!(style.dialog.fg, Some(Color::White));
         assert_eq!(style.error.fg, Some(Color::Red));
         assert!(style.error.add_modifier.contains(Modifier::BOLD));
         assert_eq!(style.table_row_even.bg, Some(Color::Rgb(30, 30, 30)));
         assert_eq!(style.table_row_odd.bg, Some(Color::Rgb(40, 40, 40)));
+        assert_eq!(style.cursor.block.fg, Some(Color::Black));
+        assert_eq!(style.cursor.block.bg, Some(Color::White));
+        assert_eq!(style.cursor.highlighted.fg, Some(Color::Black));
+        assert_eq!(style.cursor.highlighted.bg, Some(Color::Yellow));
+        assert_eq!(style.cursor.hidden.fg, Some(Color::Gray));
     }
 
     #[test]
