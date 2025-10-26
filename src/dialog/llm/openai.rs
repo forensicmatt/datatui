@@ -14,15 +14,22 @@ use serde::{Deserialize, Serialize};
 pub struct OpenAIConfig {
     pub api_key: String,
     pub base_url: String,
-    pub model: String,
 }
 
 impl Default for OpenAIConfig {
     fn default() -> Self {
+        let api_key = std::env::var("OPENAI_API_KEY")
+            .unwrap_or_else(|_| String::new());
+
+        let base_url = if !api_key.is_empty() {
+            "https://api.openai.com/v1".to_string()
+        } else {
+            String::new()
+        };
+
         Self {
-            api_key: String::new(),
-            base_url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-4o".to_string(),
+            api_key,
+            base_url,
         }
     }
 }
@@ -34,13 +41,13 @@ pub struct OpenAiConfigDialog {
     pub show_instructions: bool,
     pub app_config: Config,
     pub current_field: Field,
+    pub cursor_position: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Field {
     ApiKey,
     BaseUrl,
-    Model,
 }
 
 impl Default for Field {
@@ -63,6 +70,7 @@ impl OpenAiConfigDialog {
             show_instructions: true,
             app_config: Config::default(),
             current_field: Field::ApiKey,
+            cursor_position: 0,
         }
     }
 
@@ -73,6 +81,7 @@ impl OpenAiConfigDialog {
             show_instructions: true,
             app_config: config,
             current_field: Field::ApiKey,
+            cursor_position: 0,
         }
     }
 
@@ -95,7 +104,6 @@ impl OpenAiConfigDialog {
         match self.current_field {
             Field::ApiKey => &self.config.api_key,
             Field::BaseUrl => &self.config.base_url,
-            Field::Model => &self.config.model,
         }
     }
 
@@ -103,24 +111,44 @@ impl OpenAiConfigDialog {
         match self.current_field {
             Field::ApiKey => self.config.api_key = value,
             Field::BaseUrl => self.config.base_url = value,
-            Field::Model => self.config.model = value,
         }
     }
 
     fn move_to_next_field(&mut self) {
         self.current_field = match self.current_field {
             Field::ApiKey => Field::BaseUrl,
-            Field::BaseUrl => Field::Model,
-            Field::Model => Field::ApiKey,
+            Field::BaseUrl => Field::ApiKey,
         };
+        self.cursor_position = self.get_current_field_value().len();
     }
 
     fn move_to_previous_field(&mut self) {
         self.current_field = match self.current_field {
-            Field::ApiKey => Field::Model,
+            Field::ApiKey => Field::BaseUrl,
             Field::BaseUrl => Field::ApiKey,
-            Field::Model => Field::BaseUrl,
         };
+        self.cursor_position = self.get_current_field_value().len();
+    }
+
+    fn move_cursor_left(&mut self) {
+        if self.cursor_position > 0 {
+            self.cursor_position -= 1;
+        }
+    }
+
+    fn move_cursor_right(&mut self) {
+        let current_value = self.get_current_field_value();
+        if self.cursor_position < current_value.len() {
+            self.cursor_position += 1;
+        }
+    }
+
+    fn move_cursor_to_end(&mut self) {
+        self.cursor_position = self.get_current_field_value().len();
+    }
+
+    fn move_cursor_to_start(&mut self) {
+        self.cursor_position = 0;
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {
@@ -154,7 +182,6 @@ impl OpenAiConfigDialog {
         let fields = [
             (Field::ApiKey, "API Key:", &self.config.api_key),
             (Field::BaseUrl, "Base URL:", &self.config.base_url),
-            (Field::Model, "Model:", &self.config.model),
         ];
 
         for (field, label, value) in fields.iter() {
@@ -172,13 +199,29 @@ impl OpenAiConfigDialog {
             } else {
                 Style::default().fg(Color::White)
             };
-            buf.set_string(x, y + 1, value, value_style);
+            
+            if is_current {
+                // Display text with overlay block cursor
+                let cursor_pos = self.cursor_position.min(value.len());
+                
+                // Draw the full text first
+                buf.set_string(x, y + 1, value, value_style);
+                
+                // Overlay the block cursor at the cursor position
+                let cursor_x = x + value.chars().take(cursor_pos).map(|c| c.len_utf8()).sum::<usize>() as u16;
+                if cursor_pos < value.len() {
+                    // Cursor is on a character - overlay it with block cursor
+                    let char_at_cursor = value.chars().nth(cursor_pos).unwrap_or(' ');
+                    buf.set_string(cursor_x, y + 1, char_at_cursor.to_string(), self.app_config.style_config.cursor.block());
+                } else {
+                    // Cursor is at the end - overlay a space with block cursor
+                    buf.set_string(cursor_x, y + 1, " ", self.app_config.style_config.cursor.block());
+                }
+            } else {
+                buf.set_string(x, y + 1, value, value_style);
+            }
             y += 3;
         }
-
-        y += 2;
-        buf.set_string(x, y, "Enter: Apply  Esc: Cancel  Tab: Next Field  Shift+Tab: Previous Field", 
-            Style::default().fg(Color::Gray));
 
         if self.show_instructions && let Some(instructions_area) = instructions_area {
             let instructions_paragraph = Paragraph::new(instructions.as_str())
@@ -246,8 +289,9 @@ impl OpenAiConfigDialog {
                 }
                 Action::Backspace => {
                     let mut current_value = self.get_current_field_value().to_string();
-                    if !current_value.is_empty() {
-                        current_value.pop();
+                    if self.cursor_position > 0 && self.cursor_position <= current_value.len() {
+                        current_value.remove(self.cursor_position - 1);
+                        self.cursor_position -= 1;
                         self.set_current_field_value(current_value);
                     }
                     return None;
@@ -283,17 +327,44 @@ impl OpenAiConfigDialog {
                 self.move_to_next_field();
                 return None;
             }
+            KeyCode::Left => {
+                self.move_cursor_left();
+                return None;
+            }
+            KeyCode::Right => {
+                self.move_cursor_right();
+                return None;
+            }
+            KeyCode::Home => {
+                self.move_cursor_to_start();
+                return None;
+            }
+            KeyCode::End => {
+                self.move_cursor_to_end();
+                return None;
+            }
             KeyCode::Backspace => {
                 let mut current_value = self.get_current_field_value().to_string();
-                if !current_value.is_empty() {
-                    current_value.pop();
+                if self.cursor_position > 0 && self.cursor_position <= current_value.len() {
+                    current_value.remove(self.cursor_position - 1);
+                    self.cursor_position -= 1;
+                    self.set_current_field_value(current_value);
+                }
+                return None;
+            }
+            KeyCode::Delete => {
+                let mut current_value = self.get_current_field_value().to_string();
+                if self.cursor_position < current_value.len() {
+                    current_value.remove(self.cursor_position);
                     self.set_current_field_value(current_value);
                 }
                 return None;
             }
             KeyCode::Char(c) => {
                 let mut current_value = self.get_current_field_value().to_string();
-                current_value.push(c);
+                let cursor_pos = self.cursor_position.min(current_value.len());
+                current_value.insert(cursor_pos, c);
+                self.cursor_position += 1;
                 self.set_current_field_value(current_value);
                 return None;
             }

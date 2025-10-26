@@ -14,19 +14,15 @@ use serde::{Deserialize, Serialize};
 pub struct AzureOpenAiConfig {
     pub api_key: String,
     pub base_url: String,
-    pub deployment: String,
     pub api_version: String,
-    pub model: String,
 }
 
 impl Default for AzureOpenAiConfig {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            base_url: "https://your-resource.openai.azure.com/".to_string(),
-            deployment: String::new(),
-            api_version: "2024-02-15-preview".to_string(),
-            model: "gpt-4o".to_string(),
+            base_url: String::new(),
+            api_version: String::new(),
         }
     }
 }
@@ -45,9 +41,7 @@ pub struct AzureOpenAiConfigDialog {
 pub enum Field {
     ApiKey,
     BaseUrl,
-    Deployment,
     ApiVersion,
-    Model,
 }
 
 impl Default for Field {
@@ -104,9 +98,7 @@ impl AzureOpenAiConfigDialog {
         match self.current_field {
             Field::ApiKey => &self.config.api_key,
             Field::BaseUrl => &self.config.base_url,
-            Field::Deployment => &self.config.deployment,
             Field::ApiVersion => &self.config.api_version,
-            Field::Model => &self.config.model,
         }
     }
 
@@ -114,30 +106,24 @@ impl AzureOpenAiConfigDialog {
         match self.current_field {
             Field::ApiKey => self.config.api_key = value,
             Field::BaseUrl => self.config.base_url = value,
-            Field::Deployment => self.config.deployment = value,
             Field::ApiVersion => self.config.api_version = value,
-            Field::Model => self.config.model = value,
         }
     }
 
     fn move_to_next_field(&mut self) {
         self.current_field = match self.current_field {
             Field::ApiKey => Field::BaseUrl,
-            Field::BaseUrl => Field::Deployment,
-            Field::Deployment => Field::ApiVersion,
-            Field::ApiVersion => Field::Model,
-            Field::Model => Field::ApiKey,
+            Field::BaseUrl => Field::ApiVersion,
+            Field::ApiVersion => Field::ApiKey,
         };
         self.cursor_position = self.get_current_field_value().len();
     }
 
     fn move_to_previous_field(&mut self) {
         self.current_field = match self.current_field {
-            Field::ApiKey => Field::Model,
+            Field::ApiKey => Field::ApiVersion,
             Field::BaseUrl => Field::ApiKey,
-            Field::Deployment => Field::BaseUrl,
-            Field::ApiVersion => Field::Deployment,
-            Field::Model => Field::ApiVersion,
+            Field::ApiVersion => Field::BaseUrl,
         };
         self.cursor_position = self.get_current_field_value().len();
     }
@@ -194,9 +180,7 @@ impl AzureOpenAiConfigDialog {
         let fields = [
             (Field::ApiKey, "API Key:", &self.config.api_key),
             (Field::BaseUrl, "Base URL:", &self.config.base_url),
-            (Field::Deployment, "Deployment:", &self.config.deployment),
             (Field::ApiVersion, "API Version:", &self.config.api_version),
-            (Field::Model, "Model:", &self.config.model),
         ];
 
         for (field, label, value) in fields.iter() {

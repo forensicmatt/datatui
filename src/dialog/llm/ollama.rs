@@ -13,14 +13,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OllamaConfig {
     pub host: String,
-    pub model: String,
 }
 
 impl Default for OllamaConfig {
     fn default() -> Self {
         Self {
-            host: "http://localhost:11434".to_string(),
-            model: "llama3.2".to_string(),
+            host: String::new(),
         }
     }
 }
@@ -32,12 +30,12 @@ pub struct OllamaConfigDialog {
     pub show_instructions: bool,
     pub app_config: Config,
     pub current_field: Field,
+    pub cursor_position: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Field {
     Host,
-    Model,
 }
 
 impl Default for Field {
@@ -60,6 +58,7 @@ impl OllamaConfigDialog {
             show_instructions: true,
             app_config: Config::default(),
             current_field: Field::Host,
+            cursor_position: 0,
         }
     }
 
@@ -70,6 +69,7 @@ impl OllamaConfigDialog {
             show_instructions: true,
             app_config: config,
             current_field: Field::Host,
+            cursor_position: 0,
         }
     }
 
@@ -91,29 +91,44 @@ impl OllamaConfigDialog {
     fn get_current_field_value(&self) -> &str {
         match self.current_field {
             Field::Host => &self.config.host,
-            Field::Model => &self.config.model,
         }
     }
 
     fn set_current_field_value(&mut self, value: String) {
         match self.current_field {
             Field::Host => self.config.host = value,
-            Field::Model => self.config.model = value,
         }
     }
 
     fn move_to_next_field(&mut self) {
-        self.current_field = match self.current_field {
-            Field::Host => Field::Model,
-            Field::Model => Field::Host,
-        };
+        // Only one field, so stay on Host
+        self.cursor_position = self.get_current_field_value().len();
     }
 
     fn move_to_previous_field(&mut self) {
-        self.current_field = match self.current_field {
-            Field::Host => Field::Model,
-            Field::Model => Field::Host,
-        };
+        // Only one field, so stay on Host
+        self.cursor_position = self.get_current_field_value().len();
+    }
+
+    fn move_cursor_left(&mut self) {
+        if self.cursor_position > 0 {
+            self.cursor_position -= 1;
+        }
+    }
+
+    fn move_cursor_right(&mut self) {
+        let current_value = self.get_current_field_value();
+        if self.cursor_position < current_value.len() {
+            self.cursor_position += 1;
+        }
+    }
+
+    fn move_cursor_to_end(&mut self) {
+        self.cursor_position = self.get_current_field_value().len();
+    }
+
+    fn move_cursor_to_start(&mut self) {
+        self.cursor_position = 0;
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {
@@ -146,7 +161,6 @@ impl OllamaConfigDialog {
         // Field labels and values
         let fields = [
             (Field::Host, "Host:", &self.config.host),
-            (Field::Model, "Model:", &self.config.model),
         ];
 
         for (field, label, value) in fields.iter() {
@@ -164,13 +178,29 @@ impl OllamaConfigDialog {
             } else {
                 Style::default().fg(Color::White)
             };
-            buf.set_string(x, y + 1, value, value_style);
+            
+            if is_current {
+                // Display text with overlay block cursor
+                let cursor_pos = self.cursor_position.min(value.len());
+                
+                // Draw the full text first
+                buf.set_string(x, y + 1, value, value_style);
+                
+                // Overlay the block cursor at the cursor position
+                let cursor_x = x + value.chars().take(cursor_pos).map(|c| c.len_utf8()).sum::<usize>() as u16;
+                if cursor_pos < value.len() {
+                    // Cursor is on a character - overlay it with block cursor
+                    let char_at_cursor = value.chars().nth(cursor_pos).unwrap_or(' ');
+                    buf.set_string(cursor_x, y + 1, char_at_cursor.to_string(), self.app_config.style_config.cursor.block());
+                } else {
+                    // Cursor is at the end - overlay a space with block cursor
+                    buf.set_string(cursor_x, y + 1, " ", self.app_config.style_config.cursor.block());
+                }
+            } else {
+                buf.set_string(x, y + 1, value, value_style);
+            }
             y += 3;
         }
-
-        y += 2;
-        buf.set_string(x, y, "Enter: Apply  Esc: Cancel  Tab: Next Field  Shift+Tab: Previous Field", 
-            Style::default().fg(Color::Gray));
 
         if self.show_instructions && let Some(instructions_area) = instructions_area {
             let instructions_paragraph = Paragraph::new(instructions.as_str())
@@ -238,8 +268,9 @@ impl OllamaConfigDialog {
                 }
                 Action::Backspace => {
                     let mut current_value = self.get_current_field_value().to_string();
-                    if !current_value.is_empty() {
-                        current_value.pop();
+                    if self.cursor_position > 0 && self.cursor_position <= current_value.len() {
+                        current_value.remove(self.cursor_position - 1);
+                        self.cursor_position -= 1;
                         self.set_current_field_value(current_value);
                     }
                     return None;
@@ -275,17 +306,44 @@ impl OllamaConfigDialog {
                 self.move_to_next_field();
                 return None;
             }
+            KeyCode::Left => {
+                self.move_cursor_left();
+                return None;
+            }
+            KeyCode::Right => {
+                self.move_cursor_right();
+                return None;
+            }
+            KeyCode::Home => {
+                self.move_cursor_to_start();
+                return None;
+            }
+            KeyCode::End => {
+                self.move_cursor_to_end();
+                return None;
+            }
             KeyCode::Backspace => {
                 let mut current_value = self.get_current_field_value().to_string();
-                if !current_value.is_empty() {
-                    current_value.pop();
+                if self.cursor_position > 0 && self.cursor_position <= current_value.len() {
+                    current_value.remove(self.cursor_position - 1);
+                    self.cursor_position -= 1;
+                    self.set_current_field_value(current_value);
+                }
+                return None;
+            }
+            KeyCode::Delete => {
+                let mut current_value = self.get_current_field_value().to_string();
+                if self.cursor_position < current_value.len() {
+                    current_value.remove(self.cursor_position);
                     self.set_current_field_value(current_value);
                 }
                 return None;
             }
             KeyCode::Char(c) => {
                 let mut current_value = self.get_current_field_value().to_string();
-                current_value.push(c);
+                let cursor_pos = self.cursor_position.min(current_value.len());
+                current_value.insert(cursor_pos, c);
+                self.cursor_position += 1;
                 self.set_current_field_value(current_value);
                 return None;
             }
