@@ -112,11 +112,28 @@ impl ProjectSettingsDialog {
         ])
     }
 
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         let instructions = self.build_instructions_from_config();
-        let layout = split_dialog_area(area, self.show_instructions, 
-            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
+        let optional_instructions = if instructions.is_empty() { None } else { Some(instructions.as_str()) }; 
+        
+        // Create outer block that encompasses the entire area (content + instructions)
+        let outer_block = Block::default()
+            .title("Settings")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Double);
+
+        // Get the inner area from the outer block (this will be the area inside the double border)
+        let inner_area = outer_block.inner(area);
+        
+        // Render the outer block around the entire area
+        outer_block.render(area, buf);
+        
+        // Now split the inner area for content and instructions
+        let layout = split_dialog_area(
+            inner_area, self.show_instructions,
+            optional_instructions
+        );
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
         let wrap_width = content_area.width.saturating_sub(2) as usize;
@@ -126,21 +143,16 @@ impl ProjectSettingsDialog {
             if let Some(browser) = &self.file_browser {
                 browser.render(area, buf);
             }
-            return 1;
+            return;
         }
 
         match &self.mode {
             ProjectSettingsDialogMode::Input => {
-                let block = Block::default()
-                    .title("Project Settings")
-                    .borders(Borders::ALL);
-                let input_area = block.inner(content_area);
-                block.render(content_area, buf);
 
                 // Inline fields: "Label: value" with selection highlighting
-                let line0_y = input_area.y; // Workspace first
-                let line1_y = input_area.y + 1; // OpenAI second
-                let line2_y = input_area.y + 3; // Data Viewer section top
+                let line0_y = content_area.y + 1; // Workspace first
+                let line1_y = content_area.y + 3; // LLM Config second
+                let line2_y = content_area.y + 5; // Data Viewer section top
 
                 // Workspace Path line + [Browse]
                 let label_wp = "Workspace Path: ";
@@ -150,12 +162,12 @@ impl ProjectSettingsDialog {
                     Style::default().fg(Color::White)
                 };
                 let wp_text = format!("{}{}", label_wp, self.workspace_path_input);
-                buf.set_string(input_area.x, line0_y, wp_text, style_wp);
+                buf.set_string(content_area.x, line0_y, wp_text, style_wp);
                 // [Browse] button on same line, right-aligned
                 let browse_text = "[Browse]";
-                let browse_x = input_area
+                let browse_x = content_area
                     .x
-                    + input_area.width.saturating_sub(browse_text.len() as u16 + 1);
+                    + content_area.width.saturating_sub(browse_text.len() as u16 + 1);
                 let browse_style = if self.selected_option == SelectedOption::WorkspaceBrowse {
                     Style::default().fg(Color::Black).bg(Color::White)
                 } else {
@@ -164,7 +176,7 @@ impl ProjectSettingsDialog {
                 buf.set_string(browse_x, line0_y, browse_text, browse_style);
                 // Cursor on workspace input when focused
                 if self.selected_option == SelectedOption::WorkspacePath {
-                    let cursor_x = input_area.x + (label_wp.len() + self.workspace_path_input.len()) as u16;
+                    let cursor_x = content_area.x + (label_wp.len() + self.workspace_path_input.len()) as u16;
                     buf.set_string(cursor_x, line0_y, "_", Style::default().fg(Color::Yellow));
                 }
 
@@ -176,16 +188,16 @@ impl ProjectSettingsDialog {
                     Style::default().fg(Color::White)
                 };
                 let config_text = format!("{}{}", label_config, self.config_path_input);
-                buf.set_string(input_area.x, line1_y, config_text, style_config);
+                buf.set_string(content_area.x, line1_y, config_text, style_config);
                 if self.selected_option == SelectedOption::LlmConfigPath {
-                    let cursor_x = input_area.x + (label_config.len() + self.config_path_input.len()) as u16;
+                    let cursor_x = content_area.x + (label_config.len() + self.config_path_input.len()) as u16;
                     buf.set_string(cursor_x, line1_y, "_", Style::default().fg(Color::Yellow));
                 }
                 // [Browse] button on same line, right-aligned
                 let browse_text = "[Browse]";
-                let browse_x = input_area
+                let browse_x = content_area
                     .x
-                    + input_area.width.saturating_sub(browse_text.len() as u16 + 1);
+                    + content_area.width.saturating_sub(browse_text.len() as u16 + 1);
                 let browse_style = if self.selected_option == SelectedOption::LlmConfigBrowse {
                     Style::default().fg(Color::Black).bg(Color::White)
                 } else {
@@ -195,7 +207,7 @@ impl ProjectSettingsDialog {
 
                 // Configure LLM Clients button on a new line
                 let llm_client_text = "[Configure LLM Clients]";
-                let llm_client_x = input_area.x;
+                let llm_client_x = content_area.x;
                 let llm_client_y = line1_y + 2;
                 let llm_client_style = if self.selected_option == SelectedOption::ConfigureLlmClients {
                     Style::default().fg(Color::Black).bg(Color::White)
@@ -206,9 +218,9 @@ impl ProjectSettingsDialog {
 
                 // Data Viewer section with bordered block
                 let dv_block_area = Rect {
-                    x: input_area.x,
+                    x: content_area.x,
                     y: line2_y + 1, // Move down one line to accommodate LLM Client button
-                    width: input_area.width,
+                    width: content_area.width,
                     height: 3,
                 };
                 let dv_block = Block::default()
@@ -251,13 +263,16 @@ impl ProjectSettingsDialog {
             ProjectSettingsDialogMode::LlmClientDialog => {
                 if let Some(dialog) = &mut self.llm_client_dialog {
                     dialog.render(area, buf);
+                    return;
                 }
             }
         }
 
         if self.show_instructions && let Some(instructions_area) = instructions_area {
             let instructions_paragraph = Paragraph::new(instructions)
-                .block(Block::default().borders(Borders::ALL).title("Instructions"))
+                .block(Block::default()
+                    .title("Instructions")
+                    .borders(Borders::ALL))
                 .style(Style::default().fg(Color::Yellow))
                 .wrap(Wrap { trim: true });
             instructions_paragraph.render(instructions_area, buf);
@@ -266,7 +281,6 @@ impl ProjectSettingsDialog {
         if self.message_dialog_mode && let Some(msg) = &self.message_dialog {
             msg.render(area, buf);
         }
-        1
     }
 
     /// Handle a key event. Returns Some(Action) if the dialog should close and apply, None otherwise.

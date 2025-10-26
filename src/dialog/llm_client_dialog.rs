@@ -168,10 +168,6 @@ impl LlmClientDialog {
             (crate::config::Mode::Global, crate::action::Action::Escape),
             (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
             (crate::config::Mode::LlmClientDialog, crate::action::Action::Enter),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::Up),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::Down),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::Tab),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::Backspace),
             (crate::config::Mode::LlmClientDialog, crate::action::Action::LlmClientDialogApplied(LlmConfig::default())),
             (crate::config::Mode::LlmClientDialog, crate::action::Action::LlmClientDialogCancel),
         ])
@@ -206,7 +202,7 @@ impl LlmClientDialog {
         };
     }
 
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         let instructions = self.build_instructions_from_config();
         
@@ -234,18 +230,24 @@ impl LlmClientDialog {
 
                 let items = Self::get_provider_list_items();
                 let list = List::new(items)
-                    .highlight_style(Style::default().bg(Color::Blue).fg(Color::White))
+                    .highlight_style(Style::default()
+                        .bg(Color::Blue)
+                        .fg(Color::White))
                     .highlight_symbol("> ");
-                ratatui::prelude::StatefulWidget::render(list, list_area, buf, &mut self.provider_list_state);
+
+                ratatui::prelude::StatefulWidget::render(
+                    list, list_area, buf, 
+                    &mut self.provider_list_state
+                );
             }
             LlmClientDialogMode::AzureConfiguration => {
-                self.azure_dialog.render(content_area, buf);
+                self.azure_dialog.render(area, buf);
             }
             LlmClientDialogMode::OpenAIConfiguration => {
-                self.openai_dialog.render(content_area, buf);
+                self.openai_dialog.render(area, buf);
             }
             LlmClientDialogMode::OllamaConfiguration => {
-                self.ollama_dialog.render(content_area, buf);
+                self.ollama_dialog.render(area, buf);
             }
             LlmClientDialogMode::Error(msg) => {
                 let y = content_area.y;
@@ -265,7 +267,6 @@ impl LlmClientDialog {
                 .wrap(Wrap { trim: true });
             instructions_paragraph.render(instructions_area, buf);
         }
-        1
     }
 
 
