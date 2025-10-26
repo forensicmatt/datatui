@@ -62,6 +62,8 @@ pub struct ProjectSettingsDialog {
     pub show_instructions: bool,
     pub workspace_path_input: String,
     pub config_path_input: String,
+    pub workspace_cursor_position: usize,
+    pub config_cursor_position: usize,
     pub selected_option: SelectedOption,
     pub file_browser_mode: bool,
     pub file_browser_path: PathBuf,
@@ -85,6 +87,8 @@ impl ProjectSettingsDialog {
             show_instructions: true,
             workspace_path_input,
             config_path_input,
+            workspace_cursor_position: 0,
+            config_cursor_position: 0,
             selected_option: SelectedOption::WorkspacePath,
             file_browser_mode: false,
             file_browser_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -156,43 +160,61 @@ impl ProjectSettingsDialog {
 
                 // Workspace Path line + [Browse]
                 let label_wp = "Workspace Path: ";
-                let style_wp = if self.selected_option == SelectedOption::WorkspacePath {
-                    Style::default().fg(Color::Black).bg(Color::White)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                let wp_text = format!("{}{}", label_wp, self.workspace_path_input);
-                buf.set_string(content_area.x, line0_y, wp_text, style_wp);
+                let label_style = Style::default().fg(Color::White);
+                let input_style = Style::default().fg(Color::White);
+                
+                // Draw label
+                buf.set_string(content_area.x, line0_y, label_wp, label_style);
+                
+                // Draw input value
+                buf.set_string(content_area.x + label_wp.len() as u16, line0_y, &self.workspace_path_input, input_style);
+                
+                // Overlay block cursor when focused
+                if self.selected_option == SelectedOption::WorkspacePath {
+                    let cursor_x = content_area.x + label_wp.len() as u16 + 
+                        self.workspace_path_input.chars().take(self.workspace_cursor_position).map(|c| c.len_utf8()).sum::<usize>() as u16;
+                    let char_at_cursor = if self.workspace_cursor_position < self.workspace_path_input.len() {
+                        self.workspace_path_input.chars().nth(self.workspace_cursor_position).unwrap_or(' ')
+                    } else {
+                        ' '
+                    };
+                    buf.set_string(cursor_x, line0_y, char_at_cursor.to_string(), self.keybindings_config.style_config.cursor.block());
+                }
+                
                 // [Browse] button on same line, right-aligned
                 let browse_text = "[Browse]";
-                let browse_x = content_area
-                    .x
-                    + content_area.width.saturating_sub(browse_text.len() as u16 + 1);
+                let browse_x = content_area.x + 
+                    content_area.width.saturating_sub(browse_text.len() as u16 + 1) - 1;
                 let browse_style = if self.selected_option == SelectedOption::WorkspaceBrowse {
                     Style::default().fg(Color::Black).bg(Color::White)
                 } else {
                     Style::default().fg(Color::Gray)
                 };
                 buf.set_string(browse_x, line0_y, browse_text, browse_style);
-                // Cursor on workspace input when focused
-                if self.selected_option == SelectedOption::WorkspacePath {
-                    let cursor_x = content_area.x + (label_wp.len() + self.workspace_path_input.len()) as u16;
-                    buf.set_string(cursor_x, line0_y, "_", Style::default().fg(Color::Yellow));
-                }
 
                 // LLM Config Path line + [Browse]
                 let label_config = "LLM Config Path: ";
-                let style_config = if self.selected_option == SelectedOption::LlmConfigPath {
-                    Style::default().fg(Color::Black).bg(Color::White)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                let config_text = format!("{}{}", label_config, self.config_path_input);
-                buf.set_string(content_area.x, line1_y, config_text, style_config);
+                let label_style = Style::default().fg(Color::White);
+                let input_style = Style::default().fg(Color::White);
+                
+                // Draw label
+                buf.set_string(content_area.x, line1_y, label_config, label_style);
+                
+                // Draw input value
+                buf.set_string(content_area.x + label_config.len() as u16, line1_y, &self.config_path_input, input_style);
+                
+                // Overlay block cursor when focused
                 if self.selected_option == SelectedOption::LlmConfigPath {
-                    let cursor_x = content_area.x + (label_config.len() + self.config_path_input.len()) as u16;
-                    buf.set_string(cursor_x, line1_y, "_", Style::default().fg(Color::Yellow));
+                    let cursor_x = content_area.x + label_config.len() as u16 + 
+                        self.config_path_input.chars().take(self.config_cursor_position).map(|c| c.len_utf8()).sum::<usize>() as u16;
+                    let char_at_cursor = if self.config_cursor_position < self.config_path_input.len() {
+                        self.config_path_input.chars().nth(self.config_cursor_position).unwrap_or(' ')
+                    } else {
+                        ' '
+                    };
+                    buf.set_string(cursor_x, line1_y, char_at_cursor.to_string(), self.keybindings_config.style_config.cursor.block());
                 }
+                
                 // [Browse] button on same line, right-aligned
                 let browse_text = "[Browse]";
                 let browse_x = content_area
@@ -233,9 +255,12 @@ impl ProjectSettingsDialog {
                 let dv_label = "Auto Exapand Value Display: ";
                 let dv_value = if self.config.data_viewer.auto_exapand_value_display { "true" } else { "false" };
                 let dv_style = if self.selected_option == SelectedOption::AutoExpandValueDisplay {
-                    Style::default().fg(Color::Black).bg(Color::White)
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::White)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default()
+                        .fg(Color::White)
                 };
                 buf.set_string(dv_inner.x, dv_inner.y, format!("{dv_label}{dv_value}"), dv_style);
 
@@ -244,7 +269,9 @@ impl ProjectSettingsDialog {
                 let save_x = content_area.x + content_area.width.saturating_sub(save_text.len() as u16 + 2);
                 let save_y = content_area.y + content_area.height.saturating_sub(2);
                 let save_style = if self.selected_option == SelectedOption::Save {
-                    Style::default().fg(Color::Black).bg(Color::White)
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::White)
                 } else {
                     Style::default().fg(Color::Gray)
                 };
@@ -380,6 +407,17 @@ impl ProjectSettingsDialog {
                                 SelectedOption::LlmConfigBrowse => SelectedOption::WorkspaceBrowse,
                                 SelectedOption::WorkspaceBrowse => SelectedOption::Save, // wrap around
                             };
+                            
+                            // Initialize cursor position when switching to text input fields
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => {
+                                    self.workspace_cursor_position = self.workspace_path_input.len();
+                                }
+                                SelectedOption::LlmConfigPath => {
+                                    self.config_cursor_position = self.config_path_input.len();
+                                }
+                                _ => {}
+                            }
                         }
                         KeyCode::Down => {
                             // Down navigation:
@@ -397,6 +435,17 @@ impl ProjectSettingsDialog {
                                 SelectedOption::LlmConfigBrowse => SelectedOption::Save,
                                 SelectedOption::Save => SelectedOption::WorkspaceBrowse, // wrap around
                             };
+                            
+                            // Initialize cursor position when switching to text input fields
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => {
+                                    self.workspace_cursor_position = self.workspace_path_input.len();
+                                }
+                                SelectedOption::LlmConfigPath => {
+                                    self.config_cursor_position = self.config_path_input.len();
+                                }
+                                _ => {}
+                            }
                         }
                         KeyCode::Enter => {
                             match self.selected_option {
@@ -446,45 +495,123 @@ impl ProjectSettingsDialog {
                         KeyCode::Backspace => {
                             // Handle backspace for current field
                             match self.selected_option {
-                                SelectedOption::WorkspacePath => { self.workspace_path_input.pop(); }
-                                SelectedOption::LlmConfigPath => { self.config_path_input.pop(); }
+                                SelectedOption::WorkspacePath => { 
+                                    if self.workspace_cursor_position > 0 {
+                                        self.workspace_path_input.remove(self.workspace_cursor_position - 1);
+                                        self.workspace_cursor_position -= 1;
+                                    }
+                                }
+                                SelectedOption::LlmConfigPath => { 
+                                    if self.config_cursor_position > 0 {
+                                        self.config_path_input.remove(self.config_cursor_position - 1);
+                                        self.config_cursor_position -= 1;
+                                    }
+                                }
                                 _ => {}
                             }
                         }
                         KeyCode::Char(c) => {
                             // Handle character input for current field
                             match self.selected_option {
-                                SelectedOption::WorkspacePath => { self.workspace_path_input.push(c); }
-                                SelectedOption::LlmConfigPath => { self.config_path_input.push(c); }
+                                SelectedOption::WorkspacePath => { 
+                                    let cursor_pos = self.workspace_cursor_position.min(self.workspace_path_input.len());
+                                    self.workspace_path_input.insert(cursor_pos, c);
+                                    self.workspace_cursor_position += 1;
+                                }
+                                SelectedOption::LlmConfigPath => { 
+                                    let cursor_pos = self.config_cursor_position.min(self.config_path_input.len());
+                                    self.config_path_input.insert(cursor_pos, c);
+                                    self.config_cursor_position += 1;
+                                }
                                 _ => {}
                             }
                         }
                         KeyCode::Right => {
-                            // Right navigation:
-                            // Workspace Path -> [Browse] (workspace path)
-                            // LLM Config Path -> [Browse] (LLM config path)
-                            // [Configure LLM Clients] -> [Save]
-                            // Auto Expand Value Display -> [Save]
-                            self.selected_option = match self.selected_option {
-                                SelectedOption::WorkspacePath => SelectedOption::WorkspaceBrowse,
-                                SelectedOption::LlmConfigPath => SelectedOption::LlmConfigBrowse,
-                                SelectedOption::ConfigureLlmClients => SelectedOption::Save,
-                                SelectedOption::AutoExpandValueDisplay => SelectedOption::Save,
-                                _ => SelectedOption::WorkspacePath, // default
-                            };
+                            // Handle cursor movement or navigation
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => {
+                                    if self.workspace_cursor_position < self.workspace_path_input.len() {
+                                        self.workspace_cursor_position += 1;
+                                    } else {
+                                        // Move to browse button
+                                        self.selected_option = SelectedOption::WorkspaceBrowse;
+                                    }
+                                }
+                                SelectedOption::LlmConfigPath => {
+                                    if self.config_cursor_position < self.config_path_input.len() {
+                                        self.config_cursor_position += 1;
+                                    } else {
+                                        // Move to browse button
+                                        self.selected_option = SelectedOption::LlmConfigBrowse;
+                                    }
+                                }
+                                _ => {
+                                    // Right navigation for other options:
+                                    // [Configure LLM Clients] -> [Save]
+                                    // Auto Expand Value Display -> [Save]
+                                    self.selected_option = match self.selected_option {
+                                        SelectedOption::ConfigureLlmClients => SelectedOption::Save,
+                                        SelectedOption::AutoExpandValueDisplay => SelectedOption::Save,
+                                        _ => SelectedOption::WorkspacePath, // default
+                                    };
+                                }
+                            }
                         }
                         KeyCode::Left => {
-                            // Left navigation (inverse of Right):
-                            // [Browse] (workspace path) -> Workspace Path
-                            // [Browse] (LLM config path) -> LLM Config Path
-                            // [Save] -> [Configure LLM Clients]
-                            // [Save] -> Auto Expand Value Display
-                            self.selected_option = match self.selected_option {
-                                SelectedOption::WorkspaceBrowse => SelectedOption::WorkspacePath,
-                                SelectedOption::LlmConfigBrowse => SelectedOption::LlmConfigPath,
-                                SelectedOption::Save => SelectedOption::ConfigureLlmClients, // default choice
-                                _ => SelectedOption::WorkspacePath, // default
-                            };
+                            // Handle cursor movement or navigation
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => {
+                                    if self.workspace_cursor_position > 0 {
+                                        self.workspace_cursor_position -= 1;
+                                    }
+                                }
+                                SelectedOption::LlmConfigPath => {
+                                    if self.config_cursor_position > 0 {
+                                        self.config_cursor_position -= 1;
+                                    }
+                                }
+                                SelectedOption::WorkspaceBrowse => {
+                                    // Move to end of workspace path input
+                                    self.selected_option = SelectedOption::WorkspacePath;
+                                    self.workspace_cursor_position = self.workspace_path_input.len();
+                                }
+                                SelectedOption::LlmConfigBrowse => {
+                                    // Move to end of config path input
+                                    self.selected_option = SelectedOption::LlmConfigPath;
+                                    self.config_cursor_position = self.config_path_input.len();
+                                }
+                                SelectedOption::Save => {
+                                    // Left navigation from Save button
+                                    self.selected_option = SelectedOption::ConfigureLlmClients; // default choice
+                                }
+                                _ => {
+                                    self.selected_option = SelectedOption::WorkspacePath; // default
+                                }
+                            }
+                        }
+                        KeyCode::Home => {
+                            // Move cursor to beginning of current field
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => {
+                                    self.workspace_cursor_position = 0;
+                                }
+                                SelectedOption::LlmConfigPath => {
+                                    self.config_cursor_position = 0;
+                                }
+                                _ => {}
+                            }
+                        }
+                        KeyCode::End => {
+                            // Move cursor to end of current field
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => {
+                                    self.workspace_cursor_position = self.workspace_path_input.len();
+                                }
+                                SelectedOption::LlmConfigPath => {
+                                    self.config_cursor_position = self.config_path_input.len();
+                                }
+                                _ => {}
+                            }
                         }
                         _ => {}
                     }
