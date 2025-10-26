@@ -17,8 +17,11 @@ pub struct OllamaConfig {
 
 impl Default for OllamaConfig {
     fn default() -> Self {
+        let host = std::env::var("OLLAMA_HOST")
+            .unwrap_or_else(|_| "http://localhost:11434".to_string());
+            
         Self {
-            host: String::new(),
+            host,
         }
     }
 }
@@ -83,8 +86,6 @@ impl OllamaConfigDialog {
             (crate::config::Mode::LlmClientDialog, crate::action::Action::Down),
             (crate::config::Mode::LlmClientDialog, crate::action::Action::Tab),
             (crate::config::Mode::LlmClientDialog, crate::action::Action::Backspace),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::LlmClientDialogApplied(crate::dialog::llm_client_dialog::LlmConfig::default())),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::LlmClientDialogCancel),
         ])
     }
 

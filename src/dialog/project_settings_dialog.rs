@@ -14,7 +14,7 @@ use crate::components::dialog_layout::split_dialog_area;
 use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserMode, FileBrowserAction};
 use crate::dialog::message_dialog::MessageDialog;
 use crate::dialog::llm_client_dialog::LlmClientDialog;
-use crate::providers::openai::Client as OpenAIClient;
+// use crate::providers::openai::Client as OpenAIClient;
 use crate::config::get_config_dir;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,7 +68,6 @@ pub struct ProjectSettingsDialog {
     pub file_browser_mode: bool,
     pub file_browser_path: PathBuf,
     pub file_browser: Option<FileBrowserDialog>,
-    pub openai_client: Option<OpenAIClient>,
     pub message_dialog_mode: bool,
     pub message_dialog: Option<MessageDialog>,
     pub llm_client_dialog: Option<LlmClientDialog>,
@@ -93,7 +92,6 @@ impl ProjectSettingsDialog {
             file_browser_mode: false,
             file_browser_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             file_browser: None,
-            openai_client: None,
             message_dialog_mode: false,
             message_dialog: None,
             llm_client_dialog: None,

@@ -85,12 +85,7 @@ impl AzureOpenAiConfigDialog {
             (crate::config::Mode::Global, crate::action::Action::Escape),
             (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
             (crate::config::Mode::LlmClientDialog, crate::action::Action::Enter),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::Up),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::Down),
             (crate::config::Mode::LlmClientDialog, crate::action::Action::Tab),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::Backspace),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::LlmClientDialogApplied(crate::dialog::llm_client_dialog::LlmConfig::default())),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::LlmClientDialogCancel),
         ])
     }
 
