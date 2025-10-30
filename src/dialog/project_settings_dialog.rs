@@ -457,7 +457,7 @@ impl ProjectSettingsDialog {
                                 }
                                 SelectedOption::ConfigureLlmClients => {
                                     // Open LLM Client dialog
-                                    let llm_config = self.keybindings_config.llm_config.clone().unwrap_or_default();
+                                    let llm_config = self.keybindings_config.llm_config.clone();
                                     let mut llm_dialog = LlmClientDialog::new_with_config(
                                         self.keybindings_config.clone(),
                                         llm_config
@@ -646,7 +646,7 @@ impl ProjectSettingsDialog {
                                 // Save the LLM config if it was modified
                                 if let Some(llm_dialog) = &self.llm_client_dialog {
                                     // Update the main config with the new LLM config
-                                    self.keybindings_config.llm_config = Some(llm_dialog.llm_config.clone());
+                                    self.keybindings_config.llm_config = llm_dialog.llm_config.clone();
                                     // Save the config to file
                                     let _ = self.keybindings_config.save_llm_config();
                                 }

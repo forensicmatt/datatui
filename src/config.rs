@@ -68,7 +68,7 @@ pub struct Config {
     #[serde(default)]
     pub style_config: StyleConfig,
     #[serde(default)]
-    pub llm_config: Option<LlmConfig>,
+    pub llm_config: LlmConfig,
 }
 
 lazy_static! {
@@ -143,17 +143,17 @@ impl Config {
                 Ok(content) => {
                     match toml::from_str::<LlmConfig>(&content) {
                         Ok(llm_config) => {
-                            self.llm_config = Some(llm_config);
+                            self.llm_config = llm_config;
                         }
                         Err(e) => {
                             eprintln!("Warning: Failed to parse LLM config file: {}", e);
-                            // Keep llm_config as None if parsing fails
+                            // Keep default llm_config if parsing fails
                         }
                     }
                 }
                 Err(e) => {
                     eprintln!("Warning: Failed to read LLM config file: {}", e);
-                    // Keep llm_config as None if reading fails
+                    // Keep default llm_config if reading fails
                 }
             }
         }
@@ -164,30 +164,22 @@ impl Config {
 
     /// Save LLM configuration to llm-settings.toml file
     pub fn save_llm_config(&self) -> Result<(), std::io::Error> {
-        if let Some(llm_config) = &self.llm_config {
-            let config_dir = get_config_dir();
-            let llm_config_path = config_dir.join("llm-settings.toml");
-            
-            if let Some(parent) = llm_config_path.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            
-            let toml_content = toml::to_string_pretty(llm_config)
-                .unwrap_or_else(|_| "# LLM Settings\n# This file contains configuration for LLM providers\n".to_string());
-            
-            fs::write(&llm_config_path, toml_content)
-        } else {
-            // No LLM config to save
-            Ok(())
+        let config_dir = get_config_dir();
+        let llm_config_path = config_dir.join("llm-settings.toml");
+        
+        if let Some(parent) = llm_config_path.parent() {
+            let _ = fs::create_dir_all(parent);
         }
+        
+        let toml_content = toml::to_string_pretty(&self.llm_config)
+            .unwrap_or_else(|_| "# LLM Settings\n# This file contains configuration for LLM providers\n".to_string());
+        
+        fs::write(&llm_config_path, toml_content)
     }
 
-    /// Get LLM config or create default if none exists
-    pub fn get_or_create_llm_config(&mut self) -> &mut LlmConfig {
-        if self.llm_config.is_none() {
-            self.llm_config = Some(LlmConfig::default());
-        }
-        self.llm_config.as_mut().unwrap()
+    /// Get LLM config (always available now)
+    pub fn get_llm_config(&mut self) -> &mut LlmConfig {
+        &mut self.llm_config
     }
 
     /// Build instructions string from list of (mode, action) tuples

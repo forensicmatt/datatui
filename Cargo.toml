@@ -56,7 +56,7 @@ calamine = "0.29.0"
 uuid = { version = "1.17.0", features = ["v4"] }
 jmespath = "0.3"
 thiserror = "1.0.65"
-rig-core = "0.17.1"
+rig-core = "0.23.1"
 reqwest = { version = "0.12.8", features = ["json", "blocking", "rustls-tls"] }
 linfa = "0.7.1"
 linfa-reduction = "0.7.1"
