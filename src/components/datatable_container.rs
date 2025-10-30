@@ -90,7 +90,6 @@ use serde_json::{Value as JsonValue, Map as JsonMap};
 use jmespath;
 use serde_json::Value;
 use polars::prelude::{NamedFrom, IntoColumn, Series, ListChunked, PlSmallStr, DataType, IntoSeries};
-use crate::providers::openai::Client as OpenAIClient;
 use crate::dialog::OperationOptions;
 use crate::dialog::{ClusterAlgorithm, KmeansOptions, DbscanOptions};
 // use crate::dialog::DataExportDialog; // moved to DataTabManagerDialog
@@ -217,8 +216,8 @@ impl DataTableContainer {
         info!("execute_generate_embeddings: source_column: {}, new_column_name: {}, model_name: {}, num_dimensions: {}", source_column, new_column_name, model_name, num_dimensions);
         
         // Ensure API client
-        let client = OpenAIClient::from_env()
-            .ok_or_else(|| color_eyre::eyre::eyre!("OPENAI_API_KEY not set"))?;
+        // let client = OpenAIClient::from_env()
+        //     .ok_or_else(|| color_eyre::eyre::eyre!("OPENAI_API_KEY not set"))?;
 
         // Prepare source series as strings
         let df_arc = self.datatable.get_dataframe()?;
@@ -258,43 +257,43 @@ impl DataTableContainer {
 
         // Generate embeddings for unique values
         let dims_opt = if num_dimensions > 0 { Some(num_dimensions) } else { None };
-        let unique_embeddings = client.generate_embeddings(&uniques, Some(model_name), dims_opt)
-            .map_err(|e| color_eyre::eyre::eyre!("Embeddings error: {}", e))?;
+        // let unique_embeddings = client.generate_embeddings(&uniques, Some(model_name), dims_opt)
+        //     .map_err(|e| color_eyre::eyre::eyre!("Embeddings error: {}", e))?;
 
-        if unique_embeddings.len() != uniques.len() {
-            return Err(color_eyre::eyre::eyre!("Embeddings provider returned wrong length"));
-        }
+        // if unique_embeddings.len() != uniques.len() {
+        //     return Err(color_eyre::eyre::eyre!("Embeddings provider returned wrong length"));
+        // }
 
-        // Map back per row into a ListChunked
-        let row_embeddings_iter = row_texts.into_iter().map(|opt_text| {
-            opt_text.map(|t| {
-                let idx = unique_index.get(&t).copied().unwrap();
-                let v: &Vec<f32> = &unique_embeddings[idx];
-                Series::new(PlSmallStr::EMPTY, v.clone())
-            })
-        });
-        let mut lc: ListChunked = row_embeddings_iter.collect();
-        // Determine column name
-        let mut new_name = if new_column_name.trim().is_empty() {
-            format!("{source_column}_emb")
-        } else {
-            new_column_name.to_string()
-        };
-        if df_ref.get_column_names_owned()
-            .into_iter()
-            .any(|n| n.as_str() == new_name)
-        {
-            new_name = format!("{new_name}__emb");
-        }
-        lc.rename(PlSmallStr::from_str(&new_name));
-        let list_series = lc.into_series();
-        // Build new DataFrame with appended column
-        let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(df_ref.width() + 1);
-        for c in df_ref.get_columns() { cols.push(c.clone()); }
-        cols.push(list_series.into_column());
-        let new_df = polars::prelude::DataFrame::new(cols)
-            .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame: {}", e))?;
-        self.datatable.dataframe.set_current_df(new_df);
+        // // Map back per row into a ListChunked
+        // let row_embeddings_iter = row_texts.into_iter().map(|opt_text| {
+        //     opt_text.map(|t| {
+        //         let idx = unique_index.get(&t).copied().unwrap();
+        //         let v: &Vec<f32> = &unique_embeddings[idx];
+        //         Series::new(PlSmallStr::EMPTY, v.clone())
+        //     })
+        // });
+        // let mut lc: ListChunked = row_embeddings_iter.collect();
+        // // Determine column name
+        // let mut new_name = if new_column_name.trim().is_empty() {
+        //     format!("{source_column}_emb")
+        // } else {
+        //     new_column_name.to_string()
+        // };
+        // if df_ref.get_column_names_owned()
+        //     .into_iter()
+        //     .any(|n| n.as_str() == new_name)
+        // {
+        //     new_name = format!("{new_name}__emb");
+        // }
+        // lc.rename(PlSmallStr::from_str(&new_name));
+        // let list_series = lc.into_series();
+        // // Build new DataFrame with appended column
+        // let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(df_ref.width() + 1);
+        // for c in df_ref.get_columns() { cols.push(c.clone()); }
+        // cols.push(list_series.into_column());
+        // let new_df = polars::prelude::DataFrame::new(cols)
+        //     .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame: {}", e))?;
+        // self.datatable.dataframe.set_current_df(new_df);
         Ok(())
     }
 
