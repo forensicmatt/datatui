@@ -9,10 +9,16 @@ use crate::components::dialog_layout::split_dialog_area;
 use crate::config::Config;
 use crate::dialog::llm_client_dialog::LlmProvider;
 use serde::{Deserialize, Serialize};
+use crate::dialog::llm::LlmConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OllamaConfig {
     pub host: String,
+}
+impl LlmConfig for OllamaConfig {
+    fn is_configured(&self) -> bool {
+        !self.host.is_empty()
+    }
 }
 
 impl Default for OllamaConfig {

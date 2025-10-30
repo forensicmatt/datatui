@@ -9,12 +9,19 @@ use crate::components::dialog_layout::split_dialog_area;
 use crate::config::Config;
 use crate::dialog::llm_client_dialog::LlmProvider;
 use serde::{Deserialize, Serialize};
+use crate::dialog::llm::LlmConfig;
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AzureOpenAiConfig {
     pub api_key: String,
     pub base_url: String,
     pub api_version: String,
+}
+impl LlmConfig for AzureOpenAiConfig {
+    fn is_configured(&self) -> bool {
+        !self.api_key.is_empty() && !self.base_url.is_empty()
+    }
 }
 
 impl Default for AzureOpenAiConfig {

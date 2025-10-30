@@ -77,6 +77,36 @@ impl Default for LlmConfig {
 }
 
 impl LlmConfig {
+    /// Returns a list of configured providers
+    /// If no providers are configured, return None.
+    pub fn configured_list(&self) -> Option<Vec<LlmProvider>> {
+        let mut providers = Vec::new();
+
+        if let Some(cfg) = &self.azure {
+            if crate::dialog::llm::LlmConfig::is_configured(cfg) {
+                providers.push(LlmProvider::Azure);
+            }
+        }
+
+        if let Some(cfg) = &self.openai {
+            if crate::dialog::llm::LlmConfig::is_configured(cfg) {
+                providers.push(LlmProvider::OpenAI);
+            }
+        }
+
+        if let Some(cfg) = &self.ollama {
+            if crate::dialog::llm::LlmConfig::is_configured(cfg) {
+                providers.push(LlmProvider::Ollama);
+            }
+        }
+
+        if providers.is_empty() {
+            None
+        } else {
+            Some(providers)
+        }
+    }
+
     /// Get or create Azure config
     pub fn get_or_create_azure(&mut self) -> &mut AzureOpenAiConfig {
         if self.azure.is_none() {

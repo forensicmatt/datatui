@@ -10,3 +10,9 @@ pub mod ollama;
 pub use azure_openai::{AzureOpenAiConfigDialog, AzureOpenAiConfig};
 pub use openai::{OpenAiConfigDialog, OpenAIConfig};
 pub use ollama::{OllamaConfigDialog, OllamaConfig};
+
+
+pub trait LlmConfig {
+    /// Returns true if the configuration is considered valid & complete, otherwise false.
+    fn is_configured(&self) -> bool;
+}
