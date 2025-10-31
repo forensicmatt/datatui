@@ -10,6 +10,8 @@ use crate::components::dialog_layout::split_dialog_area;
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use strum::Display;
+use rig::client::builder::DynClientBuilder;
+use rig::client::embeddings::EmbeddingsClient;
 use crate::dialog::llm::{
     AzureOpenAiConfigDialog, OpenAiConfigDialog,
     OllamaConfigDialog, AzureOpenAiConfig, OpenAIConfig, OllamaConfig
@@ -62,7 +64,6 @@ pub struct LlmConfig {
     pub azure: Option<AzureOpenAiConfig>,
     pub openai: Option<OpenAIConfig>,
     pub ollama: Option<OllamaConfig>,
-    pub selected_provider: LlmProvider,
 }
 
 impl Default for LlmConfig {
@@ -71,7 +72,6 @@ impl Default for LlmConfig {
             azure: None,
             openai: None,
             ollama: None,
-            selected_provider: LlmProvider::OpenAI,
         }
     }
 }
@@ -105,6 +105,23 @@ impl LlmConfig {
         } else {
             Some(providers)
         }
+    }
+
+    /// Returns an EmbeddingsClient for the given provider, if that provider is configured.
+    pub fn get_embedding_client(&self, provider: LlmProvider) -> Result<()> {
+        match provider {
+            LlmProvider::Azure => {
+
+            }
+            LlmProvider::OpenAI => {
+
+            }
+            LlmProvider::Ollama => {
+
+            }
+        }
+
+        Ok(())
     }
 
     /// Get or create Azure config
@@ -180,7 +197,7 @@ impl LlmClientDialog {
         
         Self {
             mode: LlmClientDialogMode::ProviderSelection,
-            selected_provider: llm_config.selected_provider.clone(),
+            selected_provider: LlmProvider::OpenAI,
             provider_list_state: list_state,
             error_active: false,
             show_instructions: true,
@@ -219,7 +236,6 @@ impl LlmClientDialog {
                 2 => LlmProvider::Ollama,
                 _ => LlmProvider::OpenAI,
             };
-            self.llm_config.selected_provider = self.selected_provider.clone();
         }
     }
 
@@ -298,7 +314,6 @@ impl LlmClientDialog {
             instructions_paragraph.render(instructions_area, buf);
         }
     }
-
 
     /// Handle a key event. Returns Some(Action) if the dialog should close and apply, None otherwise.
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
@@ -389,7 +404,6 @@ impl LlmClientDialog {
                         Action::LlmClientDialogApplied(config) => {
                             // Update our llm_config with the new Azure config
                             self.llm_config.azure = config.azure;
-                            self.llm_config.selected_provider = config.selected_provider;
                             return Some(Action::LlmClientDialogApplied(self.llm_config.clone()));
                         }
                         Action::DialogClose => {
@@ -407,7 +421,6 @@ impl LlmClientDialog {
                         Action::LlmClientDialogApplied(config) => {
                             // Update our llm_config with the new OpenAI config
                             self.llm_config.openai = config.openai;
-                            self.llm_config.selected_provider = config.selected_provider;
                             return Some(Action::LlmClientDialogApplied(self.llm_config.clone()));
                         }
                         Action::DialogClose => {
@@ -425,7 +438,6 @@ impl LlmClientDialog {
                         Action::LlmClientDialogApplied(config) => {
                             // Update our llm_config with the new Ollama config
                             self.llm_config.ollama = config.ollama;
-                            self.llm_config.selected_provider = config.selected_provider;
                             return Some(Action::LlmClientDialogApplied(self.llm_config.clone()));
                         }
                         Action::DialogClose => {

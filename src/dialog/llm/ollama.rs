@@ -257,7 +257,6 @@ impl OllamaConfigDialog {
                             azure: None,
                             openai: None,
                             ollama: Some(self.config.clone()),
-                            selected_provider: LlmProvider::Ollama,
                         }
                     ));
                 }
@@ -297,7 +296,6 @@ impl OllamaConfigDialog {
                         azure: None,
                         openai: None,
                         ollama: Some(self.config.clone()),
-                        selected_provider: LlmProvider::Ollama,
                     }
                 ));
             }

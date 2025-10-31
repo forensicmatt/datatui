@@ -274,7 +274,6 @@ impl OpenAiConfigDialog {
                             azure: None,
                             openai: Some(self.config.clone()),
                             ollama: None,
-                            selected_provider: LlmProvider::OpenAI,
                         }
                     ));
                 }
@@ -314,7 +313,6 @@ impl OpenAiConfigDialog {
                         azure: None,
                         openai: Some(self.config.clone()),
                         ollama: None,
-                        selected_provider: LlmProvider::OpenAI,
                     }
                 ));
             }

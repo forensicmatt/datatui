@@ -271,7 +271,6 @@ impl AzureOpenAiConfigDialog {
                             azure: Some(self.config.clone()),
                             openai: None,
                             ollama: None,
-                            selected_provider: LlmProvider::Azure,
                         }
                     ));
                 }
@@ -310,7 +309,6 @@ impl AzureOpenAiConfigDialog {
                         azure: Some(self.config.clone()),
                         openai: None,
                         ollama: None,
-                        selected_provider: LlmProvider::Azure,
                     }
                 ));
             }
