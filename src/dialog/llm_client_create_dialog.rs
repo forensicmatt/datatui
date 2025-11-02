@@ -27,14 +27,14 @@ pub struct LlmClientSelection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum UiMode {
+pub enum UiMode {
     ProviderSelection,
     Options,
     Error(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Field {
+pub enum Field {
     Model,
     Temperature,
     MaxTokens,

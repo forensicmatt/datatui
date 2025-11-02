@@ -3,13 +3,11 @@ use polars_plan::dsl::udf::UserDefinedFunction;
 use polars_plan::dsl::GetOutput;
 use polars_sql::SQLContext;
 use polars_sql::function_registry::FunctionRegistry;
-use lazy_static::lazy_static;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::collections::HashMap;
 // use crate::providers::openai::Client as OpenAIClient;
 
-// Reduce type complexity with a clear alias for the embeddings provider closure type
-type EmbeddingsProvider = Arc<dyn Fn(&[String]) -> PolarsResult<Vec<Vec<f32>>> + Send + Sync>;
+// (removed unused EmbeddingsProvider alias)
 
 fn upper_impl(columns: &mut [Column]) -> PolarsResult<Option<Column>> {
 	if columns.len() != 1 {

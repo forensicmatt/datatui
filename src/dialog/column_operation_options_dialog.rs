@@ -12,6 +12,7 @@ use crate::components::dialog_layout::split_dialog_area;
 use crate::style::StyleConfig;
 use crate::action::Action;
 use super::column_operations_dialog::ColumnOperationKind;
+use crate::dialog::LlmProvider;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClusterAlgorithm {
@@ -30,6 +31,12 @@ pub struct KmeansOptions {
 pub struct DbscanOptions {
     pub minimum_points: usize,
     pub tolerance: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct EmbeddingParams {
+    pub model_name: String,
+    pub num_dimensions: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +70,7 @@ pub struct ColumnOperationOptionsDialog {
     #[serde(skip)]
     pub new_column_input: TextArea<'static>,
     pub selected_field_index: usize,
+    pub selected_provider: LlmProvider,
     pub model_name: String,
     #[serde(skip)]
     pub model_name_input: TextArea<'static>,
@@ -107,6 +115,7 @@ impl ColumnOperationOptionsDialog {
                 t
             },
             selected_field_index: 0,
+            selected_provider: LlmProvider::OpenAI,
             model_name: String::from("text-embedding-3-small"),
             model_name_input: {
                 let mut t = TextArea::default();
@@ -183,6 +192,7 @@ impl ColumnOperationOptionsDialog {
         ];
         match self.operation {
             ColumnOperationKind::GenerateEmbeddings => {
+                fields.push(format!("Provider: {}", self.selected_provider.display_name()));
                 fields.push("Model Name:".to_string());
                 fields.push(format!("Number of Dimensions: {}", self.num_dimensions));
             }
@@ -237,54 +247,106 @@ impl ColumnOperationOptionsDialog {
                 let inner = block.inner(content_area);
                 block.render(content_area, buf);
 
-                let lines = self.fields_for_operation();
-                for (i, line) in lines.iter().enumerate() {
-                    let y = inner.y + i as u16;
-                    if y >= inner.y + inner.height { break; }
+                if matches!(self.operation, ColumnOperationKind::GenerateEmbeddings) {
+                    // Row 0: New Column Name (text input)
+                    let i = 0usize;
+                    let y = inner.y;
                     let is_selected = !self.buttons_mode && i == self.selected_field_index;
-                    // Render text input fields with a cursor when selected
-                    if (i == 0) || (self.operation == ColumnOperationKind::GenerateEmbeddings && i == 2) {
-                        // Label before input
-                        let label = line.trim_end_matches(':').to_string() + ":";
-                        let label_style = if is_selected {
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD)
+                    let label = "New Column Name:".to_string();
+                    let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                    buf.set_string(inner.x + 1, y, label.clone(), label_style);
+                    let label_width = label.len() as u16 + 2;
+                    let input_area = Rect { x: inner.x + 1 + label_width, y, width: inner.width.saturating_sub(label_width + 2), height: 1 };
+                    let mut ta = self.new_column_input.clone();
+                    if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
+                    ta.render(input_area, buf);
+
+                    // Row 1: Source Column (enum display)
+                    let i = 1usize;
+                    let y = inner.y + 1;
+                    let is_selected = !self.buttons_mode && i == self.selected_field_index;
+                    let line = format!("Source Column: {}", self.columns.get(self.selected_column_index).cloned().unwrap_or_default());
+                    let style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                    buf.set_string(inner.x + 1, y, line, style);
+
+                    // Embedding Options block for Provider, Model, and Dimensions
+                    let emb_outer = Rect {
+                        x: inner.x + 1,
+                        y: inner.y + 3,
+                        width: inner.width.saturating_sub(2),
+                        height: 5, // three lines of content
+                    };
+                    let emb_block = Block::default().title("Embedding Options").borders(Borders::ALL);
+                    let emb_inner = emb_block.inner(emb_outer);
+                    emb_block.render(emb_outer, buf);
+
+                    // Row 2 inside block: Provider (enum)
+                    let i = 2usize;
+                    let y = emb_inner.y;
+                    let is_selected = !self.buttons_mode && i == self.selected_field_index;
+                    let line = format!("Provider: {}", self.selected_provider.display_name());
+                    let style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                    buf.set_string(emb_inner.x, y, line, style);
+
+                    // Row 3 inside block: Model Name (text input)
+                    let i = 3usize;
+                    let y = emb_inner.y + 1;
+                    let is_selected = !self.buttons_mode && i == self.selected_field_index;
+                    let label = "Model Name:".to_string();
+                    let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                    buf.set_string(emb_inner.x, y, label.clone(), label_style);
+                    let label_width = label.len() as u16 + 2;
+                    let input_area = Rect { x: emb_inner.x + label_width, y, width: emb_inner.width.saturating_sub(label_width), height: 1 };
+                    let mut ta = self.model_name_input.clone();
+                    if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
+                    ta.render(input_area, buf);
+
+                    // Row 4 inside block: Number of Dimensions (number input)
+                    let i = 4usize;
+                    let y = emb_inner.y + 2;
+                    let is_selected = !self.buttons_mode && i == self.selected_field_index;
+                    let label = "Number of Dimensions:".to_string();
+                    let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                    buf.set_string(emb_inner.x, y, label.clone(), label_style);
+                    let label_width = label.len() as u16 + 2;
+                    let input_area = Rect { x: emb_inner.x + label_width, y, width: emb_inner.width.saturating_sub(label_width), height: 1 };
+                    let mut ta = self.get_number_input_by_index(i).clone();
+                    if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
+                    ta.render(input_area, buf);
+                } else {
+                    let lines = self.fields_for_operation();
+                    for (i, line) in lines.iter().enumerate() {
+                        let y = inner.y + i as u16;
+                        if y >= inner.y + inner.height { break; }
+                        let is_selected = !self.buttons_mode && i == self.selected_field_index;
+                        if (i == 0) || (self.operation == ColumnOperationKind::GenerateEmbeddings && i == 2) {
+                            let label = line.trim_end_matches(':').to_string() + ":";
+                            let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                            buf.set_string(inner.x + 1, y, label.clone(), label_style);
+                            let label_width = label.len() as u16 + 2;
+                            let input_area = Rect { x: inner.x + 1 + label_width, y, width: inner.width.saturating_sub(label_width + 2), height: 1 };
+                            if i == 0 {
+                                let mut ta = self.new_column_input.clone();
+                                if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
+                                ta.render(input_area, buf);
                             } else {
-                                Style::default()
-                            };
-                        buf.set_string(inner.x + 1, y, label.clone(), label_style);
-                        let label_width = label.len() as u16 + 2; // include a space
-                        let input_area = Rect {
-                            x: inner.x + 1 + label_width,
-                            y,
-                            width: inner.width.saturating_sub(label_width + 2),
-                            height: 1,
-                        };
-                        if i == 0 {
-                            let mut ta = self.new_column_input.clone();
+                                let mut ta = self.model_name_input.clone();
+                                if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
+                                ta.render(input_area, buf);
+                            }
+                        } else if self.is_index_number_field(i) {
+                            let label = line.split(':').next().unwrap_or("").to_string() + ":";
+                            let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                            buf.set_string(inner.x + 1, y, label.clone(), label_style);
+                            let label_width = label.len() as u16 + 2;
+                            let input_area = Rect { x: inner.x + 1 + label_width, y, width: inner.width.saturating_sub(label_width + 2), height: 1 };
+                            let mut ta = self.get_number_input_by_index(i).clone();
                             if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
                             ta.render(input_area, buf);
                         } else {
-                            let mut ta = self.model_name_input.clone();
-                            if !is_selected {
-                                ta.set_cursor_style(Style::default().fg(Color::Gray));
-                            }
-                            ta.render(input_area, buf);
+                            let style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                            buf.set_string(inner.x + 1, y, line, style);
                         }
-                    } else if self.is_index_number_field(i) {
-                        // Render numeric field with a cursor when selected
-                        let label = line.split(':').next().unwrap_or("").to_string() + ":";
-                        let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
-                        buf.set_string(inner.x + 1, y, label.clone(), label_style);
-                        let label_width = label.len() as u16 + 2;
-                        let input_area = Rect { x: inner.x + 1 + label_width, y, width: inner.width.saturating_sub(label_width + 2), height: 1 };
-                        let mut ta = self.get_number_input_by_index(i).clone();
-                        if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
-                        ta.render(input_area, buf);
-                    } else {
-                        let style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
-                        buf.set_string(inner.x + 1, y, line, style);
                     }
                 }
 
@@ -324,39 +386,107 @@ impl ColumnOperationOptionsDialog {
                 buf.set_string(inner.x + 1, inner.y, err_text, err_style);
 
                 // Render fields starting one line below the error
-                let lines = self.fields_for_operation();
-                for (i, line) in lines.iter().enumerate() {
-                    let y = inner.y + 1 + i as u16;
-                    if y >= inner.y + inner.height { break; }
-                    // Adjust selection index visual when error is shown (shifted by 1 line)
+                if matches!(self.operation, ColumnOperationKind::GenerateEmbeddings) {
+                    let base_y = inner.y + 1;
+                    // Row 0: New Column Name (text input)
+                    let i = 0usize;
+                    let y = base_y;
                     let is_selected = !self.buttons_mode && i == self.selected_field_index;
-                    if (i == 0) || (self.operation == ColumnOperationKind::GenerateEmbeddings && i == 2) {
-                        let label = line.trim_end_matches(':').to_string() + ":";
-                        let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
-                        buf.set_string(inner.x + 1, y, label.clone(), label_style);
-                        let label_width = label.len() as u16 + 2;
-                        let input_area = Rect { x: inner.x + 1 + label_width, y, width: inner.width.saturating_sub(label_width + 2), height: 1 };
-                        if i == 0 {
-                            let mut ta = self.new_column_input.clone();
+                    let label = "New Column Name:".to_string();
+                    let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                    buf.set_string(inner.x + 1, y, label.clone(), label_style);
+                    let label_width = label.len() as u16 + 2;
+                    let input_area = Rect { x: inner.x + 1 + label_width, y, width: inner.width.saturating_sub(label_width + 2), height: 1 };
+                    let mut ta = self.new_column_input.clone();
+                    if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
+                    ta.render(input_area, buf);
+
+                    // Row 1: Source Column (enum display)
+                    let i = 1usize;
+                    let y = base_y + 1;
+                    let is_selected = !self.buttons_mode && i == self.selected_field_index;
+                    let line = format!("Source Column: {}", self.columns.get(self.selected_column_index).cloned().unwrap_or_default());
+                    let style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                    buf.set_string(inner.x + 1, y, line, style);
+
+                    // Embedding Options block for Provider, Model, and Dimensions
+                    let emb_outer = Rect {
+                        x: inner.x + 1,
+                        y: base_y + 2,
+                        width: inner.width.saturating_sub(2),
+                        height: 5,
+                    };
+                    let emb_block = Block::default().title("Embedding Options").borders(Borders::ALL);
+                    let emb_inner = emb_block.inner(emb_outer);
+                    emb_block.render(emb_outer, buf);
+
+                    // Row 2 inside block: Provider
+                    let i = 2usize;
+                    let y = emb_inner.y;
+                    let is_selected = !self.buttons_mode && i == self.selected_field_index;
+                    let line = format!("Provider: {}", self.selected_provider.display_name());
+                    let style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                    buf.set_string(emb_inner.x, y, line, style);
+
+                    // Row 3 inside block: Model Name
+                    let i = 3usize;
+                    let y = emb_inner.y + 1;
+                    let is_selected = !self.buttons_mode && i == self.selected_field_index;
+                    let label = "Model Name:".to_string();
+                    let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                    buf.set_string(emb_inner.x, y, label.clone(), label_style);
+                    let label_width = label.len() as u16 + 2;
+                    let input_area = Rect { x: emb_inner.x + label_width, y, width: emb_inner.width.saturating_sub(label_width), height: 1 };
+                    let mut ta = self.model_name_input.clone();
+                    if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
+                    ta.render(input_area, buf);
+
+                    // Row 4 inside block: Number of Dimensions
+                    let i = 4usize;
+                    let y = emb_inner.y + 2;
+                    let is_selected = !self.buttons_mode && i == self.selected_field_index;
+                    let label = "Number of Dimensions:".to_string();
+                    let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                    buf.set_string(emb_inner.x, y, label.clone(), label_style);
+                    let label_width = label.len() as u16 + 2;
+                    let input_area = Rect { x: emb_inner.x + label_width, y, width: emb_inner.width.saturating_sub(label_width), height: 1 };
+                    let mut ta = self.get_number_input_by_index(i).clone();
+                    if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
+                    ta.render(input_area, buf);
+                } else {
+                    let lines = self.fields_for_operation();
+                    for (i, line) in lines.iter().enumerate() {
+                        let y = inner.y + 1 + i as u16;
+                        if y >= inner.y + inner.height { break; }
+                        let is_selected = !self.buttons_mode && i == self.selected_field_index;
+                        if (i == 0) || (self.operation == ColumnOperationKind::GenerateEmbeddings && i == 2) {
+                            let label = line.trim_end_matches(':').to_string() + ":";
+                            let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                            buf.set_string(inner.x + 1, y, label.clone(), label_style);
+                            let label_width = label.len() as u16 + 2;
+                            let input_area = Rect { x: inner.x + 1 + label_width, y, width: inner.width.saturating_sub(label_width + 2), height: 1 };
+                            if i == 0 {
+                                let mut ta = self.new_column_input.clone();
+                                if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
+                                ta.render(input_area, buf);
+                            } else {
+                                let mut ta = self.model_name_input.clone();
+                                if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
+                                ta.render(input_area, buf);
+                            }
+                        } else if self.is_index_number_field(i) {
+                            let label = line.split(':').next().unwrap_or("").to_string() + ":";
+                            let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                            buf.set_string(inner.x + 1, y, label.clone(), label_style);
+                            let label_width = label.len() as u16 + 2;
+                            let input_area = Rect { x: inner.x + 1 + label_width, y, width: inner.width.saturating_sub(label_width + 2), height: 1 };
+                            let mut ta = self.get_number_input_by_index(i).clone();
                             if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
                             ta.render(input_area, buf);
                         } else {
-                            let mut ta = self.model_name_input.clone();
-                            if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
-                            ta.render(input_area, buf);
+                            let style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                            buf.set_string(inner.x + 1, y, line, style);
                         }
-                    } else if self.is_index_number_field(i) {
-                        let label = line.split(':').next().unwrap_or("").to_string() + ":";
-                        let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
-                        buf.set_string(inner.x + 1, y, label.clone(), label_style);
-                        let label_width = label.len() as u16 + 2;
-                        let input_area = Rect { x: inner.x + 1 + label_width, y, width: inner.width.saturating_sub(label_width + 2), height: 1 };
-                        let mut ta = self.get_number_input_by_index(i).clone();
-                        if !is_selected { ta.set_cursor_style(Style::default().fg(Color::Gray)); }
-                        ta.render(input_area, buf);
-                    } else {
-                        let style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
-                        buf.set_string(inner.x + 1, y, line, style);
                     }
                 }
 
@@ -404,7 +534,7 @@ impl ColumnOperationOptionsDialog {
                 // Add operation-specific instructions
                 let operation_instructions = match self.operation {
                     ColumnOperationKind::GenerateEmbeddings => {
-                        "  • Model Name: Text input  • Dimensions: Numeric input"
+                        "  • Provider: Left/Right toggle  • Model Name: Tab cycles models or text input  • Dimensions: Numeric input"
                     }
                     ColumnOperationKind::Pca => {
                         "  • Target Size: Numeric input"
@@ -429,6 +559,42 @@ impl ColumnOperationOptionsDialog {
             }
             ColumnOperationOptionsMode::Error(_) => String::new(),
         }
+    }
+
+    fn embedding_models_for_provider(&self, provider: &LlmProvider) -> Vec<(&'static str, usize)> {
+        match provider {
+            LlmProvider::OpenAI => vec![
+                ("text-embedding-3-small", 1536),
+                ("text-embedding-3-large", 3072),
+            ],
+            LlmProvider::Azure => vec![
+                ("text-embedding-3-small", 1536),
+                ("text-embedding-3-large", 3072),
+            ],
+            LlmProvider::Ollama => vec![
+                ("nomic-embed-text", 768),
+                ("mxbai-embed-large", 1024),
+            ],
+        }
+    }
+
+    fn set_model_and_dimensions(&mut self, model: &str, dims: usize) {
+        // Update model string and textarea
+        self.model_name = model.to_string();
+        self.model_name_input = {
+            let mut t = TextArea::default();
+            t.set_block(Block::default());
+            t.insert_str(model);
+            t
+        };
+        // Update dimensions value and textarea
+        self.num_dimensions = dims;
+        self.num_dimensions_input = {
+            let mut t = TextArea::default();
+            t.set_block(Block::default());
+            t.insert_str(&dims.to_string());
+            t
+        };
     }
 
     fn apply(&self) -> Action {
@@ -464,6 +630,24 @@ impl ColumnOperationOptionsDialog {
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if key.kind != KeyEventKind::Press { return Ok(None); }
+        // Intercept Tab on Model Name to cycle models before config actions can toggle buttons
+        if matches!(self.operation, ColumnOperationKind::GenerateEmbeddings)
+            && self.selected_field_index == 3
+        {
+            if let KeyCode::Tab = key.code {
+                let models = self.embedding_models_for_provider(&self.selected_provider);
+                if !models.is_empty() {
+                    let mut idx = models
+                        .iter()
+                        .position(|(name, _)| *name == self.model_name.as_str())
+                        .unwrap_or(0);
+                    idx = (idx + 1) % models.len();
+                    let (next_model, next_dims) = models[idx];
+                    self.set_model_and_dimensions(next_model, next_dims);
+                }
+                return Ok(None);
+            }
+        }
         
         // First, honor config-driven Global actions
         if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
@@ -617,10 +801,20 @@ impl ColumnOperationOptionsDialog {
         match self.operation {
             ColumnOperationKind::GenerateEmbeddings => {
                 match idx {
-                    0 => {
-                        // Text field (model name); ignore numeric adjust
-                    }
                     1 => {
+                        // Provider selection rotate
+                        let order = [LlmProvider::Azure, LlmProvider::OpenAI, LlmProvider::Ollama];
+                        let mut pos = order.iter().position(|p| p == &self.selected_provider).unwrap_or(1);
+                        if increment { pos = (pos + 1) % order.len(); } else { pos = (pos + order.len() - 1) % order.len(); }
+                        self.selected_provider = order[pos].clone();
+                        // Update model and dimensions to provider default
+                        let models = self.embedding_models_for_provider(&self.selected_provider);
+                        if let Some((model, dims)) = models.first() {
+                            self.set_model_and_dimensions(model, *dims);
+                        }
+                    }
+                    3 => {
+                        // Number of dimensions adjust
                         if increment { self.num_dimensions = self.num_dimensions.saturating_add(1); } else { self.num_dimensions = self.num_dimensions.saturating_sub(1); }
                     }
                     _ => {}
@@ -677,8 +871,9 @@ impl ColumnOperationOptionsDialog {
             ColumnOperationKind::GenerateEmbeddings => {
                 match self.selected_field_index {
                     1 => "enum", // source column selector
-                    2 => "text", // model name
-                    3 => "number", // num dims
+                    2 => "enum", // provider selector
+                    3 => "text", // model name
+                    4 => "number", // num dims
                     _ => "number",
                 }
             }
@@ -710,7 +905,7 @@ impl ColumnOperationOptionsDialog {
 
     fn is_index_number_field(&self, index: usize) -> bool {
         match self.operation {
-            ColumnOperationKind::GenerateEmbeddings => index == 3,
+            ColumnOperationKind::GenerateEmbeddings => index == 4,
             ColumnOperationKind::Pca => index == 2,
             ColumnOperationKind::Cluster => {
                 if matches!(self.cluster_algorithm, ClusterAlgorithm::Kmeans) {

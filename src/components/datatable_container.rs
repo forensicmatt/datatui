@@ -90,7 +90,7 @@ use regex::Regex;
 use serde_json::{Value as JsonValue, Map as JsonMap};
 use jmespath;
 use serde_json::Value;
-use polars::prelude::{NamedFrom, IntoColumn, Series, ListChunked, PlSmallStr, DataType, IntoSeries};
+use polars::prelude::{NamedFrom, IntoColumn};
 use crate::dialog::OperationOptions;
 use crate::dialog::{ClusterAlgorithm, KmeansOptions, DbscanOptions};
 // use crate::dialog::DataExportDialog; // moved to DataTabManagerDialog
@@ -339,7 +339,7 @@ impl DataTableContainer {
         #[derive(serde::Deserialize)]
         struct OpenAIEmbRes { data: Vec<OpenAIEmbDatum> }
         #[derive(serde::Deserialize)]
-        struct OpenAIEmbDatum { embedding: Vec<f32>, index: usize }
+        struct OpenAIEmbDatum { embedding: Vec<f32> }
         let req = OpenAIEmbReq { model: model_name, input: inputs, dimensions: dims_opt };
         let res = client.post(url)
             .bearer_auth(&cfg.api_key)
@@ -366,7 +366,7 @@ impl DataTableContainer {
         #[derive(serde::Deserialize)]
         struct AzureEmbRes { data: Vec<AzureEmbDatum> }
         #[derive(serde::Deserialize)]
-        struct AzureEmbDatum { embedding: Vec<f32>, index: usize }
+        struct AzureEmbDatum { embedding: Vec<f32> }
         let req = AzureEmbReq { input: inputs, dimensions: dims_opt, model: model_name };
         let res = client.post(url)
             .header("api-key", &cfg.api_key)

@@ -7,7 +7,6 @@ use color_eyre::Result;
 use crossterm::event::{KeyEvent, KeyEventKind};
 use crate::components::dialog_layout::split_dialog_area;
 use crate::config::Config;
-use crate::dialog::llm_client_dialog::LlmProvider;
 use serde::{Deserialize, Serialize};
 use crate::dialog::llm::LlmConfig;
 
