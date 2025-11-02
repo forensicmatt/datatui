@@ -10,14 +10,15 @@ use crate::components::dialog_layout::split_dialog_area;
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use strum::Display;
-use rig::client::builder::DynClientBuilder;
-use rig::client::embeddings::EmbeddingsClient;
+use rig::client::builder::{DynClientBuilder, BoxCompletionModel};
+use rig::embeddings::embedding::EmbeddingModelDyn;
 use crate::dialog::llm::{
     AzureOpenAiConfigDialog, OpenAiConfigDialog,
     OllamaConfigDialog, AzureOpenAiConfig, OpenAIConfig, OllamaConfig
 };
+use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Display)]
 pub enum LlmProvider {
     Azure,
     OpenAI,
@@ -58,13 +59,43 @@ pub struct LlmClientDialog {
     pub ollama_dialog: OllamaConfigDialog,
 }
 
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct LlmConfig {
     pub azure: Option<AzureOpenAiConfig>,
     pub openai: Option<OpenAIConfig>,
     pub ollama: Option<OllamaConfig>,
+    #[serde(skip)]
+    builders: HashMap<LlmProvider, DynClientBuilder>,
 }
+
+impl std::fmt::Debug for LlmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmConfig")
+            .field("azure", &self.azure)
+            .field("openai", &self.openai)
+            .field("ollama", &self.ollama)
+            .finish()
+    }
+}
+
+impl Clone for LlmConfig {
+    fn clone(&self) -> Self {
+        Self {
+            azure: self.azure.clone(),
+            openai: self.openai.clone(),
+            ollama: self.ollama.clone(),
+            builders: HashMap::new(),
+        }
+    }
+}
+
+impl PartialEq for LlmConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.azure == other.azure && self.openai == other.openai && self.ollama == other.ollama
+    }
+}
+
+impl Eq for LlmConfig {}
 
 impl Default for LlmConfig {
     fn default() -> Self {
@@ -72,6 +103,7 @@ impl Default for LlmConfig {
             azure: None,
             openai: None,
             ollama: None,
+            builders: HashMap::new(),
         }
     }
 }
@@ -107,21 +139,72 @@ impl LlmConfig {
         }
     }
 
-    /// Returns an EmbeddingsClient for the given provider, if that provider is configured.
-    pub fn get_embedding_client(&self, provider: LlmProvider) -> Result<()> {
+    /// Store a dynamic client builder for a given provider
+    pub fn set_builder(&mut self, provider: LlmProvider, builder: DynClientBuilder) {
+        self.builders.insert(provider, builder);
+    }
+
+    /// Retrieve a stored dynamic client builder for a given provider, if available
+    pub fn get_builder(&self, provider: &LlmProvider) -> Option<&DynClientBuilder> {
+        self.builders.get(provider)
+    }
+
+    fn provider_key(provider: &LlmProvider) -> &'static str {
         match provider {
-            LlmProvider::Azure => {
-
-            }
-            LlmProvider::OpenAI => {
-
-            }
-            LlmProvider::Ollama => {
-
-            }
+            LlmProvider::OpenAI => "openai",
+            LlmProvider::Azure => "azure",
+            LlmProvider::Ollama => "ollama",
         }
+    }
 
-        Ok(())
+    pub fn default_embedding_model_for(&self, provider: &LlmProvider) -> &'static str {
+        match provider {
+            LlmProvider::OpenAI => "text-embedding-3-small",
+            LlmProvider::Azure => "text-embedding-3-small",
+            LlmProvider::Ollama => "nomic-embed-text",
+        }
+    }
+
+    pub fn default_completion_model_for(&self, provider: &LlmProvider) -> &'static str {
+        match provider {
+            LlmProvider::OpenAI => "gpt-4o-mini",
+            LlmProvider::Azure => "gpt-4o-mini",
+            LlmProvider::Ollama => "llama3.1",
+        }
+    }
+
+    /// Construct an EmbeddingModelDyn using the stored builder and default model for the provider
+    pub fn get_embedding_model_dyn<'a>(&'a self, provider: LlmProvider) -> Result<Box<dyn EmbeddingModelDyn + 'a>> {
+        let model = self.default_embedding_model_for(&provider);
+        self.get_embedding_model_dyn_with(provider, model)
+    }
+
+    /// Construct an EmbeddingModelDyn using the stored builder and an explicit model name
+    pub fn get_embedding_model_dyn_with<'a>(&'a self, provider: LlmProvider, model: &str) -> Result<Box<dyn EmbeddingModelDyn + 'a>> {
+        let builder = self.builders.get(&provider)
+            .ok_or_else(|| color_eyre::eyre::eyre!("No client builder registered for provider: {}", provider.display_name()))?;
+        let provider_key = Self::provider_key(&provider);
+        let model = builder
+            .embeddings(provider_key, model)
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to build embedding model for {}: {}", provider.display_name(), e))?;
+        Ok(model)
+    }
+
+    /// Construct a BoxCompletionModel using the stored builder and default model for the provider
+    pub fn get_completion_model_box<'a>(&'a self, provider: LlmProvider) -> Result<BoxCompletionModel<'a>> {
+        let model = self.default_completion_model_for(&provider);
+        self.get_completion_model_box_with(provider, model)
+    }
+
+    /// Construct a BoxCompletionModel using the stored builder and an explicit model name
+    pub fn get_completion_model_box_with<'a>(&'a self, provider: LlmProvider, model: &str) -> Result<BoxCompletionModel<'a>> {
+        let builder = self.builders.get(&provider)
+            .ok_or_else(|| color_eyre::eyre::eyre!("No client builder registered for provider: {}", provider.display_name()))?;
+        let provider_key = Self::provider_key(&provider);
+        let model = builder
+            .completion(provider_key, model)
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to build completion model for {}: {}", provider.display_name(), e))?;
+        Ok(model)
     }
 
     /// Get or create Azure config

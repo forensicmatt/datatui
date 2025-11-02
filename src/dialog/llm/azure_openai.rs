@@ -267,10 +267,10 @@ impl AzureOpenAiConfigDialog {
             match dialog_action {
                 Action::Enter => {
                     return Some(Action::LlmClientDialogApplied(
-                        crate::dialog::llm_client_dialog::LlmConfig {
-                            azure: Some(self.config.clone()),
-                            openai: None,
-                            ollama: None,
+                        {
+                            let mut lc = crate::dialog::llm_client_dialog::LlmConfig::default();
+                            lc.azure = Some(self.config.clone());
+                            lc
                         }
                     ));
                 }
@@ -305,10 +305,10 @@ impl AzureOpenAiConfigDialog {
             }
             KeyCode::Enter => {
                 return Some(Action::LlmClientDialogApplied(
-                    crate::dialog::llm_client_dialog::LlmConfig {
-                        azure: Some(self.config.clone()),
-                        openai: None,
-                        ollama: None,
+                    {
+                        let mut lc = crate::dialog::llm_client_dialog::LlmConfig::default();
+                        lc.azure = Some(self.config.clone());
+                        lc
                     }
                 ));
             }

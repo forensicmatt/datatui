@@ -338,6 +338,14 @@ pub enum Action {
     LlmClientDialogApplied(crate::dialog::llm_client_dialog::LlmConfig),
     /// User cancelled LLM client dialog
     LlmClientDialogCancel,
+    /// Open the LLM Client Create dialog for embeddings
+    OpenLlmClientCreateDialogEmbeddings,
+    /// Open the LLM Client Create dialog for completion
+    OpenLlmClientCreateDialogCompletion,
+    /// Close the LLM Client Create dialog
+    CloseLlmClientCreateDialog,
+    /// User applied LLM client create dialog with selection
+    LlmClientCreateDialogApplied(crate::dialog::llm_client_create_dialog::LlmClientSelection),
 }
 
 #[cfg(test)]

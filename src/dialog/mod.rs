@@ -26,6 +26,7 @@ pub mod column_operations_dialog;
 pub mod column_operation_options_dialog;
 pub mod keybindings_dialog;
 pub mod llm_client_dialog;
+pub mod llm_client_create_dialog;
 pub mod llm;
 pub use filter_dialog::{FilterCondition, ColumnFilter};
 pub use column_width_dialog::ColumnWidthConfig;
@@ -60,4 +61,5 @@ pub use column_operation_options_dialog::{ColumnOperationOptionsDialog, ColumnOp
 pub use keybindings_dialog::KeybindingsDialog;
 pub use keybinding_capture_dialog::KeybindingCaptureDialog;
 pub use llm_client_dialog::{LlmClientDialog, LlmProvider, LlmConfig};
+pub use llm_client_create_dialog::{LlmClientCreateDialog, LlmClientCreateMode, LlmClientSelection};
 pub use llm::{AzureOpenAiConfig, OpenAIConfig, OllamaConfig};
