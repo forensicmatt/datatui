@@ -123,11 +123,11 @@ impl ColumnOperationOptionsDialog {
                 t.insert_str("text-embedding-3-small");
                 t
             },
-            num_dimensions: 0,
+            num_dimensions: 1536,
             num_dimensions_input: {
                 let mut t = TextArea::default();
                 t.set_block(Block::default());
-                t.insert_str("0");
+                t.insert_str("1536");
                 t
             },
             target_embedding_size: 0,

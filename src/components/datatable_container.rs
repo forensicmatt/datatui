@@ -100,6 +100,14 @@ use ndarray::{Array2, ArrayBase, Ix2, OwnedRepr};
 use linfa_clustering::KMeans;
 use linfa::DatasetBase;
 
+
+#[derive(Debug, Clone)]
+pub struct EmbeddingColumnConfig {
+    pub provider: crate::dialog::LlmProvider,
+    pub model_name: String,
+    pub num_dimensions: usize
+}
+
 /// DataTableContainer: Composite widget for DataTable with viewing box and instructions
 ///
 /// This struct manages the state and UI for a composite data table widget, including:
@@ -170,6 +178,7 @@ pub struct DataTableContainer {
     pub busy_message: String,
     pub busy_progress: f64,
     pub queued_embeddings: Option<QueuedEmbeddings>,
+    pub in_progress_embeddings: Option<EmbeddingsJob>,
     pub queued_pca: Option<QueuedPca>,
     pub queued_cluster: Option<QueuedCluster>,
     // LLM client creation dialog for ad-hoc operations (e.g., embeddings)
@@ -177,6 +186,8 @@ pub struct DataTableContainer {
     pub llm_client_create_dialog_active: bool,
     pub last_llm_client_create_dialog_area: Option<ratatui::layout::Rect>,
     pub pending_embeddings_after_llm_selection: Option<QueuedEmbeddings>,
+    // Map embedding column name -> LLM config snapshot used to generate it
+    pub embedding_column_config_mapping: HashMap<String, EmbeddingColumnConfig>,
 }
 
 impl core::fmt::Debug for DataTableContainer {
@@ -203,6 +214,68 @@ impl core::fmt::Debug for DataTableContainer {
 }
 
 impl DataTableContainer {
+    fn process_next_embeddings_batch(&mut self) -> color_eyre::Result<Option<bool>> {
+        let mut job = if let Some(j) = self.in_progress_embeddings.take() { j } else { return Ok(None) };
+        if job.next_start >= job.total_uniques { self.in_progress_embeddings = Some(job); return Ok(Some(true)); }
+        let start = job.next_start;
+        let end = (start + job.batch_size).min(job.total_uniques);
+        let slice: Vec<String> = job.uniques[start..end].to_vec();
+        let dims_opt = if job.num_dimensions > 0 { Some(job.num_dimensions) } else { None };
+        let provider = job.provider.clone();
+        let model_name = job.model_name.clone();
+        // Temporarily release `job` mutable borrow before calling into &self method
+        self.in_progress_embeddings = Some(job);
+        let batch = self.fetch_embeddings_via_provider(provider, &model_name, &slice, dims_opt)?;
+        let mut job = self.in_progress_embeddings.take().expect("embeddings job should exist");
+        if batch.len() != slice.len() { return Err(color_eyre::eyre::eyre!("Embeddings provider returned wrong length for batch")); }
+        if job.unique_embeddings.is_empty() {
+            job.unique_embeddings = vec![Vec::new(); job.total_uniques];
+        }
+        for (i, emb) in batch.into_iter().enumerate() {
+            job.unique_embeddings[start + i] = emb;
+        }
+        job.next_start = end;
+        let progress = end as f64 / job.total_uniques.max(1) as f64;
+        self.busy_progress = progress;
+        self.busy_message = format!(
+            "Generating embeddings with {}... {}/{}",
+            job.provider.display_name(),
+            end,
+            job.total_uniques
+        );
+        let finished = job.next_start >= job.total_uniques;
+        self.in_progress_embeddings = Some(job);
+        Ok(Some(finished))
+    }
+
+    fn finalize_embeddings_job(&mut self) -> color_eyre::Result<()> {
+        use polars::prelude::*;
+        let Some(job) = self.in_progress_embeddings.take() else { return Ok(()); };
+        // Build ListChunked per row using unique_index and computed embeddings
+        let row_embeddings_iter = job.row_texts.into_iter().map(|opt_text| {
+            opt_text.map(|t| {
+                let idx = job.unique_index.get(&t).copied().unwrap();
+                let v: &Vec<f32> = &job.unique_embeddings[idx];
+                Series::new(PlSmallStr::EMPTY, v.clone())
+            })
+        });
+        let mut lc: ListChunked = row_embeddings_iter.collect();
+        // Determine column name (avoid collisions)
+        let df_arc = self.datatable.get_dataframe()?;
+        let df_ref = df_arc.as_ref();
+        let mut new_name = if job.new_column_name.trim().is_empty() { format!("{}_emb", job.source_column) } else { job.new_column_name };
+        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{}__emb", new_name); }
+        lc.rename(PlSmallStr::from_str(&new_name));
+        let list_series = lc.into_series();
+        // Append column to DataFrame
+        let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(df_ref.width() + 1);
+        for c in df_ref.get_columns() { cols.push(c.clone()); }
+        cols.push(list_series.into_column());
+        let new_df = polars::prelude::DataFrame::new(cols)
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame: {}", e))?;
+        self.datatable.dataframe.set_current_df(new_df);
+        Ok(())
+    }
     /// Create a new DataTableContainer with the given DataTable and style configuration.
     ///
     /// # Arguments
@@ -679,12 +752,14 @@ impl DataTableContainer {
             busy_message: String::new(),
             busy_progress: 0.0,
             queued_embeddings: None,
+            in_progress_embeddings: None,
             queued_pca: None,
             queued_cluster: None,
             llm_client_create_dialog: None,
             llm_client_create_dialog_active: false,
             last_llm_client_create_dialog_area: None,
             pending_embeddings_after_llm_selection: None,
+            embedding_column_config_mapping: HashMap::new(),
         }
     }
 
@@ -1680,14 +1755,22 @@ impl Component for DataTableContainer {
                                     };
                                     // Queue embeddings to show overlay first, then execute on Render
                                     self.busy_active = true;
-                                    self.busy_message = "Generating embeddings...".to_string();
+                                    let provider = if let Some(dialog_ref) = &self.column_operation_options_dialog { dialog_ref.selected_provider.clone() } else { crate::dialog::LlmProvider::OpenAI };
+                                    self.busy_message = format!("Generating embeddings with {}...", provider.display_name());
                                     self.busy_progress = 0.0;
-            self.queued_embeddings = Some(QueuedEmbeddings {
+                                    // Snapshot provider config (non-secret fields) for reproducibility
+                                    let snapshot = EmbeddingColumnConfig {
+                                        provider: provider.clone(),
+                                        model_name: model_name.clone(),
+                                        num_dimensions: num_dims
+                                    };
+                                    self.embedding_column_config_mapping.insert(cfg.new_column_name.clone(), snapshot);
+                                    self.queued_embeddings = Some(QueuedEmbeddings {
                                         source_column: cfg.source_column.clone(),
                                         new_column_name: cfg.new_column_name.clone(),
                                         model_name,
                                         num_dimensions: num_dims,
-                selected_provider: None,
+                                        selected_provider: Some(provider),
                                     });
                                     self.column_operation_options_dialog_active = false;
                                     // Do not trigger Render immediately; allow one frame to draw the overlay first
@@ -2104,34 +2187,64 @@ impl Component for DataTableContainer {
             }
             Action::Render => {
                 if let Some(q) = self.queued_embeddings.take() {
-                    let res = if let Some(provider) = q.selected_provider.clone() {
-                        self.execute_generate_embeddings_with_provider(
-                            &q.source_column,
-                            &q.new_column_name,
-                            &q.model_name,
-                            q.num_dimensions,
-                            provider,
-                        )
-                    } else {
-                        // No provider selected yet; open selection dialog
-                        self.execute_generate_embeddings(
-                            &q.source_column,
-                            &q.new_column_name,
-                            &q.model_name,
-                            q.num_dimensions,
-                        )
-                    };
-                    self.busy_active = false;
-                    self.busy_message.clear();
-                    self.busy_progress = 0.0;
-                    match res {
-                        Ok(_) => return Ok(Some(Action::SaveWorkspaceState)),
-                        Err(e) => {
-                            if let Some(dialog) = &mut self.column_operation_options_dialog {
-                                dialog.mode = ColumnOperationOptionsMode::Error(format!("{e}"));
+                    // Initialize progressive embeddings job
+                    let provider = q.selected_provider.clone().unwrap_or(crate::dialog::LlmProvider::OpenAI);
+                    // Prepare source series as strings and build unique lists
+                    let df_arc = self.datatable.get_dataframe()?;
+                    let df_ref = df_arc.as_ref();
+                    use polars::prelude::DataType;
+                    let mut s = df_ref.column(&q.source_column)
+                        .map_err(|e| color_eyre::eyre::eyre!("{}", e))?
+                        .clone();
+                    if s.dtype() != &DataType::String { s = s.cast(&DataType::String).map_err(|e| color_eyre::eyre::eyre!("{}", e))?; }
+                    let len = s.len();
+                    let mut row_texts: Vec<Option<String>> = Vec::with_capacity(len);
+                    let mut unique_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                    let mut uniques: Vec<String> = Vec::new();
+                    for i in 0..len {
+                        let av_res = s.get(i);
+                        if let Ok(av) = av_res {
+                            if av.is_null() { row_texts.push(None); continue; }
+                            let text_val = av.str_value().to_string();
+                            row_texts.push(Some(text_val.clone()));
+                            if !unique_index.contains_key(&text_val) {
+                                let idx = uniques.len();
+                                unique_index.insert(text_val.clone(), idx);
+                                uniques.push(text_val);
                             }
-                            return Ok(None);
-                        }
+                        } else { row_texts.push(None); }
+                    }
+                    let total = uniques.len();
+                    let job = EmbeddingsJob {
+                        source_column: q.source_column,
+                        new_column_name: q.new_column_name,
+                        model_name: q.model_name,
+                        num_dimensions: q.num_dimensions,
+                        provider,
+                        row_texts,
+                        uniques,
+                        unique_index,
+                        unique_embeddings: Vec::new(),
+                        next_start: 0,
+                        batch_size: 256,
+                        total_uniques: total,
+                    };
+                    self.in_progress_embeddings = Some(job);
+                    // Reset progress
+                    self.busy_progress = 0.0;
+                }
+                // Process next batch if an embeddings job is active
+                if let Some(done) = self.process_next_embeddings_batch()? {
+                    if done {
+                        // Finalize embeddings column
+                        self.finalize_embeddings_job()?;
+                        self.busy_active = false;
+                        self.busy_message.clear();
+                        self.busy_progress = 0.0;
+                        return Ok(Some(Action::SaveWorkspaceState));
+                    } else {
+                        // Continue on next render
+                        return Ok(None);
                     }
                 }
                 if let Some(p) = self.queued_pca.take() {
@@ -2439,6 +2552,22 @@ pub struct QueuedEmbeddings {
     pub model_name: String,
     pub num_dimensions: usize,
     pub selected_provider: Option<crate::dialog::LlmProvider>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EmbeddingsJob {
+    pub source_column: String,
+    pub new_column_name: String,
+    pub model_name: String,
+    pub num_dimensions: usize,
+    pub provider: crate::dialog::LlmProvider,
+    pub row_texts: Vec<Option<String>>,
+    pub uniques: Vec<String>,
+    pub unique_index: std::collections::HashMap<String, usize>,
+    pub unique_embeddings: Vec<Vec<f32>>, // filled progressively, aligned with uniques
+    pub next_start: usize,
+    pub batch_size: usize,
+    pub total_uniques: usize,
 }
 
 #[derive(Debug, Clone)]
