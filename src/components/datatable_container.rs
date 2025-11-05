@@ -2130,6 +2130,8 @@ impl Component for DataTableContainer {
                     let col_index = self.datatable.selection.col.min(columns.len().saturating_sub(1));
                     self.dataframe_details_dialog.set_columns(columns, col_index);
                     self.dataframe_details_dialog.set_dataframe(df_arc.clone());
+                    // Provide embeddings mapping for Embeddings tab
+                    self.dataframe_details_dialog.embedding_column_config_mapping = self.embedding_column_config_mapping.clone();
                     self.dataframe_details_dialog_active = true;
                     return Ok(None);
                 }
