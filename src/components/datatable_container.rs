@@ -169,6 +169,7 @@ pub struct DataTableContainer {
     pub last_dataframe_details_dialog_max_rows: Option<usize>,
     pub last_jmes_dialog_area: Option<ratatui::layout::Rect>,
     pub last_column_operations_dialog_area: Option<ratatui::layout::Rect>,
+    pub last_embeddings_prompt_dialog_area: Option<ratatui::layout::Rect>,
     pub current_search_pattern: Option<String>,
     pub current_search_mode: Option<SearchMode>,
     pub current_search_options: Option<FindOptions>,
@@ -188,6 +189,9 @@ pub struct DataTableContainer {
     pub pending_embeddings_after_llm_selection: Option<QueuedEmbeddings>,
     // Map embedding column name -> LLM config snapshot used to generate it
     pub embedding_column_config_mapping: HashMap<String, EmbeddingColumnConfig>,
+    // Prompt similarity dialog
+    pub embeddings_prompt_dialog: Option<crate::dialog::EmbeddingsPromptDialog>,
+    pub embeddings_prompt_dialog_active: bool,
 }
 
 impl core::fmt::Debug for DataTableContainer {
@@ -214,6 +218,81 @@ impl core::fmt::Debug for DataTableContainer {
 }
 
 impl DataTableContainer {
+    fn execute_prompt_similarity(&mut self, source_column: &str, new_column_name: &str, prompt_embedding: &[f32]) -> color_eyre::Result<()> {
+        use polars::prelude::*;
+        let df_arc = self.datatable.get_dataframe()?;
+        let df_ref = df_arc.as_ref();
+        let s = df_ref.column(source_column).map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
+        match s.dtype() {
+            DataType::List(inner) => {
+                match inner.as_ref() {
+                    DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 |
+                    DataType::Int128 | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 |
+                    DataType::UInt64 | DataType::Float32 | DataType::Float64 => {}
+                    _ => return Err(color_eyre::eyre::eyre!("Source column '{}' must be vector of numbers", source_column)),
+                }
+            }
+            _ => return Err(color_eyre::eyre::eyre!("Source column '{}' must be vector of numbers", source_column)),
+        }
+        let nrows = s.len();
+        if nrows == 0 { return Ok(()); }
+        let list = s.list().map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
+        // Precompute prompt norm
+        let mut prompt_norm_sq: f64 = 0.0;
+        for v in prompt_embedding.iter() { let fv = *v as f64; prompt_norm_sq += fv * fv; }
+        let prompt_norm = prompt_norm_sq.sqrt().max(f64::EPSILON);
+        // Compute cosine similarity for each row
+        let mut sims: Vec<f32> = Vec::with_capacity(nrows);
+        for i in 0..nrows {
+            let maybe_sub = list.get_as_series(i);
+            if maybe_sub.is_none() { sims.push(0.0); continue; }
+            let sub = maybe_sub.unwrap();
+            // Extract as f64 vec
+            let row_vals_f64: Vec<f64> = match sub.dtype() {
+                DataType::Float64 => sub.f64().unwrap().into_no_null_iter().collect::<Vec<f64>>(),
+                DataType::Float32 => sub.f32().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::Int64 => sub.i64().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::Int32 => sub.i32().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::Int16 => sub.i16().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::Int8  => sub.i8().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::UInt64 => sub.u64().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::UInt32 => sub.u32().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::UInt16 => sub.u16().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::UInt8  => sub.u8().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                other => return Err(color_eyre::eyre::eyre!("Unsupported inner dtype in list: {:?}", other)),
+            };
+            // Length check
+            if row_vals_f64.len() != prompt_embedding.len() {
+                sims.push(0.0);
+                continue;
+            }
+            // Dot and norm
+            let mut dot: f64 = 0.0;
+            let mut row_norm_sq: f64 = 0.0;
+            for (a_f64, b_f32) in row_vals_f64.iter().zip(prompt_embedding.iter()) {
+                let b = *b_f32 as f64;
+                dot += (*a_f64) * b;
+                row_norm_sq += (*a_f64) * (*a_f64);
+            }
+            let row_norm = row_norm_sq.sqrt().max(f64::EPSILON);
+            let sim = dot / (row_norm * prompt_norm);
+            sims.push(sim as f32);
+        }
+        // Append similarity column
+        let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(df_ref.width() + 1);
+        for c in df_ref.get_columns() { cols.push(c.clone()); }
+        let mut new_name = if new_column_name.trim().is_empty() { format!("{}__prompt_sim", source_column) } else { new_column_name.to_string() };
+        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{}__sim", new_name); }
+        let series = Series::new(new_name.as_str().into(), sims);
+        cols.push(series.into_column());
+        let new_df = polars::prelude::DataFrame::new(cols)
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame: {}", e))?;
+        self.datatable.dataframe.set_current_df(new_df);
+        // Auto sort by the similarity column (descending)
+        let sort_cols = vec![crate::dialog::sort_dialog::SortColumn { name: new_name.clone(), ascending: false }];
+        let _ = self.datatable.dataframe.sort_by_columns(&sort_cols);
+        Ok(())
+    }
     fn process_next_embeddings_batch(&mut self) -> color_eyre::Result<Option<bool>> {
         let mut job = if let Some(j) = self.in_progress_embeddings.take() { j } else { return Ok(None) };
         if job.next_start >= job.total_uniques { self.in_progress_embeddings = Some(job); return Ok(Some(true)); }
@@ -557,6 +636,7 @@ impl DataTableContainer {
             last_dataframe_details_dialog_max_rows: None,
             last_jmes_dialog_area: None,
             last_column_operations_dialog_area: None,
+            last_embeddings_prompt_dialog_area: None,
             current_search_pattern: None,
             current_search_mode: None,
             current_search_options: None,
@@ -573,6 +653,8 @@ impl DataTableContainer {
             last_llm_client_create_dialog_area: None,
             pending_embeddings_after_llm_selection: None,
             embedding_column_config_mapping: HashMap::new(),
+            embeddings_prompt_dialog: None,
+            embeddings_prompt_dialog_active: false,
         }
     }
 
@@ -1399,8 +1481,28 @@ impl Component for DataTableContainer {
                             "GenerateEmbeddings" => ColumnOperationKind::GenerateEmbeddings,
                             "Pca" => ColumnOperationKind::Pca,
                             "Cluster" => ColumnOperationKind::Cluster,
+                            "SortByPromptSimilarity" => ColumnOperationKind::SortByPromptSimilarity,
                             _ => ColumnOperationKind::GenerateEmbeddings,
                         };
+                        // Special-case: open Prompt Similarity dialog directly (uses embedding column mapping)
+                        if matches!(op, ColumnOperationKind::SortByPromptSimilarity) {
+                            let mapping = self.embedding_column_config_mapping.clone();
+                            let initial = {
+                                let visible_columns = self.datatable.get_visible_columns().unwrap_or_default();
+                                let idx = self.datatable.selection.col.min(visible_columns.len().saturating_sub(1));
+                                let name = visible_columns.get(idx).cloned().unwrap_or_default();
+                                if mapping.contains_key(&name) { Some(name) } else { None }
+                            };
+                            let mut dialog = crate::dialog::EmbeddingsPromptDialog::new_with_mapping(mapping, initial);
+                            dialog.register_config_handler(self.config.clone())?;
+                            if dialog.columns.is_empty() {
+                                dialog.mode = crate::dialog::embeddings_prompt_dialog::EmbeddingsPromptDialogMode::Error("No embedding columns available. Generate embeddings first.".to_string());
+                            }
+                            self.embeddings_prompt_dialog = Some(dialog);
+                            self.embeddings_prompt_dialog_active = true;
+                            self.column_operations_dialog_active = false;
+                            return Ok(None);
+                        }
                         // Seed with filtered DF columns (only compatible types) and current selection
                         let df = self.datatable.get_dataframe()?;
                         let df_ref = df.as_ref();
@@ -1440,6 +1542,7 @@ impl Component for DataTableContainer {
                                     } else { false }
                                 })
                                 .collect(),
+                            ColumnOperationKind::SortByPromptSimilarity => Vec::new(),
                         };
                         // Compute initial selected index based on current table selection
                         let current_col_name = {
@@ -1459,6 +1562,29 @@ impl Component for DataTableContainer {
                         return Ok(None);
                     }
                     _ => {}
+                }
+            }
+            return Ok(None);
+        }
+        // Route key events to EmbeddingsPromptDialog if active
+        if self.embeddings_prompt_dialog_active {
+            if let Some(dialog) = &mut self.embeddings_prompt_dialog {
+                if let Some(action) = dialog.handle_key_event(key)? {
+                    match action {
+                        Action::DialogClose => {
+                            self.embeddings_prompt_dialog_active = false;
+                            self.embeddings_prompt_dialog = None;
+                        }
+                        Action::EmbeddingsPromptDialogApplied { source_column, new_column_name, prompt_embedding } => {
+                            if let Err(e) = self.execute_prompt_similarity(&source_column, &new_column_name, &prompt_embedding) {
+                                tracing::error!("Prompt similarity apply failed: {}", e);
+                            }
+                            self.embeddings_prompt_dialog_active = false;
+                            self.embeddings_prompt_dialog = None;
+                            return Ok(None);
+                        }
+                        _ => {}
+                    }
                 }
             }
             return Ok(None);
@@ -1521,7 +1647,7 @@ impl Component for DataTableContainer {
                                             error!("GenerateEmbeddings error: {}", err_msg);
                                         }
                                     }
-                                    ColumnOperationKind::Pca | ColumnOperationKind::Cluster => {
+                                    ColumnOperationKind::Pca | ColumnOperationKind::Cluster | ColumnOperationKind::SortByPromptSimilarity => {
                                         // Must be a vector of numbers: List(Numeric)
                                         let is_vec_num = matches!(
                                             dtype,
@@ -1622,6 +1748,11 @@ impl Component for DataTableContainer {
                                         kmeans: kmeans_opts,
                                         dbscan: dbscan_opts,
                                     });
+                                    self.column_operation_options_dialog_active = false;
+                                    return Ok(None);
+                                }
+                                ColumnOperationKind::SortByPromptSimilarity => {
+                                    // Not applied via options dialog; handled by dedicated prompt dialog
                                     self.column_operation_options_dialog_active = false;
                                     return Ok(None);
                                 }
@@ -2302,6 +2433,18 @@ impl Component for DataTableContainer {
             let _max_rows = self.column_width_dialog.render(popup_area, frame.buffer_mut());
             self.last_column_width_dialog_area = Some(popup_area);
         }
+        // Render EmbeddingsPromptDialog as a popup overlay only if active
+        if self.embeddings_prompt_dialog_active
+            && let Some(dialog) = &mut self.embeddings_prompt_dialog {
+                let popup_area = ratatui::layout::Rect {
+                    x: area.x + area.width / 8,
+                    y: area.y + area.height / 8,
+                    width: area.width - area.width / 4,
+                    height: area.height - area.height / 4,
+                };
+                dialog.render(popup_area, frame.buffer_mut());
+                self.last_embeddings_prompt_dialog_area = Some(popup_area);
+            }
         // Render FindDialog as a popup overlay only if active
         if self.find_dialog_active {
 			let popup_area = ratatui::layout::Rect {

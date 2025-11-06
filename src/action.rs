@@ -215,6 +215,12 @@ pub enum Action {
     ColumnOperationRequested(String),
     /// User applied column operation options
     ColumnOperationOptionsApplied(crate::dialog::column_operation_options_dialog::ColumnOperationConfig),
+    /// User applied the embeddings prompt dialog with computed embedding
+    EmbeddingsPromptDialogApplied {
+        source_column: String,
+        new_column_name: String,
+        prompt_embedding: Vec<f32>,
+    },
     /// Internal container -> manager: open export dialog (alias already exists earlier)
     OpenDataExportDialogAlias,
     /// Sort dialog specific actions

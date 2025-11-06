@@ -44,6 +44,7 @@ pub enum OperationOptions {
     GenerateEmbeddings { model_name: String, num_dimensions: usize },
     Pca { target_embedding_size: usize },
     Cluster { algorithm: ClusterAlgorithm, kmeans: Option<KmeansOptions>, dbscan: Option<DbscanOptions> },
+    SortByPromptSimilarity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,6 +214,9 @@ impl ColumnOperationOptionsDialog {
                     }
                 }
             }
+            ColumnOperationKind::SortByPromptSimilarity => {
+                // No extra fields; handled by dedicated dialog
+            }
         }
         fields
     }
@@ -242,7 +246,7 @@ impl ColumnOperationOptionsDialog {
         match &self.mode {
             ColumnOperationOptionsMode::Input => {
                 let block = Block::default()
-                    .title(match self.operation { ColumnOperationKind::GenerateEmbeddings => "Generate Embeddings", ColumnOperationKind::Pca => "PCA", ColumnOperationKind::Cluster => "Cluster" })
+                    .title(match self.operation { ColumnOperationKind::GenerateEmbeddings => "Generate Embeddings", ColumnOperationKind::Pca => "PCA", ColumnOperationKind::Cluster => "Cluster", ColumnOperationKind::SortByPromptSimilarity => "Prompt Similarity" })
                     .borders(Borders::ALL);
                 let inner = block.inner(content_area);
                 block.render(content_area, buf);
@@ -375,7 +379,7 @@ impl ColumnOperationOptionsDialog {
             }
             ColumnOperationOptionsMode::Error(msg) => {
                 let block = Block::default()
-                    .title(match self.operation { ColumnOperationKind::GenerateEmbeddings => "Generate Embeddings", ColumnOperationKind::Pca => "PCA", ColumnOperationKind::Cluster => "Cluster" })
+                    .title(match self.operation { ColumnOperationKind::GenerateEmbeddings => "Generate Embeddings", ColumnOperationKind::Pca => "PCA", ColumnOperationKind::Cluster => "Cluster", ColumnOperationKind::SortByPromptSimilarity => "Prompt Similarity" })
                     .borders(Borders::ALL);
                 let inner = block.inner(content_area);
                 block.render(content_area, buf);
@@ -549,6 +553,9 @@ impl ColumnOperationOptionsDialog {
                             }
                         }
                     }
+                    ColumnOperationKind::SortByPromptSimilarity => {
+                        "  • Source Column: Left/Right to select"
+                    }
                 };
 
                 if base_instructions.is_empty() {
@@ -615,6 +622,7 @@ impl ColumnOperationOptionsDialog {
                     Some(self.dbscan.clone())
                 } else { None }
             },
+            ColumnOperationKind::SortByPromptSimilarity => OperationOptions::SortByPromptSimilarity,
         };
         let source_column = self.columns.get(self.selected_column_index)
             .cloned()
@@ -848,6 +856,9 @@ impl ColumnOperationOptionsDialog {
                     _ => {}
                 }
             }
+            ColumnOperationKind::SortByPromptSimilarity => {
+                // No adjustable fields in this dialog for this operation
+            }
         }
     }
 
@@ -898,6 +909,12 @@ impl ColumnOperationOptionsDialog {
                     }
                 }
             }
+            ColumnOperationKind::SortByPromptSimilarity => {
+                match self.selected_field_index {
+                    1 => "enum", // source column selector
+                    _ => "text",
+                }
+            }
         }
     }
 
@@ -914,6 +931,7 @@ impl ColumnOperationOptionsDialog {
                     index == 3 || index == 4
                 }
             }
+            ColumnOperationKind::SortByPromptSimilarity => false,
         }
     }
 
@@ -937,6 +955,7 @@ impl ColumnOperationOptionsDialog {
                     }
                 }
             }
+            ColumnOperationKind::SortByPromptSimilarity => &self.num_dimensions_input,
         }
     }
 
@@ -960,6 +979,7 @@ impl ColumnOperationOptionsDialog {
                     }
                 }
             }
+            ColumnOperationKind::SortByPromptSimilarity => &mut self.num_dimensions_input,
         }
     }
 
