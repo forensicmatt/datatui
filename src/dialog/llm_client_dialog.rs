@@ -230,6 +230,100 @@ impl LlmConfig {
         }
         self.ollama.as_mut().unwrap()
     }
+
+    /// Fetch embeddings using the selected provider and model
+    pub fn fetch_embeddings_via_provider(
+        &self,
+        provider: LlmProvider,
+        model_name: &str,
+        inputs: &Vec<String>,
+        dims_opt: Option<usize>,
+    ) -> color_eyre::Result<Vec<Vec<f32>>> {
+        match provider {
+            LlmProvider::OpenAI => self.fetch_openai_embeddings(model_name, inputs, dims_opt),
+            LlmProvider::Azure => self.fetch_azure_embeddings(model_name, inputs, dims_opt),
+            LlmProvider::Ollama => self.fetch_ollama_embeddings(model_name, inputs),
+        }
+    }
+
+    fn fetch_openai_embeddings(
+        &self,
+        model_name: &str,
+        inputs: &Vec<String>,
+        dims_opt: Option<usize>,
+    ) -> color_eyre::Result<Vec<Vec<f32>>> {
+        let cfg = self.openai.as_ref().ok_or_else(|| color_eyre::eyre::eyre!("OpenAI config is not set"))?;
+        let url = format!("{}/embeddings", cfg.base_url.trim_end_matches('/'));
+        let client = reqwest::blocking::Client::new();
+        #[derive(serde::Serialize)]
+        struct OpenAIEmbReq<'a> { model: &'a str, input: &'a Vec<String>, #[serde(skip_serializing_if="Option::is_none")] dimensions: Option<usize> }
+        #[derive(serde::Deserialize)]
+        struct OpenAIEmbRes { data: Vec<OpenAIEmbDatum> }
+        #[derive(serde::Deserialize)]
+        struct OpenAIEmbDatum { embedding: Vec<f32> }
+        let req = OpenAIEmbReq { model: model_name, input: inputs, dimensions: dims_opt };
+        let res = client.post(url)
+            .bearer_auth(&cfg.api_key)
+            .json(&req)
+            .send()
+            .map_err(|e| color_eyre::eyre::eyre!("OpenAI embeddings request failed: {e}"))?;
+        if !res.status().is_success() { return Err(color_eyre::eyre::eyre!("OpenAI embeddings HTTP error: {}", res.status())); }
+        let parsed: OpenAIEmbRes = res.json().map_err(|e| color_eyre::eyre::eyre!("OpenAI embeddings parse failed: {e}"))?;
+        Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
+    }
+
+    fn fetch_azure_embeddings(
+        &self,
+        model_name: &str,
+        inputs: &Vec<String>,
+        dims_opt: Option<usize>,
+    ) -> color_eyre::Result<Vec<Vec<f32>>> {
+        let cfg = self.azure.as_ref().ok_or_else(|| color_eyre::eyre::eyre!("Azure OpenAI config is not set"))?;
+        // Expect base_url to point at deployment root, e.g., https://.../openai/deployments/<deployment>
+        let url = format!("{}/embeddings?api-version={}", cfg.base_url.trim_end_matches('/'), cfg.api_version);
+        let client = reqwest::blocking::Client::new();
+        #[derive(serde::Serialize)]
+        struct AzureEmbReq<'a> { input: &'a Vec<String>, #[serde(skip_serializing_if="Option::is_none")] dimensions: Option<usize>, model: &'a str }
+        #[derive(serde::Deserialize)]
+        struct AzureEmbRes { data: Vec<AzureEmbDatum> }
+        #[derive(serde::Deserialize)]
+        struct AzureEmbDatum { embedding: Vec<f32> }
+        let req = AzureEmbReq { input: inputs, dimensions: dims_opt, model: model_name };
+        let res = client.post(url)
+            .header("api-key", &cfg.api_key)
+            .json(&req)
+            .send()
+            .map_err(|e| color_eyre::eyre::eyre!("Azure embeddings request failed: {e}"))?;
+        if !res.status().is_success() { return Err(color_eyre::eyre::eyre!("Azure embeddings HTTP error: {}", res.status())); }
+        let parsed: AzureEmbRes = res.json().map_err(|e| color_eyre::eyre::eyre!("Azure embeddings parse failed: {e}"))?;
+        Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
+    }
+
+    fn fetch_ollama_embeddings(
+        &self,
+        model_name: &str,
+        inputs: &Vec<String>,
+    ) -> color_eyre::Result<Vec<Vec<f32>>> {
+        let cfg = self.ollama.as_ref().ok_or_else(|| color_eyre::eyre::eyre!("Ollama config is not set"))?;
+        let url = format!("{}/api/embeddings", cfg.host.trim_end_matches('/'));
+        let client = reqwest::blocking::Client::new();
+        #[derive(serde::Serialize)]
+        struct OllamaEmbReq<'a> { model: &'a str, prompt: &'a str }
+        #[derive(serde::Deserialize)]
+        struct OllamaEmbRes { embedding: Vec<f32> }
+        let mut out: Vec<Vec<f32>> = Vec::with_capacity(inputs.len());
+        for inp in inputs.iter() {
+            let req = OllamaEmbReq { model: model_name, prompt: inp };
+            let res = client.post(&url)
+                .json(&req)
+                .send()
+                .map_err(|e| color_eyre::eyre::eyre!("Ollama embeddings request failed: {e}"))?;
+            if !res.status().is_success() { return Err(color_eyre::eyre::eyre!("Ollama embeddings HTTP error: {}", res.status())); }
+            let parsed: OllamaEmbRes = res.json().map_err(|e| color_eyre::eyre::eyre!("Ollama embeddings parse failed: {e}"))?;
+            out.push(parsed.embedding);
+        }
+        Ok(out)
+    }
 }
 
 impl Default for LlmClientDialog {

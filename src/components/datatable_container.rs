@@ -225,7 +225,7 @@ impl DataTableContainer {
         let model_name = job.model_name.clone();
         // Temporarily release `job` mutable borrow before calling into &self method
         self.in_progress_embeddings = Some(job);
-        let batch = self.fetch_embeddings_via_provider(provider, &model_name, &slice, dims_opt)?;
+        let batch = self.config.llm_config.fetch_embeddings_via_provider(provider, &model_name, &slice, dims_opt)?;
         let mut job = self.in_progress_embeddings.take().expect("embeddings job should exist");
         if batch.len() != slice.len() { return Err(color_eyre::eyre::eyre!("Embeddings provider returned wrong length for batch")); }
         if job.unique_embeddings.is_empty() {
@@ -276,6 +276,7 @@ impl DataTableContainer {
         self.datatable.dataframe.set_current_df(new_df);
         Ok(())
     }
+
     /// Create a new DataTableContainer with the given DataTable and style configuration.
     ///
     /// # Arguments
@@ -288,194 +289,6 @@ impl DataTableContainer {
         Self::new_with_dataframes(datatable, style, HashMap::new())
     }
 
-    fn execute_generate_embeddings(
-        &mut self, source_column: &str, new_column_name: &str,
-        model_name: &str, num_dimensions: usize
-    ) -> color_eyre::Result<()> {
-        info!("execute_generate_embeddings: source_column: {}, new_column_name: {}, model_name: {}, num_dimensions: {}", source_column, new_column_name, model_name, num_dimensions);
-
-        // Open an LLM client creation dialog (Embeddings mode) to select provider/options.
-        let mut dialog = LlmClientCreateDialog::new(
-            self.config.clone(),
-            self.config.llm_config.clone(),
-            LlmClientCreateMode::Embeddings,
-        );
-        // Pre-fill the model with the provided model_name
-        dialog.model = model_name.to_string();
-        dialog.cursor_position = dialog.model.len();
-        self.llm_client_create_dialog = Some(dialog);
-        self.llm_client_create_dialog_active = true;
-        // Preserve the pending embeddings request until after provider selection
-        self.pending_embeddings_after_llm_selection = Some(QueuedEmbeddings {
-            source_column: source_column.to_string(),
-            new_column_name: new_column_name.to_string(),
-            model_name: model_name.to_string(),
-            num_dimensions,
-            selected_provider: None,
-        });
-        Ok(())
-    }
-
-    fn execute_generate_embeddings_with_provider(
-        &mut self,
-        source_column: &str,
-        new_column_name: &str,
-        model_name: &str,
-        num_dimensions: usize,
-        provider: crate::dialog::LlmProvider,
-    ) -> color_eyre::Result<()> {
-        use polars::prelude::*;
-
-        // Prepare source series as strings
-        let df_arc = self.datatable.get_dataframe()?;
-        let df_ref = df_arc.as_ref();
-        let mut s = df_ref.column(source_column)
-            .map_err(|e| color_eyre::eyre::eyre!("{}", e))?
-            .clone();
-        if s.dtype() != &DataType::String { s = s.cast(&DataType::String).map_err(|e| color_eyre::eyre::eyre!("{}", e))?; }
-
-        // Build unique mapping
-        let len = s.len();
-        let mut row_texts: Vec<Option<String>> = Vec::with_capacity(len);
-        let mut unique_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut uniques: Vec<String> = Vec::new();
-        for i in 0..len {
-            let av_res = s.get(i);
-            if let Ok(av) = av_res {
-                if av.is_null() { row_texts.push(None); continue; }
-                let text_val = av.str_value().to_string();
-                row_texts.push(Some(text_val.clone()));
-                if !unique_index.contains_key(&text_val) {
-                    let idx = uniques.len();
-                    unique_index.insert(text_val.clone(), idx);
-                    uniques.push(text_val);
-                }
-            } else { row_texts.push(None); }
-        }
-
-        // Compute embeddings for uniques via provider REST API
-        let dims_opt = if num_dimensions > 0 { Some(num_dimensions) } else { None };
-        let unique_embeddings = self.fetch_embeddings_via_provider(provider.clone(), model_name, &uniques, dims_opt)?;
-        if unique_embeddings.len() != uniques.len() {
-            return Err(color_eyre::eyre::eyre!("Embeddings provider returned wrong length: expected {}, got {}", uniques.len(), unique_embeddings.len()));
-        }
-
-        // Map back per row into a ListChunked of f32 vectors
-        let row_embeddings_iter = row_texts.into_iter().map(|opt_text| {
-            opt_text.map(|t| {
-                let idx = unique_index.get(&t).copied().unwrap();
-                let v: &Vec<f32> = &unique_embeddings[idx];
-                Series::new(PlSmallStr::EMPTY, v.clone())
-            })
-        });
-        let mut lc: ListChunked = row_embeddings_iter.collect();
-        // Determine column name
-        let mut new_name = if new_column_name.trim().is_empty() { format!("{source_column}_emb") } else { new_column_name.to_string() };
-        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{new_name}__emb"); }
-        lc.rename(PlSmallStr::from_str(&new_name));
-        let list_series = lc.into_series();
-        // Build new DataFrame with appended column
-        let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(df_ref.width() + 1);
-        for c in df_ref.get_columns() { cols.push(c.clone()); }
-        cols.push(list_series.into_column());
-        let new_df = polars::prelude::DataFrame::new(cols)
-            .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame: {}", e))?;
-        self.datatable.dataframe.set_current_df(new_df);
-        Ok(())
-    }
-
-    fn fetch_embeddings_via_provider(
-        &self,
-        provider: crate::dialog::LlmProvider,
-        model_name: &str,
-        inputs: &Vec<String>,
-        dims_opt: Option<usize>,
-    ) -> color_eyre::Result<Vec<Vec<f32>>> {
-        match provider {
-            crate::dialog::LlmProvider::OpenAI => self.fetch_openai_embeddings(model_name, inputs, dims_opt),
-            crate::dialog::LlmProvider::Azure => self.fetch_azure_embeddings(model_name, inputs, dims_opt),
-            crate::dialog::LlmProvider::Ollama => self.fetch_ollama_embeddings(model_name, inputs),
-        }
-    }
-
-    fn fetch_openai_embeddings(
-        &self,
-        model_name: &str,
-        inputs: &Vec<String>,
-        dims_opt: Option<usize>,
-    ) -> color_eyre::Result<Vec<Vec<f32>>> {
-        let cfg = self.config.llm_config.openai.as_ref().ok_or_else(|| color_eyre::eyre::eyre!("OpenAI config is not set"))?;
-        let url = format!("{}/embeddings", cfg.base_url.trim_end_matches('/'));
-        let client = reqwest::blocking::Client::new();
-        #[derive(serde::Serialize)]
-        struct OpenAIEmbReq<'a> { model: &'a str, input: &'a Vec<String>, #[serde(skip_serializing_if="Option::is_none")] dimensions: Option<usize> }
-        #[derive(serde::Deserialize)]
-        struct OpenAIEmbRes { data: Vec<OpenAIEmbDatum> }
-        #[derive(serde::Deserialize)]
-        struct OpenAIEmbDatum { embedding: Vec<f32> }
-        let req = OpenAIEmbReq { model: model_name, input: inputs, dimensions: dims_opt };
-        let res = client.post(url)
-            .bearer_auth(&cfg.api_key)
-            .json(&req)
-            .send()
-            .map_err(|e| color_eyre::eyre::eyre!("OpenAI embeddings request failed: {e}"))?;
-        if !res.status().is_success() { return Err(color_eyre::eyre::eyre!("OpenAI embeddings HTTP error: {}", res.status())); }
-        let parsed: OpenAIEmbRes = res.json().map_err(|e| color_eyre::eyre::eyre!("OpenAI embeddings parse failed: {e}"))?;
-        Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
-    }
-
-    fn fetch_azure_embeddings(
-        &self,
-        model_name: &str,
-        inputs: &Vec<String>,
-        dims_opt: Option<usize>,
-    ) -> color_eyre::Result<Vec<Vec<f32>>> {
-        let cfg = self.config.llm_config.azure.as_ref().ok_or_else(|| color_eyre::eyre::eyre!("Azure OpenAI config is not set"))?;
-        // Expect base_url to point at deployment root, e.g., https://.../openai/deployments/<deployment>
-        let url = format!("{}/embeddings?api-version={}", cfg.base_url.trim_end_matches('/'), cfg.api_version);
-        let client = reqwest::blocking::Client::new();
-        #[derive(serde::Serialize)]
-        struct AzureEmbReq<'a> { input: &'a Vec<String>, #[serde(skip_serializing_if="Option::is_none")] dimensions: Option<usize>, model: &'a str }
-        #[derive(serde::Deserialize)]
-        struct AzureEmbRes { data: Vec<AzureEmbDatum> }
-        #[derive(serde::Deserialize)]
-        struct AzureEmbDatum { embedding: Vec<f32> }
-        let req = AzureEmbReq { input: inputs, dimensions: dims_opt, model: model_name };
-        let res = client.post(url)
-            .header("api-key", &cfg.api_key)
-            .json(&req)
-            .send()
-            .map_err(|e| color_eyre::eyre::eyre!("Azure embeddings request failed: {e}"))?;
-        if !res.status().is_success() { return Err(color_eyre::eyre::eyre!("Azure embeddings HTTP error: {}", res.status())); }
-        let parsed: AzureEmbRes = res.json().map_err(|e| color_eyre::eyre::eyre!("Azure embeddings parse failed: {e}"))?;
-        Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
-    }
-
-    fn fetch_ollama_embeddings(
-        &self,
-        model_name: &str,
-        inputs: &Vec<String>,
-    ) -> color_eyre::Result<Vec<Vec<f32>>> {
-        let cfg = self.config.llm_config.ollama.as_ref().ok_or_else(|| color_eyre::eyre::eyre!("Ollama config is not set"))?;
-        let url = format!("{}/api/embeddings", cfg.host.trim_end_matches('/'));
-        let client = reqwest::blocking::Client::new();
-        #[derive(serde::Serialize)]
-        struct OllamaEmbReq<'a> { model: &'a str, prompt: &'a str }
-        #[derive(serde::Deserialize)]
-        struct OllamaEmbRes { embedding: Vec<f32> }
-        let mut out: Vec<Vec<f32>> = Vec::with_capacity(inputs.len());
-        for inp in inputs.iter() {
-            let req = OllamaEmbReq { model: model_name, prompt: inp };
-            let res = client.post(&url)
-                .json(&req)
-                .send()
-                .map_err(|e| color_eyre::eyre::eyre!("Ollama embeddings request failed: {e}"))?;
-            if !res.status().is_success() { return Err(color_eyre::eyre::eyre!("Ollama embeddings HTTP error: {}", res.status())); }
-            let parsed: OllamaEmbRes = res.json().map_err(|e| color_eyre::eyre::eyre!("Ollama embeddings parse failed: {e}"))?;
-            out.push(parsed.embedding);
-        }
-        Ok(out)
-    }
 
     fn execute_pca(&mut self, source_column: &str, new_column_name: &str, target_k: usize) -> color_eyre::Result<()> {
         use polars::prelude::*;
