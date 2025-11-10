@@ -52,6 +52,7 @@ pub struct ColumnOperationConfig {
     pub operation: ColumnOperationKind,
     pub new_column_name: String,
     pub source_column: String,
+    pub hide_new_column: bool,
     pub options: OperationOptions,
 }
 
@@ -71,6 +72,7 @@ pub struct ColumnOperationOptionsDialog {
     #[serde(skip)]
     pub new_column_input: TextArea<'static>,
     pub selected_field_index: usize,
+    pub hide_new_column: bool,
     pub selected_provider: LlmProvider,
     pub model_name: String,
     #[serde(skip)]
@@ -116,6 +118,7 @@ impl ColumnOperationOptionsDialog {
                 t
             },
             selected_field_index: 0,
+            hide_new_column: false,
             selected_provider: LlmProvider::OpenAI,
             model_name: String::from("text-embedding-3-small"),
             model_name_input: {
@@ -193,6 +196,7 @@ impl ColumnOperationOptionsDialog {
         ];
         match self.operation {
             ColumnOperationKind::GenerateEmbeddings => {
+                fields.push(format!("Hide New Column: {}", if self.hide_new_column { "On" } else { "Off" }));
                 fields.push(format!("Provider: {}", self.selected_provider.display_name()));
                 fields.push("Model Name:".to_string());
                 fields.push(format!("Number of Dimensions: {}", self.num_dimensions));
@@ -273,10 +277,18 @@ impl ColumnOperationOptionsDialog {
                     let style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
                     buf.set_string(inner.x + 1, y, line, style);
 
+                    // Row 2: Hide New Column (toggle)
+                    let i = 2usize;
+                    let y = inner.y + 2;
+                    let is_selected = !self.buttons_mode && i == self.selected_field_index;
+                    let line = format!("Hide New Column: {}", if self.hide_new_column { "On" } else { "Off" });
+                    let style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
+                    buf.set_string(inner.x + 1, y, line, style);
+
                     // Embedding Options block for Provider, Model, and Dimensions
                     let emb_outer = Rect {
                         x: inner.x + 1,
-                        y: inner.y + 3,
+                        y: inner.y + 4,
                         width: inner.width.saturating_sub(2),
                         height: 5, // three lines of content
                     };
@@ -285,7 +297,7 @@ impl ColumnOperationOptionsDialog {
                     emb_block.render(emb_outer, buf);
 
                     // Row 2 inside block: Provider (enum)
-                    let i = 2usize;
+                    let i = 3usize;
                     let y = emb_inner.y;
                     let is_selected = !self.buttons_mode && i == self.selected_field_index;
                     let line = format!("Provider: {}", self.selected_provider.display_name());
@@ -293,7 +305,7 @@ impl ColumnOperationOptionsDialog {
                     buf.set_string(emb_inner.x, y, line, style);
 
                     // Row 3 inside block: Model Name (text input)
-                    let i = 3usize;
+                    let i = 4usize;
                     let y = emb_inner.y + 1;
                     let is_selected = !self.buttons_mode && i == self.selected_field_index;
                     let label = "Model Name:".to_string();
@@ -306,7 +318,7 @@ impl ColumnOperationOptionsDialog {
                     ta.render(input_area, buf);
 
                     // Row 4 inside block: Number of Dimensions (number input)
-                    let i = 4usize;
+                    let i = 5usize;
                     let y = emb_inner.y + 2;
                     let is_selected = !self.buttons_mode && i == self.selected_field_index;
                     let label = "Number of Dimensions:".to_string();
@@ -323,7 +335,7 @@ impl ColumnOperationOptionsDialog {
                         let y = inner.y + i as u16;
                         if y >= inner.y + inner.height { break; }
                         let is_selected = !self.buttons_mode && i == self.selected_field_index;
-                        if (i == 0) || (self.operation == ColumnOperationKind::GenerateEmbeddings && i == 2) {
+                        if (i == 0) || (self.operation == ColumnOperationKind::GenerateEmbeddings && i == 4) {
                             let label = line.trim_end_matches(':').to_string() + ":";
                             let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
                             buf.set_string(inner.x + 1, y, label.clone(), label_style);
@@ -416,7 +428,7 @@ impl ColumnOperationOptionsDialog {
                     // Embedding Options block for Provider, Model, and Dimensions
                     let emb_outer = Rect {
                         x: inner.x + 1,
-                        y: base_y + 2,
+                        y: base_y + 3,
                         width: inner.width.saturating_sub(2),
                         height: 5,
                     };
@@ -425,7 +437,7 @@ impl ColumnOperationOptionsDialog {
                     emb_block.render(emb_outer, buf);
 
                     // Row 2 inside block: Provider
-                    let i = 2usize;
+                    let i = 3usize;
                     let y = emb_inner.y;
                     let is_selected = !self.buttons_mode && i == self.selected_field_index;
                     let line = format!("Provider: {}", self.selected_provider.display_name());
@@ -433,7 +445,7 @@ impl ColumnOperationOptionsDialog {
                     buf.set_string(emb_inner.x, y, line, style);
 
                     // Row 3 inside block: Model Name
-                    let i = 3usize;
+                    let i = 4usize;
                     let y = emb_inner.y + 1;
                     let is_selected = !self.buttons_mode && i == self.selected_field_index;
                     let label = "Model Name:".to_string();
@@ -446,7 +458,7 @@ impl ColumnOperationOptionsDialog {
                     ta.render(input_area, buf);
 
                     // Row 4 inside block: Number of Dimensions
-                    let i = 4usize;
+                    let i = 5usize;
                     let y = emb_inner.y + 2;
                     let is_selected = !self.buttons_mode && i == self.selected_field_index;
                     let label = "Number of Dimensions:".to_string();
@@ -463,7 +475,7 @@ impl ColumnOperationOptionsDialog {
                         let y = inner.y + 1 + i as u16;
                         if y >= inner.y + inner.height { break; }
                         let is_selected = !self.buttons_mode && i == self.selected_field_index;
-                        if (i == 0) || (self.operation == ColumnOperationKind::GenerateEmbeddings && i == 2) {
+                        if (i == 0) || (self.operation == ColumnOperationKind::GenerateEmbeddings && i == 4) {
                             let label = line.trim_end_matches(':').to_string() + ":";
                             let label_style = if is_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
                             buf.set_string(inner.x + 1, y, label.clone(), label_style);
@@ -631,6 +643,7 @@ impl ColumnOperationOptionsDialog {
             operation: self.operation.clone(),
             new_column_name: self.new_column_name.clone(),
             source_column,
+            hide_new_column: self.hide_new_column,
             options
         };
         Action::ColumnOperationOptionsApplied(cfg)
@@ -640,7 +653,7 @@ impl ColumnOperationOptionsDialog {
         if key.kind != KeyEventKind::Press { return Ok(None); }
         // Intercept Tab on Model Name to cycle models before config actions can toggle buttons
         if matches!(self.operation, ColumnOperationKind::GenerateEmbeddings)
-            && self.selected_field_index == 3
+            && self.selected_field_index == 4
         {
             if let KeyCode::Tab = key.code {
                 let models = self.embedding_models_for_provider(&self.selected_provider);
@@ -704,6 +717,9 @@ impl ColumnOperationOptionsDialog {
                             if !self.columns.is_empty() {
                                 if self.selected_column_index == 0 { self.selected_column_index = self.columns.len().saturating_sub(1); } else { self.selected_column_index -= 1; }
                             }
+                        } else if self.operation == ColumnOperationKind::GenerateEmbeddings && self.selected_field_index == 2 {
+                            // Hide New Column toggle -> Off on Left
+                            self.hide_new_column = false;
                         } else if self.is_current_field_text() {
                             // Move cursor left in TextArea
                             self.feed_text_input_key(KeyCode::Left, false, false, false);
@@ -718,6 +734,9 @@ impl ColumnOperationOptionsDialog {
                         self.selected_button = (self.selected_button + 1) % 2;
                     } else if self.selected_field_index == 1 {
                         if !self.columns.is_empty() { self.selected_column_index = (self.selected_column_index + 1) % self.columns.len(); }
+                    } else if self.operation == ColumnOperationKind::GenerateEmbeddings && self.selected_field_index == 2 {
+                        // Hide New Column toggle -> On on Right
+                        self.hide_new_column = true;
                     } else if self.is_current_field_text() {
                         self.feed_text_input_key(KeyCode::Right, false, false, false);
                     } else {
@@ -809,7 +828,7 @@ impl ColumnOperationOptionsDialog {
         match self.operation {
             ColumnOperationKind::GenerateEmbeddings => {
                 match idx {
-                    1 => {
+                    2 => {
                         // Provider selection rotate
                         let order = [LlmProvider::Azure, LlmProvider::OpenAI, LlmProvider::Ollama];
                         let mut pos = order.iter().position(|p| p == &self.selected_provider).unwrap_or(1);
@@ -821,7 +840,7 @@ impl ColumnOperationOptionsDialog {
                             self.set_model_and_dimensions(model, *dims);
                         }
                     }
-                    3 => {
+                    4 => {
                         // Number of dimensions adjust
                         if increment { self.num_dimensions = self.num_dimensions.saturating_add(1); } else { self.num_dimensions = self.num_dimensions.saturating_sub(1); }
                     }
@@ -872,6 +891,11 @@ impl ColumnOperationOptionsDialog {
                     ClusterAlgorithm::Dbscan => ClusterAlgorithm::Kmeans,
                 };
             }
+        } else if self.operation == ColumnOperationKind::GenerateEmbeddings {
+            // Hide New Column toggle at index 2
+            if self.selected_field_index == 2 {
+                self.hide_new_column = !self.hide_new_column;
+            }
         }
     }
 
@@ -882,9 +906,10 @@ impl ColumnOperationOptionsDialog {
             ColumnOperationKind::GenerateEmbeddings => {
                 match self.selected_field_index {
                     1 => "enum", // source column selector
-                    2 => "enum", // provider selector
-                    3 => "text", // model name
-                    4 => "number", // num dims
+                    2 => "enum", // hide new column toggle
+                    3 => "enum", // provider selector
+                    4 => "text", // model name
+                    5 => "number", // num dims
                     _ => "number",
                 }
             }
@@ -922,7 +947,7 @@ impl ColumnOperationOptionsDialog {
 
     fn is_index_number_field(&self, index: usize) -> bool {
         match self.operation {
-            ColumnOperationKind::GenerateEmbeddings => index == 4,
+            ColumnOperationKind::GenerateEmbeddings => index == 5,
             ColumnOperationKind::Pca => index == 2,
             ColumnOperationKind::Cluster => {
                 if matches!(self.cluster_algorithm, ClusterAlgorithm::Kmeans) {

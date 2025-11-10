@@ -362,6 +362,10 @@ impl DataTableContainer {
         let new_df = polars::prelude::DataFrame::new(cols)
             .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame: {}", e))?;
         self.datatable.dataframe.set_current_df(new_df);
+        // Hide the new column if requested
+        if job.hide_new_column {
+            self.datatable.dataframe.column_width_config.hidden_columns.insert(new_name.clone(), true);
+        }
         Ok(())
     }
 
@@ -1756,6 +1760,7 @@ impl Component for DataTableContainer {
                                         model_name,
                                         num_dimensions: num_dims,
                                         selected_provider: Some(provider),
+                                        hide_new_column: cfg.hide_new_column,
                                     });
                                     // If prompt flow is pending, remember new embeddings column name
                                     if let Some(ref mut pending) = self.pending_prompt_flow { pending.embeddings_column_name = Some(cfg.new_column_name.clone()); }
@@ -2227,6 +2232,7 @@ impl Component for DataTableContainer {
                         model_name: q.model_name,
                         num_dimensions: q.num_dimensions,
                         provider,
+                        hide_new_column: q.hide_new_column,
                         row_texts,
                         uniques,
                         unique_index,
@@ -2584,6 +2590,7 @@ pub struct QueuedEmbeddings {
     pub model_name: String,
     pub num_dimensions: usize,
     pub selected_provider: Option<crate::dialog::LlmProvider>,
+    pub hide_new_column: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2593,6 +2600,7 @@ pub struct EmbeddingsJob {
     pub model_name: String,
     pub num_dimensions: usize,
     pub provider: crate::dialog::LlmProvider,
+    pub hide_new_column: bool,
     pub row_texts: Vec<Option<String>>,
     pub uniques: Vec<String>,
     pub unique_index: std::collections::HashMap<String, usize>,
