@@ -75,7 +75,7 @@ use crate::dialog::ColumnOperationOptionsDialog;
 use crate::dialog::ColumnOperationOptionsMode;
 use crate::dialog::ColumnOperationKind;
 use crate::dialog::filter_dialog::{FilterExpr, FilterCondition, FilterDialogMode};
-use crate::dialog::{LlmClientCreateDialog, LlmClientCreateMode};
+use crate::dialog::LlmClientCreateDialog;
 // use polars_sql::SQLContext; // replaced by custom new_sql_context
 use crate::sql::new_sql_context;
 use std::sync::Arc;
@@ -303,7 +303,7 @@ impl DataTableContainer {
         Ok(())
     }
     fn process_next_embeddings_batch(&mut self) -> color_eyre::Result<Option<bool>> {
-        let mut job = if let Some(j) = self.in_progress_embeddings.take() { j } else { return Ok(None) };
+        let job = if let Some(j) = self.in_progress_embeddings.take() { j } else { return Ok(None) };
         if job.next_start >= job.total_uniques { self.in_progress_embeddings = Some(job); return Ok(Some(true)); }
         let start = job.next_start;
         let end = (start + job.batch_size).min(job.total_uniques);
