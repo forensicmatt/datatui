@@ -53,6 +53,7 @@ impl EmbeddingsPromptDialog {
         if let Some(name) = initial_selected {
             if let Some(idx) = columns.iter().position(|n| n == &name) { selected_column_index = idx; }
         }
+        let no_existing_columns = columns.is_empty();
         let mut prompt_input = TextArea::default();
         prompt_input.set_block(Block::default());
         let mut new_column_input = TextArea::default();
@@ -71,7 +72,7 @@ impl EmbeddingsPromptDialog {
             config: crate::config::Config::default(),
             embedding_column_config_mapping: mapping,
             selected_field: SelectedField::EmbeddingsRow,
-            emb_col_button_selected: false,
+            emb_col_button_selected: no_existing_columns, // true when there are no existing embedding columns
         }
     }
 
@@ -247,6 +248,62 @@ impl EmbeddingsPromptDialog {
 
     pub fn handle_key_event_inner(&mut self, key: KeyEvent) -> Option<Action> {
         if key.kind != KeyEventKind::Press { return None; }
+        // When Prompt is selected, handle keys as literals first, with special escape rules for Up/Down/Tab
+        if !self.buttons_mode && matches!(self.selected_field, SelectedField::Prompt) {
+            match key.code {
+                KeyCode::Up => {
+                    let (row, _col) = self.prompt_input.cursor();
+                    if row > 0 {
+                        self.feed_text_input_key(SelectedField::Prompt, KeyCode::Up);
+                    } else {
+                        self.selected_field = SelectedField::NewColumnName;
+                    }
+                    return None;
+                }
+                KeyCode::Down => {
+                    let (row, _col) = self.prompt_input.cursor();
+                    let last_idx = self.prompt_input.lines().len().saturating_sub(1);
+                    if row < last_idx {
+                        self.feed_text_input_key(SelectedField::Prompt, KeyCode::Down);
+                    } else {
+                        self.buttons_mode = true;
+                        self.selected_button = 0;
+                    }
+                    return None;
+                }
+                KeyCode::Tab => {
+                    // Treat Tab as literal unless at the last line, then escape to [Apply]
+                    let (row, _col) = self.prompt_input.cursor();
+                    let last_idx = self.prompt_input.lines().len().saturating_sub(1);
+                    if row < last_idx {
+                        self.feed_text_input_key(SelectedField::Prompt, KeyCode::Tab);
+                    } else {
+                        self.buttons_mode = true;
+                        self.selected_button = 0;
+                    }
+                    return None;
+                }
+                KeyCode::Enter
+                | KeyCode::Backspace
+                | KeyCode::Delete
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::PageUp
+                | KeyCode::PageDown => {
+                    self.feed_text_input_key(SelectedField::Prompt, key.code);
+                    return None;
+                }
+                KeyCode::Char(ch) => {
+                    self.feed_text_input_key(SelectedField::Prompt, KeyCode::Char(ch));
+                    return None;
+                }
+                _ => {
+                    // Fall through for things like Escape
+                }
+            }
+        }
         // Global actions first
         if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
             match global_action {
@@ -260,9 +317,24 @@ impl EmbeddingsPromptDialog {
                             return Some(Action::DialogClose);
                         }
                     }
+                    // If on Embeddings row and button is selected, open Generate Embeddings options
+                    if matches!(self.selected_field, SelectedField::EmbeddingsRow) && self.emb_col_button_selected {
+                        let prompt = self.prompt_input.lines().join("\n");
+                        return Some(Action::EmbeddingsPromptDialogRequestGenerateEmbeddings {
+                            prompt_text: prompt,
+                            new_similarity_column: self.new_column_name.clone(),
+                        });
+                    }
                     // Otherwise insert newline in prompt if on prompt
                     if matches!(self.selected_field, SelectedField::Prompt) { self.feed_text_input_key(SelectedField::Prompt, KeyCode::Enter); }
                     return None;
+                }
+                Action::Backspace => {
+                    // Route backspace to active text input if on a text field
+                    if matches!(self.selected_field, SelectedField::NewColumnName) {
+                        self.feed_text_input_key(SelectedField::NewColumnName, KeyCode::Backspace);
+                        return None;
+                    }
                 }
                 Action::Up => {
                     if self.buttons_mode {
@@ -326,7 +398,15 @@ impl EmbeddingsPromptDialog {
                     return None;
                 }
                 Action::Left => {
-                    if self.buttons_mode { self.selected_button = self.selected_button.saturating_sub(1) % 2; }
+                    if self.buttons_mode {
+                        // If [Apply] is selected, Left selects Prompt; if [Close], move to [Apply]
+                        if self.selected_button == 0 {
+                            self.buttons_mode = false;
+                            self.selected_field = SelectedField::Prompt;
+                        } else {
+                            self.selected_button = 0;
+                        }
+                    }
                     else if matches!(self.selected_field, SelectedField::EmbeddingsRow) {
                         if self.emb_col_button_selected {
                             // [From New Column] -> Embedding Column
@@ -392,12 +472,19 @@ impl EmbeddingsPromptDialog {
                 }
             }
             KeyCode::Char(' ') => {
-                // no-op here
+                if matches!(self.selected_field, SelectedField::NewColumnName | SelectedField::Prompt) {
+                    self.feed_text_input_key(self.selected_field, KeyCode::Char(' '));
+                }
             }
             KeyCode::Char(ch) => {
                 if matches!(self.selected_field, SelectedField::NewColumnName | SelectedField::Prompt) {
                     // ch is embedded within KeyCode::Char here
                     self.feed_text_input_key(self.selected_field, KeyCode::Char(ch));
+                }
+            }
+            KeyCode::Backspace => {
+                if matches!(self.selected_field, SelectedField::NewColumnName | SelectedField::Prompt) {
+                    self.feed_text_input_key(self.selected_field, KeyCode::Backspace);
                 }
             }
             _ => {}
