@@ -35,6 +35,7 @@
       "<Ctrl-t>": "OpenSqlDialog",
       "<Ctrl-j>": "OpenJmesDialog",
       "<Ctrl-o>": "OpenColumnOperationsDialog",
+      "<f1>": "OpenEmbeddingsPromptDialog",
       "<Ctrl-f>": "OpenFindDialog",
       "<Ctrl-d>": "OpenDataframeDetailsDialog",
       "<Ctrl-w>": "OpenColumnWidthDialog",

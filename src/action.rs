@@ -221,6 +221,13 @@ pub enum Action {
         new_column_name: String,
         prompt_embedding: Vec<f32>,
     },
+    /// Open the Embeddings Prompt dialog directly (F1)
+    OpenEmbeddingsPromptDialog,
+    /// EmbeddingsPromptDialog requests to generate embeddings first
+    EmbeddingsPromptDialogRequestGenerateEmbeddings {
+        prompt_text: String,
+        new_similarity_column: String,
+    },
     /// Internal container -> manager: open export dialog (alias already exists earlier)
     OpenDataExportDialogAlias,
     /// Sort dialog specific actions

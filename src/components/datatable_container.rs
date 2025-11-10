@@ -192,6 +192,15 @@ pub struct DataTableContainer {
     // Prompt similarity dialog
     pub embeddings_prompt_dialog: Option<crate::dialog::EmbeddingsPromptDialog>,
     pub embeddings_prompt_dialog_active: bool,
+    // Pending prompt flow to reopen after embeddings generation
+    pub pending_prompt_flow: Option<PendingPromptFlow>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingPromptFlow {
+    pub prompt_text: String,
+    pub similarity_new_column: String,
+    pub embeddings_column_name: Option<String>,
 }
 
 impl core::fmt::Debug for DataTableContainer {
@@ -655,6 +664,7 @@ impl DataTableContainer {
             embedding_column_config_mapping: HashMap::new(),
             embeddings_prompt_dialog: None,
             embeddings_prompt_dialog_active: false,
+            pending_prompt_flow: None,
         }
     }
 
@@ -1495,9 +1505,6 @@ impl Component for DataTableContainer {
                             };
                             let mut dialog = crate::dialog::EmbeddingsPromptDialog::new_with_mapping(mapping, initial);
                             dialog.register_config_handler(self.config.clone())?;
-                            if dialog.columns.is_empty() {
-                                dialog.mode = crate::dialog::embeddings_prompt_dialog::EmbeddingsPromptDialogMode::Error("No embedding columns available. Generate embeddings first.".to_string());
-                            }
                             self.embeddings_prompt_dialog = Some(dialog);
                             self.embeddings_prompt_dialog_active = true;
                             self.column_operations_dialog_active = false;
@@ -1579,6 +1586,45 @@ impl Component for DataTableContainer {
                             if let Err(e) = self.execute_prompt_similarity(&source_column, &new_column_name, &prompt_embedding) {
                                 tracing::error!("Prompt similarity apply failed: {}", e);
                             }
+                            self.embeddings_prompt_dialog_active = false;
+                            self.embeddings_prompt_dialog = None;
+                            return Ok(None);
+                        }
+                        Action::EmbeddingsPromptDialogRequestGenerateEmbeddings { prompt_text, new_similarity_column } => {
+                            // Record pending prompt flow to restore later
+                            self.pending_prompt_flow = Some(PendingPromptFlow {
+                                prompt_text,
+                                similarity_new_column: new_similarity_column,
+                                embeddings_column_name: None,
+                            });
+                            // Open GenerateEmbeddings options dialog directly
+                            let op = ColumnOperationKind::GenerateEmbeddings;
+                            let df = self.datatable.get_dataframe()?;
+                            let df_ref = df.as_ref();
+                            let all_names: Vec<String> = df_ref
+                                .get_column_names_owned()
+                                .into_iter()
+                                .map(|s| s.to_string())
+                                .collect();
+                            use polars::prelude::DataType;
+                            let filtered: Vec<String> = all_names
+                                .into_iter()
+                                .filter(|name| df_ref.column(name).ok().map(|s| s.dtype() == &DataType::String).unwrap_or(false))
+                                .collect();
+                            // Compute initial selected index based on current table selection
+                            let current_col_name = {
+                                let visible_columns = self.datatable.get_visible_columns().unwrap_or_default();
+                                let idx = self.datatable.selection.col.min(visible_columns.len().saturating_sub(1));
+                                visible_columns.get(idx).cloned().unwrap_or_default()
+                            };
+                            let selected_idx = filtered.iter().position(|n| n == &current_col_name).unwrap_or(0);
+                            let mut dialog = ColumnOperationOptionsDialog::new_with_columns(op, filtered, selected_idx);
+                            dialog.register_config_handler(self.config.clone())?;
+                            if dialog.columns.is_empty() {
+                                dialog.mode = ColumnOperationOptionsMode::Error("No compatible columns found for this operation".to_string());
+                            }
+                            self.column_operation_options_dialog = Some(dialog);
+                            self.column_operation_options_dialog_active = true;
                             self.embeddings_prompt_dialog_active = false;
                             self.embeddings_prompt_dialog = None;
                             return Ok(None);
@@ -1711,6 +1757,8 @@ impl Component for DataTableContainer {
                                         num_dimensions: num_dims,
                                         selected_provider: Some(provider),
                                     });
+                                    // If prompt flow is pending, remember new embeddings column name
+                                    if let Some(ref mut pending) = self.pending_prompt_flow { pending.embeddings_column_name = Some(cfg.new_column_name.clone()); }
                                     self.column_operation_options_dialog_active = false;
                                     // Do not trigger Render immediately; allow one frame to draw the overlay first
                                     return Ok(None);
@@ -1972,6 +2020,18 @@ impl Component for DataTableContainer {
                     self.sort_dialog_active = true;
                     return Ok(None);
                 }
+                Action::OpenEmbeddingsPromptDialog => {
+                    let mapping = self.embedding_column_config_mapping.clone();
+                    let visible_columns = self.datatable.get_visible_columns().unwrap_or_default();
+                    let idx = self.datatable.selection.col.min(visible_columns.len().saturating_sub(1));
+                    let name = visible_columns.get(idx).cloned().unwrap_or_default();
+                    let initial = if mapping.contains_key(&name) { Some(name) } else { None };
+                    let mut dialog = crate::dialog::EmbeddingsPromptDialog::new_with_mapping(mapping, initial);
+                    dialog.register_config_handler(self.config.clone())?;
+                    self.embeddings_prompt_dialog = Some(dialog);
+                    self.embeddings_prompt_dialog_active = true;
+                    return Ok(None);
+                }
                 Action::QuickSortCurrentColumn => {
                     let visible_columns = self.datatable.get_visible_columns()?;
                     let col_idx = self.datatable.selection.col.min(visible_columns.len().saturating_sub(1));
@@ -2187,6 +2247,20 @@ impl Component for DataTableContainer {
                         self.busy_active = false;
                         self.busy_message.clear();
                         self.busy_progress = 0.0;
+                        // If we initiated from prompt flow, reopen the prompt dialog now
+                        if let Some(pending) = self.pending_prompt_flow.take() {
+                            let mapping = self.embedding_column_config_mapping.clone();
+                            let initial = pending.embeddings_column_name.clone();
+                            let mut dialog = crate::dialog::EmbeddingsPromptDialog::new_with_mapping(mapping, initial);
+                            dialog.register_config_handler(self.config.clone())?;
+                            // Restore prompt text and similarity new column name
+                            dialog.new_column_input.insert_str(&pending.similarity_new_column);
+                            dialog.new_column_name = dialog.new_column_input.lines().join("\n");
+                            dialog.prompt_input.insert_str(&pending.prompt_text);
+                            self.embeddings_prompt_dialog = Some(dialog);
+                            self.embeddings_prompt_dialog_active = true;
+                            return Ok(None);
+                        }
                         return Ok(Some(Action::SaveWorkspaceState));
                     } else {
                         // Continue on next render

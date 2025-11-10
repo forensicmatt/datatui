@@ -223,6 +223,7 @@ impl Config {
             Action::OpenSqlDialog => "SQL",
             Action::OpenJmesDialog => "JMESPath",
             Action::OpenColumnOperationsDialog => "Column Ops",
+            Action::OpenEmbeddingsPromptDialog => "Prompt Similarity",
             Action::OpenFindDialog => "Find",
             Action::OpenDataframeDetailsDialog => "Details",
             Action::OpenColumnWidthDialog => "Column Width",
