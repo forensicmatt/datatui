@@ -391,9 +391,7 @@ impl LlmClientDialog {
         self.config.actions_to_instructions(&[
             (crate::config::Mode::Global, crate::action::Action::Escape),
             (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::Enter),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::LlmClientDialogApplied(LlmConfig::default())),
-            (crate::config::Mode::LlmClientDialog, crate::action::Action::LlmClientDialogCancel),
+            (crate::config::Mode::LlmClientDialog, crate::action::Action::Enter)
         ])
     }
 
@@ -501,8 +499,10 @@ impl LlmClientDialog {
         }
 
         // Get all configured actions once at the start
-        let optional_global_action = self.config.action_for_key(crate::config::Mode::Global, key);
-        let llm_dialog_action = self.config.action_for_key(crate::config::Mode::LlmClientDialog, key);
+        let optional_global_action = self.config.action_for_key(
+            crate::config::Mode::Global, key);
+        let llm_dialog_action = self.config.action_for_key(
+            crate::config::Mode::LlmClientDialog, key);
 
         // Handle global actions that work in all modes
         if let Some(global_action) = &optional_global_action

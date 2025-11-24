@@ -25,6 +25,7 @@ pub enum Action {
     Escape,
     Enter,
     Backspace,
+    DeleteWord,
     Up,
     Down,
     Left,

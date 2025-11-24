@@ -77,7 +77,7 @@ pub struct ProjectSettingsDialog {
 impl ProjectSettingsDialog {
     pub fn new(config: ProjectSettingsConfig) -> Self {
         let workspace_path_input = String::new();
-        let config_path_input = get_config_dir().join("llm-settings.toml").to_string_lossy().to_string();
+        let config_path_input = get_config_dir().join(".datatui-llm-settings.toml").to_string_lossy().to_string();
         
         Self {
             config,
@@ -102,14 +102,8 @@ impl ProjectSettingsDialog {
     /// Build instructions string from configured keybindings
     fn build_instructions_from_config(&self) -> String {
         self.keybindings_config.actions_to_instructions(&[
-            (crate::config::Mode::Global, crate::action::Action::Up),
-            (crate::config::Mode::Global, crate::action::Action::Down),
-            (crate::config::Mode::Global, crate::action::Action::Left),
-            (crate::config::Mode::Global, crate::action::Action::Right),
             (crate::config::Mode::Global, crate::action::Action::Tab),
             (crate::config::Mode::Global, crate::action::Action::Enter),
-            (crate::config::Mode::Global, crate::action::Action::Escape),
-            (crate::config::Mode::Global, crate::action::Action::Backspace),
             (crate::config::Mode::ProjectSettings, crate::action::Action::ToggleDataViewerOption),
         ])
     }
@@ -320,21 +314,22 @@ impl ProjectSettingsDialog {
                     return None;
                 }
             }
-
-            // Check for ProjectSettings-specific actions
-            if let Some(dialog_action) = self.keybindings_config.action_for_key(crate::config::Mode::ProjectSettings, key) {
-                if dialog_action == Action::ToggleDataViewerOption {
-                    // Toggle boolean when data viewer option is selected
-                    if self.selected_option == SelectedOption::AutoExpandValueDisplay {
-                        self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
-                    }
-                    return None;
-                }
-            }
         }
         
         match &mut self.mode {
             ProjectSettingsDialogMode::Input => {
+                // Check for ProjectSettings-specific actions (only in Input mode)
+                if key.kind == KeyEventKind::Press {
+                    if let Some(dialog_action) = self.keybindings_config.action_for_key(crate::config::Mode::ProjectSettings, key) {
+                        if dialog_action == Action::ToggleDataViewerOption {
+                            // Toggle boolean when data viewer option is selected
+                            if self.selected_option == SelectedOption::AutoExpandValueDisplay {
+                                self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
+                            }
+                            return None;
+                        }
+                    }
+                }
                 if self.error_active {
                     // Only allow Esc or Enter to clear error
                     if key.kind == KeyEventKind::Press {

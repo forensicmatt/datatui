@@ -127,17 +127,25 @@ impl Config {
             }
         }
 
-        // Load LLM config from llm-settings.toml (optional)
+        // Load LLM config from ~/.datatui-llm-settings.toml (ensure exists)
         cfg.load_llm_config()?;
 
         Ok(cfg)
     }
 
-    /// Load LLM configuration from llm-settings.toml file (optional)
+    /// Load LLM configuration from ~/.datatui-llm-settings.toml file (ensure exists)
     fn load_llm_config(&mut self) -> Result<(), config::ConfigError> {
         let config_dir = get_config_dir();
-        let llm_config_path = config_dir.join("llm-settings.toml");
+        let llm_config_path = config_dir.join(".datatui-llm-settings.toml");
         
+        // Ensure default LLM config file exists at the target location
+        if !llm_config_path.exists() {
+            if let Some(parent) = llm_config_path.parent() { let _ = fs::create_dir_all(parent); }
+            let default_toml = toml::to_string_pretty(&self.llm_config)
+                .unwrap_or_else(|_| String::from("# LLM Settings\n# Configure providers like [openai], [azure], [ollama]\n"));
+            let _ = fs::write(&llm_config_path, default_toml);
+        }
+
         if llm_config_path.exists() {
             match fs::read_to_string(&llm_config_path) {
                 Ok(content) => {
@@ -157,15 +165,14 @@ impl Config {
                 }
             }
         }
-        // Don't create default LLM config file - let it be optional
         
         Ok(())
     }
 
-    /// Save LLM configuration to llm-settings.toml file
+    /// Save LLM configuration to ~/.datatui-llm-settings.toml file
     pub fn save_llm_config(&self) -> Result<(), std::io::Error> {
         let config_dir = get_config_dir();
-        let llm_config_path = config_dir.join("llm-settings.toml");
+        let llm_config_path = config_dir.join(".datatui-llm-settings.toml");
         
         if let Some(parent) = llm_config_path.parent() {
             let _ = fs::create_dir_all(parent);
@@ -210,6 +217,8 @@ impl Config {
             Action::Right => "Right",
             Action::Tab => "Tab",
             Action::Paste => "Paste",
+            Action::SelectAllText => "Select All",
+            Action::DeleteWord => "Delete Word",
             Action::ToggleInstructions => "Toggle Instructions",
             Action::OpenKeybindings => "Key Bindings",
 
@@ -275,7 +284,6 @@ impl Config {
             Action::PageDown => "Page Down",
             
             // SQL dialog actions
-            Action::SelectAllText => "Select All",
             Action::CopyText => "Copy Text",
             Action::RunQuery => "Run Query",
             Action::CreateNewDataset => "New Dataset",
@@ -469,8 +477,10 @@ pub fn get_data_dir() -> PathBuf {
 pub fn get_config_dir() -> PathBuf {
     if let Some(s) = CONFIG_FOLDER.clone() {
         s
+    } else if let Some(base) = BaseDirs::new() {
+        base.home_dir().to_path_buf()
     } else {
-        PathBuf::from(".").join(".config")
+        PathBuf::from(".")
     }
 }
 

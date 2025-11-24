@@ -23,7 +23,11 @@
       "<enter>": "Enter",
       "<backspace>": "Backspace",
       "<Ctrl-i>": "ToggleInstructions",
-      "<Alt-,>": "OpenKeybindings"
+      "<Alt-,>": "OpenKeybindings",
+      "<Ctrl-a>": "SelectAllText",
+      "<Ctrl-c>": "CopyText",
+      "<Ctrl-p>": "Paste",
+      "<Ctrl-backspace>": "DeleteWord"
     },
     "DataTableContainer": {
       "<Ctrl-s>": "OpenSortDialog",
