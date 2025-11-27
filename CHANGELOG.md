@@ -16,6 +16,12 @@ and this project adheres to
 - customizable and persistent key bindings
 - parameters for loading data with the cli
 
+## [0.2.0]
+### Added
+- cargo.lock (removed cargo.lock from .gitignore)
+- customizable and persistent key bindings
+- parameters for loading data with the cli
+
 ## [0.1.1]
 ### Added
 - added ctrl + a (select all) and ctrl + c (copy) to SqlDialog

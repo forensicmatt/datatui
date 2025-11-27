@@ -1475,6 +1475,7 @@ impl DataFrameDetailsDialog {
                             let suggested = Some("embeddings.csv".to_string());
                             self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
                         }
+                        DetailsTab::Heatmap => { /* no export for heatmap */ }
                     }
                 }
                 Action::NavigateHeatmapLeft => {
