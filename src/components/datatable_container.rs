@@ -75,6 +75,7 @@ use crate::dialog::ColumnOperationOptionsDialog;
 use crate::dialog::ColumnOperationOptionsMode;
 use crate::dialog::ColumnOperationKind;
 use crate::dialog::filter_dialog::{FilterExpr, FilterCondition, FilterDialogMode};
+use crate::dialog::LlmClientCreateDialog;
 // use polars_sql::SQLContext; // replaced by custom new_sql_context
 use crate::sql::new_sql_context;
 use std::sync::Arc;
@@ -89,8 +90,7 @@ use regex::Regex;
 use serde_json::{Value as JsonValue, Map as JsonMap};
 use jmespath;
 use serde_json::Value;
-use polars::prelude::{NamedFrom, IntoColumn, Series, ListChunked, PlSmallStr, DataType, IntoSeries};
-use crate::providers::openai::Client as OpenAIClient;
+use polars::prelude::{NamedFrom, IntoColumn};
 use crate::dialog::OperationOptions;
 use crate::dialog::{ClusterAlgorithm, KmeansOptions, DbscanOptions};
 // use crate::dialog::DataExportDialog; // moved to DataTabManagerDialog
@@ -99,6 +99,14 @@ use linfa_reduction::Pca as LinfaPca;
 use ndarray::{Array2, ArrayBase, Ix2, OwnedRepr};
 use linfa_clustering::KMeans;
 use linfa::DatasetBase;
+
+
+#[derive(Debug, Clone)]
+pub struct EmbeddingColumnConfig {
+    pub provider: crate::dialog::LlmProvider,
+    pub model_name: String,
+    pub num_dimensions: usize
+}
 
 /// DataTableContainer: Composite widget for DataTable with viewing box and instructions
 ///
@@ -161,6 +169,7 @@ pub struct DataTableContainer {
     pub last_dataframe_details_dialog_max_rows: Option<usize>,
     pub last_jmes_dialog_area: Option<ratatui::layout::Rect>,
     pub last_column_operations_dialog_area: Option<ratatui::layout::Rect>,
+    pub last_embeddings_prompt_dialog_area: Option<ratatui::layout::Rect>,
     pub current_search_pattern: Option<String>,
     pub current_search_mode: Option<SearchMode>,
     pub current_search_options: Option<FindOptions>,
@@ -170,8 +179,28 @@ pub struct DataTableContainer {
     pub busy_message: String,
     pub busy_progress: f64,
     pub queued_embeddings: Option<QueuedEmbeddings>,
+    pub in_progress_embeddings: Option<EmbeddingsJob>,
     pub queued_pca: Option<QueuedPca>,
     pub queued_cluster: Option<QueuedCluster>,
+    // LLM client creation dialog for ad-hoc operations (e.g., embeddings)
+    pub llm_client_create_dialog: Option<LlmClientCreateDialog>,
+    pub llm_client_create_dialog_active: bool,
+    pub last_llm_client_create_dialog_area: Option<ratatui::layout::Rect>,
+    pub pending_embeddings_after_llm_selection: Option<QueuedEmbeddings>,
+    // Map embedding column name -> LLM config snapshot used to generate it
+    pub embedding_column_config_mapping: HashMap<String, EmbeddingColumnConfig>,
+    // Prompt similarity dialog
+    pub embeddings_prompt_dialog: Option<crate::dialog::EmbeddingsPromptDialog>,
+    pub embeddings_prompt_dialog_active: bool,
+    // Pending prompt flow to reopen after embeddings generation
+    pub pending_prompt_flow: Option<PendingPromptFlow>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingPromptFlow {
+    pub prompt_text: String,
+    pub similarity_new_column: String,
+    pub embeddings_column_name: Option<String>,
 }
 
 impl core::fmt::Debug for DataTableContainer {
@@ -198,6 +227,148 @@ impl core::fmt::Debug for DataTableContainer {
 }
 
 impl DataTableContainer {
+    fn execute_prompt_similarity(&mut self, source_column: &str, new_column_name: &str, prompt_embedding: &[f32]) -> color_eyre::Result<()> {
+        use polars::prelude::*;
+        let df_arc = self.datatable.get_dataframe()?;
+        let df_ref = df_arc.as_ref();
+        let s = df_ref.column(source_column).map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
+        match s.dtype() {
+            DataType::List(inner) => {
+                match inner.as_ref() {
+                    DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 |
+                    DataType::Int128 | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 |
+                    DataType::UInt64 | DataType::Float32 | DataType::Float64 => {}
+                    _ => return Err(color_eyre::eyre::eyre!("Source column '{}' must be vector of numbers", source_column)),
+                }
+            }
+            _ => return Err(color_eyre::eyre::eyre!("Source column '{}' must be vector of numbers", source_column)),
+        }
+        let nrows = s.len();
+        if nrows == 0 { return Ok(()); }
+        let list = s.list().map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
+        // Precompute prompt norm
+        let mut prompt_norm_sq: f64 = 0.0;
+        for v in prompt_embedding.iter() { let fv = *v as f64; prompt_norm_sq += fv * fv; }
+        let prompt_norm = prompt_norm_sq.sqrt().max(f64::EPSILON);
+        // Compute cosine similarity for each row
+        let mut sims: Vec<f32> = Vec::with_capacity(nrows);
+        for i in 0..nrows {
+            let maybe_sub = list.get_as_series(i);
+            if maybe_sub.is_none() { sims.push(0.0); continue; }
+            let sub = maybe_sub.unwrap();
+            // Extract as f64 vec
+            let row_vals_f64: Vec<f64> = match sub.dtype() {
+                DataType::Float64 => sub.f64().unwrap().into_no_null_iter().collect::<Vec<f64>>(),
+                DataType::Float32 => sub.f32().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::Int64 => sub.i64().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::Int32 => sub.i32().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::Int16 => sub.i16().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::Int8  => sub.i8().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::UInt64 => sub.u64().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::UInt32 => sub.u32().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::UInt16 => sub.u16().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                DataType::UInt8  => sub.u8().unwrap().into_no_null_iter().map(|v| v as f64).collect::<Vec<f64>>(),
+                other => return Err(color_eyre::eyre::eyre!("Unsupported inner dtype in list: {:?}", other)),
+            };
+            // Length check
+            if row_vals_f64.len() != prompt_embedding.len() {
+                sims.push(0.0);
+                continue;
+            }
+            // Dot and norm
+            let mut dot: f64 = 0.0;
+            let mut row_norm_sq: f64 = 0.0;
+            for (a_f64, b_f32) in row_vals_f64.iter().zip(prompt_embedding.iter()) {
+                let b = *b_f32 as f64;
+                dot += (*a_f64) * b;
+                row_norm_sq += (*a_f64) * (*a_f64);
+            }
+            let row_norm = row_norm_sq.sqrt().max(f64::EPSILON);
+            let sim = dot / (row_norm * prompt_norm);
+            sims.push(sim as f32);
+        }
+        // Append similarity column
+        let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(df_ref.width() + 1);
+        for c in df_ref.get_columns() { cols.push(c.clone()); }
+        let mut new_name = if new_column_name.trim().is_empty() { format!("{}__prompt_sim", source_column) } else { new_column_name.to_string() };
+        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{}__sim", new_name); }
+        let series = Series::new(new_name.as_str().into(), sims);
+        cols.push(series.into_column());
+        let new_df = polars::prelude::DataFrame::new(cols)
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame: {}", e))?;
+        self.datatable.dataframe.set_current_df(new_df);
+        // Auto sort by the similarity column (descending)
+        let sort_cols = vec![crate::dialog::sort_dialog::SortColumn { name: new_name.clone(), ascending: false }];
+        let _ = self.datatable.dataframe.sort_by_columns(&sort_cols);
+        Ok(())
+    }
+    fn process_next_embeddings_batch(&mut self) -> color_eyre::Result<Option<bool>> {
+        let job = if let Some(j) = self.in_progress_embeddings.take() { j } else { return Ok(None) };
+        if job.next_start >= job.total_uniques { self.in_progress_embeddings = Some(job); return Ok(Some(true)); }
+        let start = job.next_start;
+        let end = (start + job.batch_size).min(job.total_uniques);
+        let slice: Vec<String> = job.uniques[start..end].to_vec();
+        let dims_opt = if job.num_dimensions > 0 { Some(job.num_dimensions) } else { None };
+        let provider = job.provider.clone();
+        let model_name = job.model_name.clone();
+        // Temporarily release `job` mutable borrow before calling into &self method
+        self.in_progress_embeddings = Some(job);
+        let batch = self.config.llm_config.fetch_embeddings_via_provider(provider, &model_name, &slice, dims_opt)?;
+        let mut job = self.in_progress_embeddings.take().expect("embeddings job should exist");
+        if batch.len() != slice.len() { return Err(color_eyre::eyre::eyre!("Embeddings provider returned wrong length for batch")); }
+        if job.unique_embeddings.is_empty() {
+            job.unique_embeddings = vec![Vec::new(); job.total_uniques];
+        }
+        for (i, emb) in batch.into_iter().enumerate() {
+            job.unique_embeddings[start + i] = emb;
+        }
+        job.next_start = end;
+        let progress = end as f64 / job.total_uniques.max(1) as f64;
+        self.busy_progress = progress;
+        self.busy_message = format!(
+            "Generating embeddings with {}... {}/{}",
+            job.provider.display_name(),
+            end,
+            job.total_uniques
+        );
+        let finished = job.next_start >= job.total_uniques;
+        self.in_progress_embeddings = Some(job);
+        Ok(Some(finished))
+    }
+
+    fn finalize_embeddings_job(&mut self) -> color_eyre::Result<()> {
+        use polars::prelude::*;
+        let Some(job) = self.in_progress_embeddings.take() else { return Ok(()); };
+        // Build ListChunked per row using unique_index and computed embeddings
+        let row_embeddings_iter = job.row_texts.into_iter().map(|opt_text| {
+            opt_text.map(|t| {
+                let idx = job.unique_index.get(&t).copied().unwrap();
+                let v: &Vec<f32> = &job.unique_embeddings[idx];
+                Series::new(PlSmallStr::EMPTY, v.clone())
+            })
+        });
+        let mut lc: ListChunked = row_embeddings_iter.collect();
+        // Determine column name (avoid collisions)
+        let df_arc = self.datatable.get_dataframe()?;
+        let df_ref = df_arc.as_ref();
+        let mut new_name = if job.new_column_name.trim().is_empty() { format!("{}_emb", job.source_column) } else { job.new_column_name };
+        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{}__emb", new_name); }
+        lc.rename(PlSmallStr::from_str(&new_name));
+        let list_series = lc.into_series();
+        // Append column to DataFrame
+        let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(df_ref.width() + 1);
+        for c in df_ref.get_columns() { cols.push(c.clone()); }
+        cols.push(list_series.into_column());
+        let new_df = polars::prelude::DataFrame::new(cols)
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame: {}", e))?;
+        self.datatable.dataframe.set_current_df(new_df);
+        // Hide the new column if requested
+        if job.hide_new_column {
+            self.datatable.dataframe.column_width_config.hidden_columns.insert(new_name.clone(), true);
+        }
+        Ok(())
+    }
+
     /// Create a new DataTableContainer with the given DataTable and style configuration.
     ///
     /// # Arguments
@@ -210,93 +381,6 @@ impl DataTableContainer {
         Self::new_with_dataframes(datatable, style, HashMap::new())
     }
 
-    fn execute_generate_embeddings(
-        &mut self, source_column: &str, new_column_name: &str,
-        model_name: &str, num_dimensions: usize
-    ) -> color_eyre::Result<()> {
-        info!("execute_generate_embeddings: source_column: {}, new_column_name: {}, model_name: {}, num_dimensions: {}", source_column, new_column_name, model_name, num_dimensions);
-        
-        // Ensure API client
-        let client = OpenAIClient::from_env()
-            .ok_or_else(|| color_eyre::eyre::eyre!("OPENAI_API_KEY not set"))?;
-
-        // Prepare source series as strings
-        let df_arc = self.datatable.get_dataframe()?;
-        let df_ref = df_arc.as_ref();
-        let mut s = df_ref.column(source_column)
-            .map_err(|e| color_eyre::eyre::eyre!("{}", e))?
-            .clone();
-        
-        // Convert to string if not already
-        if s.dtype() != &DataType::String {
-            s = s.cast(&DataType::String)
-                .map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
-        }
-
-        // Build unique mapping
-        let len = s.len();
-        let mut row_texts: Vec<Option<String>> = Vec::with_capacity(len);
-        let mut unique_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut uniques: Vec<String> = Vec::new();
-        for i in 0..len {
-            let av_res = s.get(i);
-            if let Ok(av) = av_res {
-                if av.is_null() {
-                    row_texts.push(None);
-                    continue;
-                }
-
-                let text_val = av.str_value().to_string();
-                row_texts.push(Some(text_val.clone()));
-                if !unique_index.contains_key(&text_val) {
-                    let idx = uniques.len();
-                    unique_index.insert(text_val.clone(), idx);
-                    uniques.push(text_val);
-                }
-            } else { row_texts.push(None); }
-        }
-
-        // Generate embeddings for unique values
-        let dims_opt = if num_dimensions > 0 { Some(num_dimensions) } else { None };
-        let unique_embeddings = client.generate_embeddings(&uniques, Some(model_name), dims_opt)
-            .map_err(|e| color_eyre::eyre::eyre!("Embeddings error: {}", e))?;
-
-        if unique_embeddings.len() != uniques.len() {
-            return Err(color_eyre::eyre::eyre!("Embeddings provider returned wrong length"));
-        }
-
-        // Map back per row into a ListChunked
-        let row_embeddings_iter = row_texts.into_iter().map(|opt_text| {
-            opt_text.map(|t| {
-                let idx = unique_index.get(&t).copied().unwrap();
-                let v: &Vec<f32> = &unique_embeddings[idx];
-                Series::new(PlSmallStr::EMPTY, v.clone())
-            })
-        });
-        let mut lc: ListChunked = row_embeddings_iter.collect();
-        // Determine column name
-        let mut new_name = if new_column_name.trim().is_empty() {
-            format!("{source_column}_emb")
-        } else {
-            new_column_name.to_string()
-        };
-        if df_ref.get_column_names_owned()
-            .into_iter()
-            .any(|n| n.as_str() == new_name)
-        {
-            new_name = format!("{new_name}__emb");
-        }
-        lc.rename(PlSmallStr::from_str(&new_name));
-        let list_series = lc.into_series();
-        // Build new DataFrame with appended column
-        let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(df_ref.width() + 1);
-        for c in df_ref.get_columns() { cols.push(c.clone()); }
-        cols.push(list_series.into_column());
-        let new_df = polars::prelude::DataFrame::new(cols)
-            .map_err(|e| color_eyre::eyre::eyre!("Failed to build DataFrame: {}", e))?;
-        self.datatable.dataframe.set_current_df(new_df);
-        Ok(())
-    }
 
     fn execute_pca(&mut self, source_column: &str, new_column_name: &str, target_k: usize) -> color_eyre::Result<()> {
         use polars::prelude::*;
@@ -565,6 +649,7 @@ impl DataTableContainer {
             last_dataframe_details_dialog_max_rows: None,
             last_jmes_dialog_area: None,
             last_column_operations_dialog_area: None,
+            last_embeddings_prompt_dialog_area: None,
             current_search_pattern: None,
             current_search_mode: None,
             current_search_options: None,
@@ -573,8 +658,17 @@ impl DataTableContainer {
             busy_message: String::new(),
             busy_progress: 0.0,
             queued_embeddings: None,
+            in_progress_embeddings: None,
             queued_pca: None,
             queued_cluster: None,
+            llm_client_create_dialog: None,
+            llm_client_create_dialog_active: false,
+            last_llm_client_create_dialog_area: None,
+            pending_embeddings_after_llm_selection: None,
+            embedding_column_config_mapping: HashMap::new(),
+            embeddings_prompt_dialog: None,
+            embeddings_prompt_dialog_active: false,
+            pending_prompt_flow: None,
         }
     }
 
@@ -1401,8 +1495,25 @@ impl Component for DataTableContainer {
                             "GenerateEmbeddings" => ColumnOperationKind::GenerateEmbeddings,
                             "Pca" => ColumnOperationKind::Pca,
                             "Cluster" => ColumnOperationKind::Cluster,
+                            "SortByPromptSimilarity" => ColumnOperationKind::SortByPromptSimilarity,
                             _ => ColumnOperationKind::GenerateEmbeddings,
                         };
+                        // Special-case: open Prompt Similarity dialog directly (uses embedding column mapping)
+                        if matches!(op, ColumnOperationKind::SortByPromptSimilarity) {
+                            let mapping = self.embedding_column_config_mapping.clone();
+                            let initial = {
+                                let visible_columns = self.datatable.get_visible_columns().unwrap_or_default();
+                                let idx = self.datatable.selection.col.min(visible_columns.len().saturating_sub(1));
+                                let name = visible_columns.get(idx).cloned().unwrap_or_default();
+                                if mapping.contains_key(&name) { Some(name) } else { None }
+                            };
+                            let mut dialog = crate::dialog::EmbeddingsPromptDialog::new_with_mapping(mapping, initial);
+                            dialog.register_config_handler(self.config.clone())?;
+                            self.embeddings_prompt_dialog = Some(dialog);
+                            self.embeddings_prompt_dialog_active = true;
+                            self.column_operations_dialog_active = false;
+                            return Ok(None);
+                        }
                         // Seed with filtered DF columns (only compatible types) and current selection
                         let df = self.datatable.get_dataframe()?;
                         let df_ref = df.as_ref();
@@ -1442,6 +1553,7 @@ impl Component for DataTableContainer {
                                     } else { false }
                                 })
                                 .collect(),
+                            ColumnOperationKind::SortByPromptSimilarity => Vec::new(),
                         };
                         // Compute initial selected index based on current table selection
                         let current_col_name = {
@@ -1461,6 +1573,98 @@ impl Component for DataTableContainer {
                         return Ok(None);
                     }
                     _ => {}
+                }
+            }
+            return Ok(None);
+        }
+        // Route key events to EmbeddingsPromptDialog if active
+        if self.embeddings_prompt_dialog_active {
+            if let Some(dialog) = &mut self.embeddings_prompt_dialog {
+                if let Some(action) = dialog.handle_key_event(key)? {
+                    match action {
+                        Action::DialogClose => {
+                            self.embeddings_prompt_dialog_active = false;
+                            self.embeddings_prompt_dialog = None;
+                        }
+                        Action::EmbeddingsPromptDialogApplied { source_column, new_column_name, prompt_embedding } => {
+                            if let Err(e) = self.execute_prompt_similarity(&source_column, &new_column_name, &prompt_embedding) {
+                                tracing::error!("Prompt similarity apply failed: {}", e);
+                            }
+                            self.embeddings_prompt_dialog_active = false;
+                            self.embeddings_prompt_dialog = None;
+                            return Ok(None);
+                        }
+                        Action::EmbeddingsPromptDialogRequestGenerateEmbeddings { prompt_text, new_similarity_column } => {
+                            // Record pending prompt flow to restore later
+                            self.pending_prompt_flow = Some(PendingPromptFlow {
+                                prompt_text,
+                                similarity_new_column: new_similarity_column,
+                                embeddings_column_name: None,
+                            });
+                            // Open GenerateEmbeddings options dialog directly
+                            let op = ColumnOperationKind::GenerateEmbeddings;
+                            let df = self.datatable.get_dataframe()?;
+                            let df_ref = df.as_ref();
+                            let all_names: Vec<String> = df_ref
+                                .get_column_names_owned()
+                                .into_iter()
+                                .map(|s| s.to_string())
+                                .collect();
+                            use polars::prelude::DataType;
+                            let filtered: Vec<String> = all_names
+                                .into_iter()
+                                .filter(|name| df_ref.column(name).ok().map(|s| s.dtype() == &DataType::String).unwrap_or(false))
+                                .collect();
+                            // Compute initial selected index based on current table selection
+                            let current_col_name = {
+                                let visible_columns = self.datatable.get_visible_columns().unwrap_or_default();
+                                let idx = self.datatable.selection.col.min(visible_columns.len().saturating_sub(1));
+                                visible_columns.get(idx).cloned().unwrap_or_default()
+                            };
+                            let selected_idx = filtered.iter().position(|n| n == &current_col_name).unwrap_or(0);
+                            let mut dialog = ColumnOperationOptionsDialog::new_with_columns(op, filtered, selected_idx);
+                            dialog.register_config_handler(self.config.clone())?;
+                            if dialog.columns.is_empty() {
+                                dialog.mode = ColumnOperationOptionsMode::Error("No compatible columns found for this operation".to_string());
+                            }
+                            self.column_operation_options_dialog = Some(dialog);
+                            self.column_operation_options_dialog_active = true;
+                            self.embeddings_prompt_dialog_active = false;
+                            self.embeddings_prompt_dialog = None;
+                            return Ok(None);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            return Ok(None);
+        }
+        // Route key events to LlmClientCreateDialog if active
+        if self.llm_client_create_dialog_active {
+            if let Some(dialog) = &mut self.llm_client_create_dialog {
+                if let Some(action) = dialog.handle_key_event(key)? {
+                    match action {
+                        Action::DialogClose => {
+                            self.llm_client_create_dialog_active = false;
+                            self.llm_client_create_dialog = None;
+                            // Do not clear pending; user cancelled
+                        }
+                        Action::LlmClientCreateDialogApplied(selection) => {
+                            // Close dialog
+                            self.llm_client_create_dialog_active = false;
+                            self.llm_client_create_dialog = None;
+                            // If we have a pending embeddings request, schedule it with the selected provider
+                            if let Some(mut pending) = self.pending_embeddings_after_llm_selection.take() {
+                                pending.selected_provider = Some(selection.provider.clone());
+                                // Queue for execution on next Render tick with busy overlay
+                                self.busy_active = true;
+                                self.busy_message = format!("Generating embeddings with {}...", selection.provider.display_name());
+                                self.busy_progress = 0.0;
+                                self.queued_embeddings = Some(pending);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
             return Ok(None);
@@ -1493,7 +1697,7 @@ impl Component for DataTableContainer {
                                             error!("GenerateEmbeddings error: {}", err_msg);
                                         }
                                     }
-                                    ColumnOperationKind::Pca | ColumnOperationKind::Cluster => {
+                                    ColumnOperationKind::Pca | ColumnOperationKind::Cluster | ColumnOperationKind::SortByPromptSimilarity => {
                                         // Must be a vector of numbers: List(Numeric)
                                         let is_vec_num = matches!(
                                             dtype,
@@ -1540,14 +1744,26 @@ impl Component for DataTableContainer {
                                     };
                                     // Queue embeddings to show overlay first, then execute on Render
                                     self.busy_active = true;
-                                    self.busy_message = "Generating embeddings...".to_string();
+                                    let provider = if let Some(dialog_ref) = &self.column_operation_options_dialog { dialog_ref.selected_provider.clone() } else { crate::dialog::LlmProvider::OpenAI };
+                                    self.busy_message = format!("Generating embeddings with {}...", provider.display_name());
                                     self.busy_progress = 0.0;
+                                    // Snapshot provider config (non-secret fields) for reproducibility
+                                    let snapshot = EmbeddingColumnConfig {
+                                        provider: provider.clone(),
+                                        model_name: model_name.clone(),
+                                        num_dimensions: num_dims
+                                    };
+                                    self.embedding_column_config_mapping.insert(cfg.new_column_name.clone(), snapshot);
                                     self.queued_embeddings = Some(QueuedEmbeddings {
                                         source_column: cfg.source_column.clone(),
                                         new_column_name: cfg.new_column_name.clone(),
                                         model_name,
                                         num_dimensions: num_dims,
+                                        selected_provider: Some(provider),
+                                        hide_new_column: cfg.hide_new_column,
                                     });
+                                    // If prompt flow is pending, remember new embeddings column name
+                                    if let Some(ref mut pending) = self.pending_prompt_flow { pending.embeddings_column_name = Some(cfg.new_column_name.clone()); }
                                     self.column_operation_options_dialog_active = false;
                                     // Do not trigger Render immediately; allow one frame to draw the overlay first
                                     return Ok(None);
@@ -1585,6 +1801,11 @@ impl Component for DataTableContainer {
                                         kmeans: kmeans_opts,
                                         dbscan: dbscan_opts,
                                     });
+                                    self.column_operation_options_dialog_active = false;
+                                    return Ok(None);
+                                }
+                                ColumnOperationKind::SortByPromptSimilarity => {
+                                    // Not applied via options dialog; handled by dedicated prompt dialog
                                     self.column_operation_options_dialog_active = false;
                                     return Ok(None);
                                 }
@@ -1804,6 +2025,18 @@ impl Component for DataTableContainer {
                     self.sort_dialog_active = true;
                     return Ok(None);
                 }
+                Action::OpenEmbeddingsPromptDialog => {
+                    let mapping = self.embedding_column_config_mapping.clone();
+                    let visible_columns = self.datatable.get_visible_columns().unwrap_or_default();
+                    let idx = self.datatable.selection.col.min(visible_columns.len().saturating_sub(1));
+                    let name = visible_columns.get(idx).cloned().unwrap_or_default();
+                    let initial = if mapping.contains_key(&name) { Some(name) } else { None };
+                    let mut dialog = crate::dialog::EmbeddingsPromptDialog::new_with_mapping(mapping, initial);
+                    dialog.register_config_handler(self.config.clone())?;
+                    self.embeddings_prompt_dialog = Some(dialog);
+                    self.embeddings_prompt_dialog_active = true;
+                    return Ok(None);
+                }
                 Action::QuickSortCurrentColumn => {
                     let visible_columns = self.datatable.get_visible_columns()?;
                     let col_idx = self.datatable.selection.col.min(visible_columns.len().saturating_sub(1));
@@ -1906,6 +2139,8 @@ impl Component for DataTableContainer {
                     let col_index = self.datatable.selection.col.min(columns.len().saturating_sub(1));
                     self.dataframe_details_dialog.set_columns(columns, col_index);
                     self.dataframe_details_dialog.set_dataframe(df_arc.clone());
+                    // Provide embeddings mapping for Embeddings tab
+                    self.dataframe_details_dialog.embedding_column_config_mapping = self.embedding_column_config_mapping.clone();
                     self.dataframe_details_dialog_active = true;
                     return Ok(None);
                 }
@@ -1963,23 +2198,79 @@ impl Component for DataTableContainer {
             }
             Action::Render => {
                 if let Some(q) = self.queued_embeddings.take() {
-                    let res = self.execute_generate_embeddings(
-                        &q.source_column,
-                        &q.new_column_name,
-                        &q.model_name,
-                        q.num_dimensions,
-                    );
-                    self.busy_active = false;
-                    self.busy_message.clear();
-                    self.busy_progress = 0.0;
-                    match res {
-                        Ok(_) => return Ok(Some(Action::SaveWorkspaceState)),
-                        Err(e) => {
-                            if let Some(dialog) = &mut self.column_operation_options_dialog {
-                                dialog.mode = ColumnOperationOptionsMode::Error(format!("{e}"));
+                    // Initialize progressive embeddings job
+                    let provider = q.selected_provider.clone().unwrap_or(crate::dialog::LlmProvider::OpenAI);
+                    // Prepare source series as strings and build unique lists
+                    let df_arc = self.datatable.get_dataframe()?;
+                    let df_ref = df_arc.as_ref();
+                    use polars::prelude::DataType;
+                    let mut s = df_ref.column(&q.source_column)
+                        .map_err(|e| color_eyre::eyre::eyre!("{}", e))?
+                        .clone();
+                    if s.dtype() != &DataType::String { s = s.cast(&DataType::String).map_err(|e| color_eyre::eyre::eyre!("{}", e))?; }
+                    let len = s.len();
+                    let mut row_texts: Vec<Option<String>> = Vec::with_capacity(len);
+                    let mut unique_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                    let mut uniques: Vec<String> = Vec::new();
+                    for i in 0..len {
+                        let av_res = s.get(i);
+                        if let Ok(av) = av_res {
+                            if av.is_null() { row_texts.push(None); continue; }
+                            let text_val = av.str_value().to_string();
+                            row_texts.push(Some(text_val.clone()));
+                            if !unique_index.contains_key(&text_val) {
+                                let idx = uniques.len();
+                                unique_index.insert(text_val.clone(), idx);
+                                uniques.push(text_val);
                             }
+                        } else { row_texts.push(None); }
+                    }
+                    let total = uniques.len();
+                    let job = EmbeddingsJob {
+                        source_column: q.source_column,
+                        new_column_name: q.new_column_name,
+                        model_name: q.model_name,
+                        num_dimensions: q.num_dimensions,
+                        provider,
+                        hide_new_column: q.hide_new_column,
+                        row_texts,
+                        uniques,
+                        unique_index,
+                        unique_embeddings: Vec::new(),
+                        next_start: 0,
+                        batch_size: 256,
+                        total_uniques: total,
+                    };
+                    self.in_progress_embeddings = Some(job);
+                    // Reset progress
+                    self.busy_progress = 0.0;
+                }
+                // Process next batch if an embeddings job is active
+                if let Some(done) = self.process_next_embeddings_batch()? {
+                    if done {
+                        // Finalize embeddings column
+                        self.finalize_embeddings_job()?;
+                        self.busy_active = false;
+                        self.busy_message.clear();
+                        self.busy_progress = 0.0;
+                        // If we initiated from prompt flow, reopen the prompt dialog now
+                        if let Some(pending) = self.pending_prompt_flow.take() {
+                            let mapping = self.embedding_column_config_mapping.clone();
+                            let initial = pending.embeddings_column_name.clone();
+                            let mut dialog = crate::dialog::EmbeddingsPromptDialog::new_with_mapping(mapping, initial);
+                            dialog.register_config_handler(self.config.clone())?;
+                            // Restore prompt text and similarity new column name
+                            dialog.new_column_input.insert_str(&pending.similarity_new_column);
+                            dialog.new_column_name = dialog.new_column_input.lines().join("\n");
+                            dialog.prompt_input.insert_str(&pending.prompt_text);
+                            self.embeddings_prompt_dialog = Some(dialog);
+                            self.embeddings_prompt_dialog_active = true;
                             return Ok(None);
                         }
+                        return Ok(Some(Action::SaveWorkspaceState));
+                    } else {
+                        // Continue on next render
+                        return Ok(None);
                     }
                 }
                 if let Some(p) = self.queued_pca.take() {
@@ -2198,6 +2489,19 @@ impl Component for DataTableContainer {
                 dialog.render(popup_area, frame.buffer_mut());
             }
 
+        // Render LlmClientCreateDialog as a popup overlay only if active
+        if self.llm_client_create_dialog_active
+            && let Some(dialog) = &mut self.llm_client_create_dialog {
+                let popup_area = ratatui::layout::Rect {
+                    x: area.x + area.width / 8,
+                    y: area.y + area.height / 8,
+                    width: area.width - area.width / 4,
+                    height: area.height - area.height / 4,
+                };
+                dialog.render(popup_area, frame.buffer_mut());
+                self.last_llm_client_create_dialog_area = Some(popup_area);
+            }
+
         // Render ColumnWidthDialog as a popup overlay only if active
         if self.column_width_dialog_active {
 			let popup_area = ratatui::layout::Rect {
@@ -2209,6 +2513,18 @@ impl Component for DataTableContainer {
             let _max_rows = self.column_width_dialog.render(popup_area, frame.buffer_mut());
             self.last_column_width_dialog_area = Some(popup_area);
         }
+        // Render EmbeddingsPromptDialog as a popup overlay only if active
+        if self.embeddings_prompt_dialog_active
+            && let Some(dialog) = &mut self.embeddings_prompt_dialog {
+                let popup_area = ratatui::layout::Rect {
+                    x: area.x + area.width / 8,
+                    y: area.y + area.height / 8,
+                    width: area.width - area.width / 4,
+                    height: area.height - area.height / 4,
+                };
+                dialog.render(popup_area, frame.buffer_mut());
+                self.last_embeddings_prompt_dialog_area = Some(popup_area);
+            }
         // Render FindDialog as a popup overlay only if active
         if self.find_dialog_active {
 			let popup_area = ratatui::layout::Rect {
@@ -2273,6 +2589,25 @@ pub struct QueuedEmbeddings {
     pub new_column_name: String,
     pub model_name: String,
     pub num_dimensions: usize,
+    pub selected_provider: Option<crate::dialog::LlmProvider>,
+    pub hide_new_column: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct EmbeddingsJob {
+    pub source_column: String,
+    pub new_column_name: String,
+    pub model_name: String,
+    pub num_dimensions: usize,
+    pub provider: crate::dialog::LlmProvider,
+    pub hide_new_column: bool,
+    pub row_texts: Vec<Option<String>>,
+    pub uniques: Vec<String>,
+    pub unique_index: std::collections::HashMap<String, usize>,
+    pub unique_embeddings: Vec<Vec<f32>>, // filled progressively, aligned with uniques
+    pub next_start: usize,
+    pub batch_size: usize,
+    pub total_uniques: usize,
 }
 
 #[derive(Debug, Clone)]

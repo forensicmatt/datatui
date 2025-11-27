@@ -20,6 +20,7 @@ pub enum DetailsTab {
     Columns,
     Describe,
     Heatmap,
+    Embeddings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +83,9 @@ pub struct DataFrameDetailsDialog {
     // Config
     #[serde(skip)]
     pub config: crate::config::Config,
+    // Embeddings mapping for Embeddings tab
+    #[serde(skip)]
+    pub embedding_column_config_mapping: std::collections::HashMap<String, crate::components::datatable_container::EmbeddingColumnConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +132,7 @@ impl DataFrameDetailsDialog {
             cast_selected_idx: 0,
             cast_error: None,
             config: crate::config::Config::default(),
+            embedding_column_config_mapping: std::collections::HashMap::new(),
         }
     }
 
@@ -204,6 +209,20 @@ impl DataFrameDetailsDialog {
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::NavigateHeatmapPageDown),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::NavigateHeatmapHome),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::NavigateHeatmapEnd),
+                    (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+                    (crate::config::Mode::Global, crate::action::Action::Escape),
+                ])
+            }
+            DetailsTab::Embeddings => {
+                self.config.actions_to_instructions(&[
+                    (crate::config::Mode::Global, crate::action::Action::Tab),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToPrevTab),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToNextTab),
+                    (crate::config::Mode::Global, crate::action::Action::Up),
+                    (crate::config::Mode::Global, crate::action::Action::Down),
+                    (crate::config::Mode::Global, crate::action::Action::PageUp),
+                    (crate::config::Mode::Global, crate::action::Action::PageDown),
+                    (crate::config::Mode::DataFrameDetails, crate::action::Action::ExportCurrentTab),
                     (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
                     (crate::config::Mode::Global, crate::action::Action::Escape),
                 ])
@@ -527,6 +546,7 @@ impl DataFrameDetailsDialog {
         let t2 = "[Columns]";
         let t3 = "[Describe]";
         let t4 = "[Heatmap]";
+        let t5 = "[Embeddings]";
         let t1_style = if matches!(self.tab, DetailsTab::UniqueValues) { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) };
         let t2_style = if matches!(self.tab, DetailsTab::Columns) { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) };
         buf.set_string(inner.x, header_y, t1, t1_style);
@@ -538,6 +558,9 @@ impl DataFrameDetailsDialog {
         let t4_x = t3_x + t3.len() as u16 + 2;
         let t4_style = if matches!(self.tab, DetailsTab::Heatmap) { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) };
         buf.set_string(t4_x, header_y, t4, t4_style);
+        let t5_x = t4_x + t4.len() as u16 + 2;
+        let t5_style = if matches!(self.tab, DetailsTab::Embeddings) { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) };
+        buf.set_string(t5_x, header_y, t5, t5_style);
 
         // Column dropdown line (UniqueValues) or axes line (Heatmap)
         if matches!(self.tab, DetailsTab::UniqueValues) {
@@ -607,6 +630,7 @@ impl DataFrameDetailsDialog {
             DetailsTab::Columns => self.render_columns_table(table_area, buf, max_rows),
             DetailsTab::Describe => self.render_describe_table(table_area, buf, max_rows),
             DetailsTab::Heatmap => self.render_heatmap(table_area, buf),
+            DetailsTab::Embeddings => self.render_embeddings_columns(table_area, buf, max_rows),
         }
 
         if let Some(instructions_area) = instructions_area {
@@ -782,7 +806,83 @@ impl DataFrameDetailsDialog {
         ratatui::prelude::Widget::render(table, render_area, buf);
     }
 
-     fn render_columns_table(&self, area: Rect, buf: &mut Buffer, max_rows: usize) {
+    fn render_embeddings_columns(&self, area: Rect, buf: &mut Buffer, max_rows: usize) {
+        let mut cols: Vec<(String, String, String, String)> = self
+            .embedding_column_config_mapping
+            .iter()
+            .map(|(name, cfg)| {
+                let provider = cfg.provider.display_name().to_string();
+                let model = cfg.model_name.clone();
+                let dims = cfg.num_dimensions.to_string();
+                (name.clone(), provider, model, dims)
+            })
+            .collect();
+        cols.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let total_items = cols.len();
+        let start_idx = self.scroll_offset.min(total_items);
+        let end_idx = (start_idx + max_rows).min(total_items);
+        let show_scroll_bar = total_items > max_rows;
+        let table_width = if show_scroll_bar { area.width.saturating_sub(1) } else { area.width };
+
+        if show_scroll_bar {
+            let scroll_bar_x = area.x + area.width.saturating_sub(1);
+            let scroll_bar_height = max_rows;
+            let scroll_bar_y_start = area.y + 1; // below header
+            let visible_items = max_rows;
+            let thumb_size = std::cmp::max(1, (visible_items * visible_items) / total_items);
+            let thumb_position = if total_items > visible_items {
+                (self.scroll_offset * (visible_items - thumb_size)) / (total_items - visible_items)
+            } else { 0 };
+            for y in scroll_bar_y_start..scroll_bar_y_start + scroll_bar_height as u16 {
+                buf.set_string(scroll_bar_x, y, "│", Style::default().fg(Color::DarkGray));
+            }
+            let thumb_start = scroll_bar_y_start + thumb_position as u16;
+            let thumb_end = (thumb_start + thumb_size as u16).min(scroll_bar_y_start + scroll_bar_height as u16);
+            for y in thumb_start..thumb_end {
+                buf.set_string(scroll_bar_x, y, "█", Style::default().fg(Color::Cyan));
+            }
+        }
+
+        let rows: Vec<Row> = cols[start_idx..end_idx]
+            .iter()
+            .enumerate()
+            .map(|(i, (name, provider, model, dims))| {
+                let row_idx = start_idx + i;
+                let is_selected = matches!(self.focus, FocusField::Table) && row_idx == self.selected_row;
+                let is_zebra = row_idx.is_multiple_of(2);
+                let style = if is_selected { self.style.selected_row } else if is_zebra { self.style.table_row_even } else { self.style.table_row_odd };
+                Row::new(vec![
+                    Cell::from(name.to_string()).style(style),
+                    Cell::from(provider.to_string()).style(style),
+                    Cell::from(model.to_string()).style(style),
+                    Cell::from(dims.to_string()).style(style),
+                ])
+            })
+            .collect();
+
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Percentage(35),
+                Constraint::Percentage(20),
+                Constraint::Percentage(35),
+                Constraint::Percentage(10),
+            ],
+        )
+        .header(Row::new(vec![
+            Cell::from("Column").style(self.style.table_header),
+            Cell::from("Provider").style(self.style.table_header),
+            Cell::from("Model").style(self.style.table_header),
+            Cell::from("Dims").style(self.style.table_header),
+        ]))
+        .column_spacing(1);
+
+        let render_area = Rect { x: area.x, y: area.y, width: table_width, height: area.height };
+        ratatui::prelude::Widget::render(table, render_area, buf);
+    }
+
+    fn render_columns_table(&self, area: Rect, buf: &mut Buffer, max_rows: usize) {
         let total_items = self.columns_info.len();
         let start_idx = self.scroll_offset.min(total_items);
         let end_idx = (start_idx + max_rows).min(total_items);
@@ -1145,7 +1245,13 @@ impl DataFrameDetailsDialog {
                     if self.selected_row < self.scroll_offset { self.scroll_offset = self.selected_row; }
                 }
                 Action::Down => {
-                    let list_len = match self.tab { DetailsTab::UniqueValues => self.unique_counts.len(), DetailsTab::Columns => self.columns_info.len(), DetailsTab::Describe => self.describe_rows.len(), DetailsTab::Heatmap => 0 };
+                    let list_len = match self.tab {
+                        DetailsTab::UniqueValues => self.unique_counts.len(),
+                        DetailsTab::Columns => self.columns_info.len(),
+                        DetailsTab::Describe => self.describe_rows.len(),
+                        DetailsTab::Heatmap => 0,
+                        DetailsTab::Embeddings => self.embedding_column_config_mapping.len(),
+                    };
                     let max_idx = list_len.saturating_sub(1);
                     if self.selected_row < max_idx { self.selected_row += 1; }
                     let visible_end = self.scroll_offset + max_rows.saturating_sub(1);
@@ -1184,7 +1290,13 @@ impl DataFrameDetailsDialog {
                     }
                 }
                 Action::PageUp => {
-                    let list_len = match self.tab { DetailsTab::UniqueValues => self.unique_counts.len(), DetailsTab::Columns => self.columns_info.len(), DetailsTab::Describe => self.describe_rows.len(), DetailsTab::Heatmap => 0 };
+                    let list_len = match self.tab {
+                        DetailsTab::UniqueValues => self.unique_counts.len(),
+                        DetailsTab::Columns => self.columns_info.len(),
+                        DetailsTab::Describe => self.describe_rows.len(),
+                        DetailsTab::Heatmap => 0,
+                        DetailsTab::Embeddings => self.embedding_column_config_mapping.len(),
+                    };
                     if list_len == 0 { return None; }
                     let page = max_rows.max(1);
                     let new_selected = self.selected_row.saturating_sub(page);
@@ -1194,7 +1306,13 @@ impl DataFrameDetailsDialog {
                     }
                 }
                 Action::PageDown => {
-                    let list_len = match self.tab { DetailsTab::UniqueValues => self.unique_counts.len(), DetailsTab::Columns => self.columns_info.len(), DetailsTab::Describe => self.describe_rows.len(), DetailsTab::Heatmap => 0 };
+                    let list_len = match self.tab {
+                        DetailsTab::UniqueValues => self.unique_counts.len(),
+                        DetailsTab::Columns => self.columns_info.len(),
+                        DetailsTab::Describe => self.describe_rows.len(),
+                        DetailsTab::Heatmap => 0,
+                        DetailsTab::Embeddings => self.embedding_column_config_mapping.len(),
+                    };
                     if list_len == 0 { return None; }
                     let page = max_rows.max(1);
                     let new_selected = (self.selected_row + page).min(list_len.saturating_sub(1));
@@ -1220,25 +1338,27 @@ impl DataFrameDetailsDialog {
                         DetailsTab::UniqueValues => DetailsTab::Columns,
                         DetailsTab::Columns => DetailsTab::Describe,
                         DetailsTab::Describe => DetailsTab::Heatmap,
-                        DetailsTab::Heatmap => DetailsTab::UniqueValues,
+                        DetailsTab::Heatmap => DetailsTab::Embeddings,
+                        DetailsTab::Embeddings => DetailsTab::UniqueValues,
                     };
                     // Reset selection and scroll when switching tabs
                     self.selected_row = 0;
                     self.scroll_offset = 0;
-                    if matches!(self.tab, DetailsTab::Columns | DetailsTab::Describe | DetailsTab::Heatmap) { self.focus = FocusField::Table; }
+                    if matches!(self.tab, DetailsTab::Columns | DetailsTab::Describe | DetailsTab::Heatmap | DetailsTab::Embeddings) { self.focus = FocusField::Table; }
                     return None;
                 }
                 Action::SwitchToPrevTab => {
                     self.tab = match self.tab {
-                        DetailsTab::UniqueValues => DetailsTab::Heatmap,
+                        DetailsTab::UniqueValues => DetailsTab::Embeddings,
                         DetailsTab::Columns => DetailsTab::UniqueValues,
                         DetailsTab::Describe => DetailsTab::Columns,
                         DetailsTab::Heatmap => DetailsTab::Describe,
+                        DetailsTab::Embeddings => DetailsTab::Heatmap,
                     };
                     // Reset selection and scroll when switching tabs
                     self.selected_row = 0;
                     self.scroll_offset = 0;
-                    if matches!(self.tab, DetailsTab::Columns | DetailsTab::Describe | DetailsTab::Heatmap) { self.focus = FocusField::Table; }
+                    if matches!(self.tab, DetailsTab::Columns | DetailsTab::Describe | DetailsTab::Heatmap | DetailsTab::Embeddings) { self.focus = FocusField::Table; }
                     return None;
                 }
                 Action::ChangeColumnLeft => {
@@ -1328,6 +1448,33 @@ impl DataFrameDetailsDialog {
                             self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
                         }
                         DetailsTab::Heatmap => { /* no export for heatmap */ }
+                        DetailsTab::Embeddings => {
+                            let mut cols: Vec<(String, String, String, String)> = self
+                                .embedding_column_config_mapping
+                                .iter()
+                                .map(|(name, cfg)| {
+                                    (
+                                        name.clone(),
+                                        cfg.provider.display_name().to_string(),
+                                        cfg.model_name.clone(),
+                                        cfg.num_dimensions.to_string(),
+                                    )
+                                })
+                                .collect();
+                            cols.sort_by(|a, b| a.0.cmp(&b.0));
+                            let headers = vec![
+                                "Column".to_string(),
+                                "Provider".to_string(),
+                                "Model".to_string(),
+                                "Dims".to_string(),
+                            ];
+                            let rows: Vec<Vec<String>> = cols
+                                .into_iter()
+                                .map(|(n, p, m, d)| vec![n, p, m, d])
+                                .collect();
+                            let suggested = Some("embeddings.csv".to_string());
+                            self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
+                        }
                     }
                 }
                 Action::NavigateHeatmapLeft => {

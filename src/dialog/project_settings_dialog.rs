@@ -13,14 +13,16 @@ use std::path::PathBuf;
 use crate::components::dialog_layout::split_dialog_area;
 use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserMode, FileBrowserAction};
 use crate::dialog::message_dialog::MessageDialog;
-use crate::providers::openai::Client as OpenAIClient;
-use crate::sql::set_openai_embeddings_provider;
+use crate::dialog::llm_client_dialog::LlmClientDialog;
+// use crate::providers::openai::Client as OpenAIClient;
+use crate::config::get_config_dir;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectSettingsDialogMode {
     Input,
     Error(String),
     Save,
+    LlmClientDialog,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
@@ -37,6 +39,17 @@ pub struct DataViewerOptions {
     pub auto_exapand_value_display: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectedOption {
+    WorkspacePath,
+    WorkspaceBrowse,
+    LlmConfigPath,
+    LlmConfigBrowse,
+    ConfigureLlmClients,
+    AutoExpandValueDisplay,
+    Save,
+}
+
 // Derive Default instead of manual impl
 
 // Derive Default instead of manual impl
@@ -47,110 +60,76 @@ pub struct ProjectSettingsDialog {
     pub mode: ProjectSettingsDialogMode,
     pub error_active: bool,
     pub show_instructions: bool,
-    pub openai_key_input: String,
     pub workspace_path_input: String,
-    pub current_field: usize, // 0 = workspace_path, 1 = openai_key
-    pub browse_button_selected: bool,
-    pub connect_button_selected: bool,
-    pub finish_button_selected: bool,
+    pub config_path_input: String,
+    pub workspace_cursor_position: usize,
+    pub config_cursor_position: usize,
+    pub selected_option: SelectedOption,
     pub file_browser_mode: bool,
     pub file_browser_path: PathBuf,
     pub file_browser: Option<FileBrowserDialog>,
-    pub openai_client: Option<OpenAIClient>,
     pub message_dialog_mode: bool,
     pub message_dialog: Option<MessageDialog>,
-    pub data_viewer_selected: bool,
+    pub llm_client_dialog: Option<LlmClientDialog>,
     pub keybindings_config: crate::config::Config,
 }
 
 impl ProjectSettingsDialog {
     pub fn new(config: ProjectSettingsConfig) -> Self {
-        let mut openai_key_input = config.openai_key.clone().unwrap_or_default();
-        if openai_key_input.trim().is_empty()
-            && let Ok(env_key) = std::env::var("OPENAI_API_KEY")
-            && !env_key.trim().is_empty() {
-            openai_key_input = env_key;
-        }
         let workspace_path_input = String::new();
+        let config_path_input = get_config_dir().join(".datatui-llm-settings.toml").to_string_lossy().to_string();
         
         Self {
             config,
             mode: ProjectSettingsDialogMode::Input,
             error_active: false,
             show_instructions: true,
-            openai_key_input,
             workspace_path_input,
-            current_field: 0,
-            browse_button_selected: false,
-            connect_button_selected: false,
-            finish_button_selected: false,
+            config_path_input,
+            workspace_cursor_position: 0,
+            config_cursor_position: 0,
+            selected_option: SelectedOption::WorkspacePath,
             file_browser_mode: false,
             file_browser_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             file_browser: None,
-            openai_client: None,
             message_dialog_mode: false,
             message_dialog: None,
-            data_viewer_selected: false,
+            llm_client_dialog: None,
             keybindings_config: crate::config::Config::default(),
         }
-    }
-
-    fn in_buttons_zone(&self) -> bool {
-        self.browse_button_selected || self.connect_button_selected || self.finish_button_selected
-    }
-
-    fn select_settings_index(&mut self, idx: usize) {
-        // Clear buttons
-        self.browse_button_selected = false;
-        self.connect_button_selected = false;
-        self.finish_button_selected = false;
-        // Select setting
-        match idx % 3 {
-            0 => { self.current_field = 0; self.data_viewer_selected = false; }
-            1 => { self.current_field = 1; self.data_viewer_selected = false; }
-            2 => { self.data_viewer_selected = true; self.current_field = 2; }
-            _ => {}
-        }
-    }
-
-    fn select_button_index(&mut self, idx: usize) {
-        // Clear settings
-        self.data_viewer_selected = false;
-        // Select button
-        let i = idx % 3;
-        self.browse_button_selected = i == 0;
-        self.connect_button_selected = i == 1;
-        self.finish_button_selected = i == 2;
-    }
-
-    fn current_settings_index(&self) -> usize {
-        if self.data_viewer_selected { 2 } else if self.current_field == 1 { 1 } else { 0 }
-    }
-
-    fn current_button_index(&self) -> usize {
-        if self.browse_button_selected { 0 } else if self.connect_button_selected { 1 } else if self.finish_button_selected { 2 } else { 0 }
     }
 
     /// Build instructions string from configured keybindings
     fn build_instructions_from_config(&self) -> String {
         self.keybindings_config.actions_to_instructions(&[
-            (crate::config::Mode::Global, crate::action::Action::Up),
-            (crate::config::Mode::Global, crate::action::Action::Down),
-            (crate::config::Mode::Global, crate::action::Action::Left),
-            (crate::config::Mode::Global, crate::action::Action::Right),
             (crate::config::Mode::Global, crate::action::Action::Tab),
             (crate::config::Mode::Global, crate::action::Action::Enter),
-            (crate::config::Mode::Global, crate::action::Action::Escape),
-            (crate::config::Mode::Global, crate::action::Action::Backspace),
             (crate::config::Mode::ProjectSettings, crate::action::Action::ToggleDataViewerOption),
         ])
     }
 
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         let instructions = self.build_instructions_from_config();
-        let layout = split_dialog_area(area, self.show_instructions, 
-            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
+        let optional_instructions = if instructions.is_empty() { None } else { Some(instructions.as_str()) }; 
+        
+        // Create outer block that encompasses the entire area (content + instructions)
+        let outer_block = Block::default()
+            .title("Settings")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Double);
+
+        // Get the inner area from the outer block (this will be the area inside the double border)
+        let inner_area = outer_block.inner(area);
+        
+        // Render the outer block around the entire area
+        outer_block.render(area, buf);
+        
+        // Now split the inner area for content and instructions
+        let layout = split_dialog_area(
+            inner_area, self.show_instructions,
+            optional_instructions
+        );
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
         let wrap_width = content_area.width.saturating_sub(2) as usize;
@@ -160,78 +139,102 @@ impl ProjectSettingsDialog {
             if let Some(browser) = &self.file_browser {
                 browser.render(area, buf);
             }
-            return 1;
+            return;
         }
 
         match &self.mode {
             ProjectSettingsDialogMode::Input => {
-                let block = Block::default()
-                    .title("Project Settings")
-                    .borders(Borders::ALL);
-                let input_area = block.inner(content_area);
-                block.render(content_area, buf);
 
                 // Inline fields: "Label: value" with selection highlighting
-                let line0_y = input_area.y; // Workspace first
-                let line1_y = input_area.y + 1; // OpenAI second
-                let line2_y = input_area.y + 3; // Data Viewer section top
+                let line0_y = content_area.y + 1; // Workspace first
+                let line1_y = content_area.y + 3; // LLM Config second
+                let line2_y = content_area.y + 5; // Data Viewer section top
 
                 // Workspace Path line + [Browse]
                 let label_wp = "Workspace Path: ";
-                let style_wp = if self.current_field == 0 && !self.browse_button_selected && !self.finish_button_selected {
-                    Style::default().fg(Color::Black).bg(Color::White)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                let wp_text = format!("{}{}", label_wp, self.workspace_path_input);
-                buf.set_string(input_area.x, line0_y, wp_text, style_wp);
+                let label_style = Style::default().fg(Color::White);
+                let input_style = Style::default().fg(Color::White);
+                
+                // Draw label
+                buf.set_string(content_area.x, line0_y, label_wp, label_style);
+                
+                // Draw input value
+                buf.set_string(content_area.x + label_wp.len() as u16, line0_y, &self.workspace_path_input, input_style);
+                
+                // Overlay block cursor when focused
+                if self.selected_option == SelectedOption::WorkspacePath {
+                    let cursor_x = content_area.x + label_wp.len() as u16 + 
+                        self.workspace_path_input.chars().take(self.workspace_cursor_position).map(|c| c.len_utf8()).sum::<usize>() as u16;
+                    let char_at_cursor = if self.workspace_cursor_position < self.workspace_path_input.len() {
+                        self.workspace_path_input.chars().nth(self.workspace_cursor_position).unwrap_or(' ')
+                    } else {
+                        ' '
+                    };
+                    buf.set_string(cursor_x, line0_y, char_at_cursor.to_string(), self.keybindings_config.style_config.cursor.block());
+                }
+                
                 // [Browse] button on same line, right-aligned
                 let browse_text = "[Browse]";
-                let browse_x = input_area
-                    .x
-                    + input_area.width.saturating_sub(browse_text.len() as u16 + 1);
-                let browse_style = if self.browse_button_selected {
+                let browse_x = content_area.x + 
+                    content_area.width.saturating_sub(browse_text.len() as u16 + 1) - 1;
+                let browse_style = if self.selected_option == SelectedOption::WorkspaceBrowse {
                     Style::default().fg(Color::Black).bg(Color::White)
                 } else {
                     Style::default().fg(Color::Gray)
                 };
                 buf.set_string(browse_x, line0_y, browse_text, browse_style);
-                // Cursor on workspace input when focused and not on a button
-                if self.current_field == 0 && !self.browse_button_selected && !self.finish_button_selected {
-                    let cursor_x = input_area.x + (label_wp.len() + self.workspace_path_input.len()) as u16;
-                    buf.set_string(cursor_x, line0_y, "_", Style::default().fg(Color::Yellow));
-                }
 
-                // OpenAI API Key line + [Connect]
-                let label_key = "OpenAI API Key: ";
-                let style_key = if self.current_field == 1 && !self.browse_button_selected && !self.finish_button_selected && !self.connect_button_selected {
-                    Style::default().fg(Color::Black).bg(Color::White)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-                let key_text = format!("{}{}", label_key, self.openai_key_input);
-                buf.set_string(input_area.x, line1_y, key_text, style_key);
-                if self.current_field == 1 && !self.browse_button_selected && !self.finish_button_selected && !self.connect_button_selected {
-                    let cursor_x = input_area.x + (label_key.len() + self.openai_key_input.len()) as u16;
-                    buf.set_string(cursor_x, line1_y, "_", Style::default().fg(Color::Yellow));
+                // LLM Config Path line + [Browse]
+                let label_config = "LLM Config Path: ";
+                let label_style = Style::default().fg(Color::White);
+                let input_style = Style::default().fg(Color::White);
+                
+                // Draw label
+                buf.set_string(content_area.x, line1_y, label_config, label_style);
+                
+                // Draw input value
+                buf.set_string(content_area.x + label_config.len() as u16, line1_y, &self.config_path_input, input_style);
+                
+                // Overlay block cursor when focused
+                if self.selected_option == SelectedOption::LlmConfigPath {
+                    let cursor_x = content_area.x + label_config.len() as u16 + 
+                        self.config_path_input.chars().take(self.config_cursor_position).map(|c| c.len_utf8()).sum::<usize>() as u16;
+                    let char_at_cursor = if self.config_cursor_position < self.config_path_input.len() {
+                        self.config_path_input.chars().nth(self.config_cursor_position).unwrap_or(' ')
+                    } else {
+                        ' '
+                    };
+                    buf.set_string(cursor_x, line1_y, char_at_cursor.to_string(), self.keybindings_config.style_config.cursor.block());
                 }
-                // [Connect] button on same line, right-aligned
-                let connect_text = "[Connect]";
-                let connect_x = input_area
+                
+                // [Browse] button on same line, right-aligned
+                let browse_text = "[Browse]";
+                let browse_x = content_area
                     .x
-                    + input_area.width.saturating_sub(connect_text.len() as u16 + 1);
-                let connect_style = if self.connect_button_selected {
+                    + content_area.width.saturating_sub(browse_text.len() as u16 + 1);
+                let browse_style = if self.selected_option == SelectedOption::LlmConfigBrowse {
                     Style::default().fg(Color::Black).bg(Color::White)
                 } else {
                     Style::default().fg(Color::Gray)
                 };
-                buf.set_string(connect_x, line1_y, connect_text, connect_style);
+                buf.set_string(browse_x, line1_y, browse_text, browse_style);
+
+                // Configure LLM Clients button on a new line
+                let llm_client_text = "[Configure LLM Clients]";
+                let llm_client_x = content_area.x;
+                let llm_client_y = line1_y + 2;
+                let llm_client_style = if self.selected_option == SelectedOption::ConfigureLlmClients {
+                    Style::default().fg(Color::Black).bg(Color::White)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                buf.set_string(llm_client_x, llm_client_y, llm_client_text, llm_client_style);
 
                 // Data Viewer section with bordered block
                 let dv_block_area = Rect {
-                    x: input_area.x,
-                    y: line2_y,
-                    width: input_area.width,
+                    x: content_area.x,
+                    y: line2_y + 1, // Move down one line to accommodate LLM Client button
+                    width: content_area.width,
                     height: 3,
                 };
                 let dv_block = Block::default()
@@ -243,10 +246,13 @@ impl ProjectSettingsDialog {
 
                 let dv_label = "Auto Exapand Value Display: ";
                 let dv_value = if self.config.data_viewer.auto_exapand_value_display { "true" } else { "false" };
-                let dv_style = if self.data_viewer_selected && !self.finish_button_selected && !self.browse_button_selected && !self.connect_button_selected {
-                    Style::default().fg(Color::Black).bg(Color::White)
+                let dv_style = if self.selected_option == SelectedOption::AutoExpandValueDisplay {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::White)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default()
+                        .fg(Color::White)
                 };
                 buf.set_string(dv_inner.x, dv_inner.y, format!("{dv_label}{dv_value}"), dv_style);
 
@@ -254,8 +260,10 @@ impl ProjectSettingsDialog {
                 let save_text = "[Save]";
                 let save_x = content_area.x + content_area.width.saturating_sub(save_text.len() as u16 + 2);
                 let save_y = content_area.y + content_area.height.saturating_sub(2);
-                let save_style = if self.finish_button_selected {
-                    Style::default().fg(Color::Black).bg(Color::White)
+                let save_style = if self.selected_option == SelectedOption::Save {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::White)
                 } else {
                     Style::default().fg(Color::Gray)
                 };
@@ -271,11 +279,19 @@ impl ProjectSettingsDialog {
                 buf.set_string(content_area.x, y + 1 + error_lines.len() as u16, "Press Esc or Enter to close error", Style::default().fg(Color::Yellow));
             }
             ProjectSettingsDialogMode::Save => { }
+            ProjectSettingsDialogMode::LlmClientDialog => {
+                if let Some(dialog) = &mut self.llm_client_dialog {
+                    dialog.render(area, buf);
+                    return;
+                }
+            }
         }
 
         if self.show_instructions && let Some(instructions_area) = instructions_area {
             let instructions_paragraph = Paragraph::new(instructions)
-                .block(Block::default().borders(Borders::ALL).title("Instructions"))
+                .block(Block::default()
+                    .title("Instructions")
+                    .borders(Borders::ALL))
                 .style(Style::default().fg(Color::Yellow))
                 .wrap(Wrap { trim: true });
             instructions_paragraph.render(instructions_area, buf);
@@ -284,12 +300,11 @@ impl ProjectSettingsDialog {
         if self.message_dialog_mode && let Some(msg) = &self.message_dialog {
             msg.render(area, buf);
         }
-        1
     }
 
     /// Handle a key event. Returns Some(Action) if the dialog should close and apply, None otherwise.
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crossterm::event::KeyCode;
         
         if key.kind == KeyEventKind::Press {
             // Handle Ctrl+I for instructions toggle if applicable
@@ -299,21 +314,22 @@ impl ProjectSettingsDialog {
                     return None;
                 }
             }
-
-            // Check for ProjectSettings-specific actions
-            if let Some(dialog_action) = self.keybindings_config.action_for_key(crate::config::Mode::ProjectSettings, key) {
-                if dialog_action == Action::ToggleDataViewerOption {
-                    // Toggle boolean when data viewer option is selected
-                    if self.data_viewer_selected {
-                        self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
-                    }
-                    return None;
-                }
-            }
         }
         
         match &mut self.mode {
             ProjectSettingsDialogMode::Input => {
+                // Check for ProjectSettings-specific actions (only in Input mode)
+                if key.kind == KeyEventKind::Press {
+                    if let Some(dialog_action) = self.keybindings_config.action_for_key(crate::config::Mode::ProjectSettings, key) {
+                        if dialog_action == Action::ToggleDataViewerOption {
+                            // Toggle boolean when data viewer option is selected
+                            if self.selected_option == SelectedOption::AutoExpandValueDisplay {
+                                self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
+                            }
+                            return None;
+                        }
+                    }
+                }
                 if self.error_active {
                     // Only allow Esc or Enter to clear error
                     if key.kind == KeyEventKind::Press {
@@ -345,15 +361,21 @@ impl ProjectSettingsDialog {
                         && let Some(action) = browser.handle_key_event(key) {
                         match action {
                             FileBrowserAction::Selected(path) => {
-                                self.workspace_path_input = path.to_string_lossy().to_string();
+                                match self.selected_option {
+                                    SelectedOption::WorkspaceBrowse => {
+                                        self.workspace_path_input = path.to_string_lossy().to_string();
+                                    }
+                                    SelectedOption::LlmConfigBrowse => {
+                                        self.config_path_input = path.to_string_lossy().to_string();
+                                    }
+                                    _ => {}
+                                }
                                 self.file_browser_mode = false;
                                 self.file_browser = None;
-                                self.browse_button_selected = false;
                             }
                             FileBrowserAction::Cancelled => {
                                 self.file_browser_mode = false;
                                 self.file_browser = None;
-                                self.browse_button_selected = false;
                             }
                         }
                     }
@@ -362,139 +384,102 @@ impl ProjectSettingsDialog {
 
                 if key.kind == KeyEventKind::Press {
                     match key.code {
-                        KeyCode::Tab => {
-                            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                                // Reverse cycle: Save -> Connect -> OpenAI -> Browse -> Workspace
-                                if self.finish_button_selected {
-                                    self.finish_button_selected = false;
-                                    self.current_field = 1;
-                                    self.connect_button_selected = true;
-                                    self.browse_button_selected = false;
-                                    // ensure only [Connect] is selected
-                                } else if self.current_field == 1 {
-                                    if self.connect_button_selected {
-                                        self.connect_button_selected = false;
-                                        // stay on OpenAI input
-                                    } else {
-                                        self.current_field = 0;
-                                        self.browse_button_selected = true;
-                                        // unselect [Connect] when [Browse] is selected
-                                        self.connect_button_selected = false;
-                                    }
-                                } else if self.current_field == 0 && self.browse_button_selected {
-                                    self.browse_button_selected = false;
-                                    self.current_field = 0;
-                                    // unselect [Connect] when leaving [Browse]
-                                    self.connect_button_selected = false;
-                                } else {
-                                    self.finish_button_selected = true;
-                                    // unselect [Connect] when [Save] is selected
-                                    self.connect_button_selected = false;
-                                }
-                            } else {
-                                // Cycle: Workspace -> Browse -> OpenAI -> Connect -> Save
-                                if self.current_field == 0 && !self.browse_button_selected {
-                                    self.browse_button_selected = true;
-                                    // unselect [Connect] when [Browse] is selected
-                                    self.connect_button_selected = false;
-                                } else if self.current_field == 0 && self.browse_button_selected {
-                                    self.browse_button_selected = false;
-                                    self.current_field = 1;
-                                    // entering OpenAI input, ensure [Connect] not selected
-                                    self.connect_button_selected = false;
-                                } else if self.current_field == 1 {
-                                    if !self.connect_button_selected {
-                                        self.connect_button_selected = true;
-                                    } else {
-                                        self.connect_button_selected = false;
-                                        self.finish_button_selected = true;
-                                    }
-                                } else if self.finish_button_selected {
-                                    self.finish_button_selected = false;
-                                    self.current_field = 0;
-                                    // leaving [Save], ensure [Connect] not selected
-                                    self.connect_button_selected = false;
-                                }
-                            }
-                        }
                         KeyCode::Up => {
-                            if self.in_buttons_zone() {
-                                // Cycle buttons: Browse -> Connect -> Save -> Browse ... (reverse on Up)
-                                let idx = self.current_button_index();
-                                let next = (idx + 2) % 3; // -1 mod 3
-                                self.select_button_index(next);
-                            } else {
-                                // Cycle settings: Workspace -> OpenAI -> DataViewer -> Workspace ... (reverse on Up)
-                                let idx = self.current_settings_index();
-                                let next = (idx + 2) % 3; // -1 mod 3
-                                self.select_settings_index(next);
+                            // Up navigation:
+                            // Left side: Auto Expand Value Display -> Configure LLM Clients -> LLM Config Path -> Workspace Path
+                            // Right side: [Save] -> [Browse] (LLM config path) -> [Browse] (workspace path)
+                            self.selected_option = match self.selected_option {
+                                // Left side navigation
+                                SelectedOption::AutoExpandValueDisplay => SelectedOption::ConfigureLlmClients,
+                                SelectedOption::ConfigureLlmClients => SelectedOption::LlmConfigPath,
+                                SelectedOption::LlmConfigPath => SelectedOption::WorkspacePath,
+                                SelectedOption::WorkspacePath => SelectedOption::AutoExpandValueDisplay, // wrap around
+                                
+                                // Right side navigation
+                                SelectedOption::Save => SelectedOption::LlmConfigBrowse,
+                                SelectedOption::LlmConfigBrowse => SelectedOption::WorkspaceBrowse,
+                                SelectedOption::WorkspaceBrowse => SelectedOption::Save, // wrap around
+                            };
+                            
+                            // Initialize cursor position when switching to text input fields
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => {
+                                    self.workspace_cursor_position = self.workspace_path_input.len();
+                                }
+                                SelectedOption::LlmConfigPath => {
+                                    self.config_cursor_position = self.config_path_input.len();
+                                }
+                                _ => {}
                             }
                         }
                         KeyCode::Down => {
-                            if self.in_buttons_zone() {
-                                // Cycle buttons forward
-                                let idx = self.current_button_index();
-                                let next = (idx + 1) % 3;
-                                self.select_button_index(next);
-                            } else {
-                                // Cycle settings forward
-                                let idx = self.current_settings_index();
-                                let next = (idx + 1) % 3;
-                                self.select_settings_index(next);
+                            // Down navigation:
+                            // Left side: Workspace Path -> LLM Config Path -> Configure LLM Clients -> Auto Expand Value Display
+                            // Right side: [Browse] (workspace path) -> [Browse] (LLM config path) -> [Save]
+                            self.selected_option = match self.selected_option {
+                                // Left side navigation
+                                SelectedOption::WorkspacePath => SelectedOption::LlmConfigPath,
+                                SelectedOption::LlmConfigPath => SelectedOption::ConfigureLlmClients,
+                                SelectedOption::ConfigureLlmClients => SelectedOption::AutoExpandValueDisplay,
+                                SelectedOption::AutoExpandValueDisplay => SelectedOption::WorkspacePath, // wrap around
+                                
+                                // Right side navigation
+                                SelectedOption::WorkspaceBrowse => SelectedOption::LlmConfigBrowse,
+                                SelectedOption::LlmConfigBrowse => SelectedOption::Save,
+                                SelectedOption::Save => SelectedOption::WorkspaceBrowse, // wrap around
+                            };
+                            
+                            // Initialize cursor position when switching to text input fields
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => {
+                                    self.workspace_cursor_position = self.workspace_path_input.len();
+                                }
+                                SelectedOption::LlmConfigPath => {
+                                    self.config_cursor_position = self.config_path_input.len();
+                                }
+                                _ => {}
                             }
                         }
                         KeyCode::Enter => {
-                            if self.finish_button_selected {
-                                // Save settings
-                                if self.save_settings().is_ok() {
-                                    return Some(Action::ProjectSettingsApplied(self.config.clone()));
-                                } else {
+                            match self.selected_option {
+                                SelectedOption::Save => {
+                                    // Save settings
+                                    if self.save_settings().is_ok() {
+                                        return Some(Action::ProjectSettingsApplied(self.config.clone()));
+                                    } else {
+                                        return None;
+                                    }
+                                }
+                                SelectedOption::ConfigureLlmClients => {
+                                    // Open LLM Client dialog
+                                    let llm_config = self.keybindings_config.llm_config.clone();
+                                    let mut llm_dialog = LlmClientDialog::new_with_config(
+                                        self.keybindings_config.clone(),
+                                        llm_config
+                                    );
+                                    let _ = llm_dialog.register_config_handler(self.keybindings_config.clone());
+                                    self.llm_client_dialog = Some(llm_dialog);
+                                    self.mode = ProjectSettingsDialogMode::LlmClientDialog;
+                                }
+                                SelectedOption::WorkspaceBrowse | SelectedOption::LlmConfigBrowse => {
+                                    // Open file browser
+                                    self.file_browser = Some(FileBrowserDialog::new(
+                                        Some(self.file_browser_path.clone()),
+                                        None,
+                                        true,
+                                        FileBrowserMode::Load,
+                                    ));
+                                    self.file_browser_mode = true;
                                     return None;
                                 }
-                            }
-                            if self.connect_button_selected {
-                                // Create OpenAI client using input or env var
-                                let key = if !self.openai_key_input.trim().is_empty() {
-                                    Some(self.openai_key_input.trim().to_string())
-                                } else {
-                                    std::env::var("OPENAI_API_KEY").ok()
-                                };
-                                match key {
-                                    Some(k) if !k.is_empty() => {
-                                        let client = OpenAIClient::new(k);
-                                        // Wire up global embeddings provider using this client
-                                        set_openai_embeddings_provider(client.clone(), None);
-                                        self.openai_client = Some(client);
-                                        // Show confirmation message dialog
-                                        self.message_dialog = Some(MessageDialog::with_title(
-                                            "OpenAI API key has been set.",
-                                            "Info",
-                                        ));
-                                        self.message_dialog_mode = true;
-                                        return None;
-                                    }
-                                    _ => {
-                                        self.set_error("OpenAI API key not set. Enter a key or set OPENAI_API_KEY.".to_string());
+                                _ => {
+                                    // If on fields, Enter also saves
+                                    if self.save_settings().is_ok() {
+                                        return Some(Action::ProjectSettingsApplied(self.config.clone()));
+                                    } else {
                                         return None;
                                     }
                                 }
-                            }
-                            if self.browse_button_selected {
-                                // Open file browser
-                                self.file_browser = Some(FileBrowserDialog::new(
-                                    Some(self.file_browser_path.clone()),
-                                    None,
-                                    true,
-                                    FileBrowserMode::Load,
-                                ));
-                                self.file_browser_mode = true;
-                                return None;
-                            }
-                            // If on fields, Enter also saves
-                            if self.save_settings().is_ok() {
-                                return Some(Action::ProjectSettingsApplied(self.config.clone()));
-                            } else {
-                                return None;
                             }
                         }
                         KeyCode::Esc => {
@@ -502,36 +487,123 @@ impl ProjectSettingsDialog {
                         }
                         KeyCode::Backspace => {
                             // Handle backspace for current field
-                            if !self.browse_button_selected && !self.finish_button_selected {
-                                match self.current_field {
-                                    0 => { self.workspace_path_input.pop(); }
-                                    1 => { self.openai_key_input.pop(); }
-                                    _ => {}
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => { 
+                                    if self.workspace_cursor_position > 0 {
+                                        self.workspace_path_input.remove(self.workspace_cursor_position - 1);
+                                        self.workspace_cursor_position -= 1;
+                                    }
                                 }
+                                SelectedOption::LlmConfigPath => { 
+                                    if self.config_cursor_position > 0 {
+                                        self.config_path_input.remove(self.config_cursor_position - 1);
+                                        self.config_cursor_position -= 1;
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                         KeyCode::Char(c) => {
                             // Handle character input for current field
-                            if !self.browse_button_selected && !self.finish_button_selected {
-                                match self.current_field {
-                                    0 => { self.workspace_path_input.push(c); }
-                                    1 => { self.openai_key_input.push(c); }
-                                    _ => {}
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => { 
+                                    let cursor_pos = self.workspace_cursor_position.min(self.workspace_path_input.len());
+                                    self.workspace_path_input.insert(cursor_pos, c);
+                                    self.workspace_cursor_position += 1;
                                 }
+                                SelectedOption::LlmConfigPath => { 
+                                    let cursor_pos = self.config_cursor_position.min(self.config_path_input.len());
+                                    self.config_path_input.insert(cursor_pos, c);
+                                    self.config_cursor_position += 1;
+                                }
+                                _ => {}
                             }
                         }
                         KeyCode::Right => {
-                            // Switch to buttons zone, keep index aligned: 0->Browse, 1->Connect, 2->Save
-                            if !self.in_buttons_zone() {
-                                let idx = self.current_settings_index();
-                                self.select_button_index(idx);
+                            // Handle cursor movement or navigation
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => {
+                                    if self.workspace_cursor_position < self.workspace_path_input.len() {
+                                        self.workspace_cursor_position += 1;
+                                    } else {
+                                        // Move to browse button
+                                        self.selected_option = SelectedOption::WorkspaceBrowse;
+                                    }
+                                }
+                                SelectedOption::LlmConfigPath => {
+                                    if self.config_cursor_position < self.config_path_input.len() {
+                                        self.config_cursor_position += 1;
+                                    } else {
+                                        // Move to browse button
+                                        self.selected_option = SelectedOption::LlmConfigBrowse;
+                                    }
+                                }
+                                _ => {
+                                    // Right navigation for other options:
+                                    // [Configure LLM Clients] -> [Save]
+                                    // Auto Expand Value Display -> [Save]
+                                    self.selected_option = match self.selected_option {
+                                        SelectedOption::ConfigureLlmClients => SelectedOption::Save,
+                                        SelectedOption::AutoExpandValueDisplay => SelectedOption::Save,
+                                        _ => SelectedOption::WorkspacePath, // default
+                                    };
+                                }
                             }
                         }
                         KeyCode::Left => {
-                            // Switch to settings zone, keep index aligned: 0->Workspace, 1->OpenAI, 2->DataViewer
-                            if self.in_buttons_zone() {
-                                let idx = self.current_button_index();
-                                self.select_settings_index(idx);
+                            // Handle cursor movement or navigation
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => {
+                                    if self.workspace_cursor_position > 0 {
+                                        self.workspace_cursor_position -= 1;
+                                    }
+                                }
+                                SelectedOption::LlmConfigPath => {
+                                    if self.config_cursor_position > 0 {
+                                        self.config_cursor_position -= 1;
+                                    }
+                                }
+                                SelectedOption::WorkspaceBrowse => {
+                                    // Move to end of workspace path input
+                                    self.selected_option = SelectedOption::WorkspacePath;
+                                    self.workspace_cursor_position = self.workspace_path_input.len();
+                                }
+                                SelectedOption::LlmConfigBrowse => {
+                                    // Move to end of config path input
+                                    self.selected_option = SelectedOption::LlmConfigPath;
+                                    self.config_cursor_position = self.config_path_input.len();
+                                }
+                                SelectedOption::Save => {
+                                    // Left navigation from Save button
+                                    self.selected_option = SelectedOption::ConfigureLlmClients; // default choice
+                                }
+                                _ => {
+                                    self.selected_option = SelectedOption::WorkspacePath; // default
+                                }
+                            }
+                        }
+                        KeyCode::Home => {
+                            // Move cursor to beginning of current field
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => {
+                                    self.workspace_cursor_position = 0;
+                                }
+                                SelectedOption::LlmConfigPath => {
+                                    self.config_cursor_position = 0;
+                                }
+                                _ => {}
+                            }
+                        }
+                        KeyCode::End => {
+                            // Move cursor to end of current field
+                            match self.selected_option {
+                                SelectedOption::WorkspacePath => {
+                                    self.workspace_cursor_position = self.workspace_path_input.len();
+                                }
+                                SelectedOption::LlmConfigPath => {
+                                    self.config_cursor_position = self.config_path_input.len();
+                                }
+                                _ => {}
                             }
                         }
                         _ => {}
@@ -560,17 +632,42 @@ impl ProjectSettingsDialog {
                     }
                 }
             }
+            ProjectSettingsDialogMode::LlmClientDialog => {
+                if let Some(dialog) = &mut self.llm_client_dialog {
+                    if let Some(action) = dialog.handle_key_event(key) {
+                        match action {
+                            Action::LlmClientDialogApplied(_config) => {
+                                // Handle the applied LLM client configuration
+                                // Save the LLM config if it was modified
+                                if let Some(llm_dialog) = &self.llm_client_dialog {
+                                    // Update the main config with the new LLM config
+                                    self.keybindings_config.llm_config = llm_dialog.llm_config.clone();
+                                    // Save the config to file
+                                    let _ = self.keybindings_config.save_llm_config();
+                                }
+                                self.llm_client_dialog = None;
+                                self.mode = ProjectSettingsDialogMode::Input;
+                                return None;
+                            }
+                            Action::DialogClose => {
+                                self.llm_client_dialog = None;
+                                self.mode = ProjectSettingsDialogMode::Input;
+                                return None;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
         }
         None
     }
 
     /// Save the current input values to the config and persist to JSON if applicable
     fn save_settings(&mut self) -> Result<()> {
-        self.config.openai_key = if self.openai_key_input.trim().is_empty() {
-            None
-        } else {
-            Some(self.openai_key_input.trim().to_string())
-        };
+        // Store the config path for LLM settings
+        // This could be used to load/save LLM config from a custom location
+        // For now, we'll use the default location from get_config_dir()
         
         // Only update workspace path if provided; otherwise keep existing config value
         let workspace_input = self.workspace_path_input.trim();
@@ -617,227 +714,6 @@ impl Component for ProjectSettingsDialog {
         }
     }
 
-    /// Handle a key event. Returns Some(Action) if the dialog should close and apply, None otherwise.
-    fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
-        use crossterm::event::{KeyCode, KeyModifiers};
-        
-        if key.kind == KeyEventKind::Press {
-            // Handle Ctrl+I for instructions toggle if applicable
-            if let Some(global_action) = self.keybindings_config.action_for_key(crate::config::Mode::Global, key) {
-                if global_action == Action::ToggleInstructions {
-                    self.show_instructions = !self.show_instructions;
-                    return Ok(None);
-                }
-            }
-
-            // Check for ProjectSettings-specific actions
-            if let Some(dialog_action) = self.keybindings_config.action_for_key(crate::config::Mode::ProjectSettings, key) {
-                if dialog_action == Action::ToggleDataViewerOption {
-                    // Toggle boolean when data viewer option is selected
-                    if self.data_viewer_selected {
-                        self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
-                    }
-                    return Ok(None);
-                }
-            }
-        }
-        
-        match &mut self.mode {
-            ProjectSettingsDialogMode::Input => {
-                if self.error_active {
-                    // Only allow Esc or Enter to clear error
-                    if key.kind == KeyEventKind::Press {
-                        match key.code {
-                            KeyCode::Esc | KeyCode::Enter => {
-                                self.error_active = false;
-                                self.mode = ProjectSettingsDialogMode::Input;
-                            }
-                            _ => {}
-                        }
-                    }
-                    return Ok(None);
-                }
-
-                // If file browser mode is active, forward events to it
-                if self.file_browser_mode {
-                    if let Some(browser) = &mut self.file_browser
-                        && let Some(action) = browser.handle_key_event(key) {
-                        match action {
-                            FileBrowserAction::Selected(path) => {
-                                self.workspace_path_input = path.to_string_lossy().to_string();
-                                self.file_browser_mode = false;
-                                self.file_browser = None;
-                                self.browse_button_selected = false;
-                            }
-                            FileBrowserAction::Cancelled => {
-                                self.file_browser_mode = false;
-                                self.file_browser = None;
-                                self.browse_button_selected = false;
-                            }
-                        }
-                    }
-                    return Ok(None);
-                }
-
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Tab => {
-                            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                                // Reverse cycle: Save -> OpenAI -> Browse -> Workspace
-                                if self.finish_button_selected {
-                                    self.finish_button_selected = false;
-                                    self.current_field = 1;
-                                    self.browse_button_selected = false;
-                                } else if self.current_field == 1 {
-                                    self.current_field = 0;
-                                    self.browse_button_selected = true;
-                                } else if self.current_field == 0 && self.browse_button_selected {
-                                    self.browse_button_selected = false;
-                                    self.current_field = 0;
-                                } else {
-                                    self.finish_button_selected = true;
-                                }
-                            } else {
-                                // Cycle: Workspace -> Browse -> OpenAI -> Save
-                                if self.current_field == 0 && !self.browse_button_selected {
-                                    self.browse_button_selected = true;
-                                } else if self.current_field == 0 && self.browse_button_selected {
-                                    self.browse_button_selected = false;
-                                    self.current_field = 1;
-                                } else if self.current_field == 1 {
-                                    self.finish_button_selected = true;
-                                } else if self.finish_button_selected {
-                                    self.finish_button_selected = false;
-                                    self.current_field = 0;
-                                }
-                            }
-                        }
-                        KeyCode::Up => {
-                            if self.finish_button_selected {
-                                self.finish_button_selected = false;
-                                self.browse_button_selected = true;
-                                self.current_field = 0;
-                            } else if self.data_viewer_selected {
-                                // Move from data viewer option up to OpenAI [Connect]
-                                self.data_viewer_selected = false;
-                                self.current_field = 1;
-                            } else if self.browse_button_selected {
-                                self.browse_button_selected = false;
-                                self.current_field = 0;
-                            } else if self.current_field == 1 {
-                                self.current_field = 0;
-                            }
-                        }
-                        KeyCode::Down => {
-                            if self.current_field == 0 && !self.browse_button_selected {
-                                self.current_field = 1;
-                            } else if self.browse_button_selected {
-                                self.browse_button_selected = false;
-                                self.finish_button_selected = true;
-                            } else if self.current_field == 1 {
-                                // Move from OpenAI to Data Viewer option
-                                self.data_viewer_selected = true;
-                            } else if self.data_viewer_selected {
-                                // Move from Data Viewer to Save
-                                self.data_viewer_selected = false;
-                                self.finish_button_selected = true;
-                            }
-                        }
-                        KeyCode::Enter => {
-                            if self.finish_button_selected {
-                                // Save settings
-                                if self.save_settings().is_ok() {
-                                    return Ok(Some(Action::ProjectSettingsApplied(self.config.clone())));
-                                } else {
-                                    return Ok(None);
-                                }
-                            }
-                            if self.browse_button_selected {
-                                // Open file browser
-                                self.file_browser = Some(FileBrowserDialog::new(
-                                    Some(self.file_browser_path.clone()),
-                                    None,
-                                    false,
-                                    FileBrowserMode::Load,
-                                ));
-                                self.file_browser_mode = true;
-                                return Ok(None);
-                            }
-                            // If on fields, Enter also saves
-                            if self.save_settings().is_ok() {
-                                return Ok(Some(Action::ProjectSettingsApplied(self.config.clone())));
-                            } else {
-                                return Ok(None);
-                            }
-                        }
-                        KeyCode::Esc => {
-                            return Ok(Some(Action::DialogClose));
-                        }
-                        KeyCode::Backspace => {
-                            // Handle backspace for current field
-                            if !self.browse_button_selected && !self.finish_button_selected {
-                                match self.current_field {
-                                    0 => { self.workspace_path_input.pop(); }
-                                    1 => { self.openai_key_input.pop(); }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        KeyCode::Char(c) => {
-                            // Handle character input for current field
-                            if !self.browse_button_selected && !self.finish_button_selected {
-                                match self.current_field {
-                                    0 => { self.workspace_path_input.push(c); }
-                                    1 => { self.openai_key_input.push(c); }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        KeyCode::Right => {
-                            if self.current_field == 0 && !self.browse_button_selected {
-                                self.browse_button_selected = true;
-                            } else if !self.finish_button_selected && self.current_field == 1 {
-                                self.finish_button_selected = true;
-                            }
-                        }
-                        KeyCode::Left => {
-                            if self.browse_button_selected {
-                                self.browse_button_selected = false;
-                                self.current_field = 0;
-                            } else if self.finish_button_selected {
-                                self.finish_button_selected = false;
-                                self.current_field = 1;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            ProjectSettingsDialogMode::Error(_) => {
-                // Only close error on Esc or Enter
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Enter => {
-                            self.error_active = false;
-                            self.mode = ProjectSettingsDialogMode::Input;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            ProjectSettingsDialogMode::Save => {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Enter => {
-                            return Ok(Some(Action::DialogClose));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        Ok(None)
-    }
 
     fn handle_mouse_event(&mut self, _mouse: crossterm::event::MouseEvent) -> Result<Option<Action>> {
         Ok(None)

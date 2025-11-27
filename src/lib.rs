@@ -15,4 +15,3 @@ pub mod jmes;
 pub mod workspace;
 pub mod logging;
 pub mod sql;
-pub mod providers;

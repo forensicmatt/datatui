@@ -448,10 +448,23 @@ impl Component for CsvOptionsDialog {
                 }
                 Action::Right => {
                     if self.file_path_focused {
-                        // Always move focus from File Path to [Browse]
-                        self.file_path_focused = false;
-                        self.browse_button_selected = true;
-                        self.option_selected = 0; // Reset CSV option selection
+                        // Check if cursor is at the end of the text
+                        let lines = self.file_path_input.lines();
+                        let cursor_pos = self.file_path_input.cursor();
+                        
+                        if cursor_pos.0 == lines.len().saturating_sub(1) && 
+                           cursor_pos.1 >= lines.last().unwrap_or(&String::new()).len() {
+                            // Cursor is at the end, move to browse button
+                            self.file_path_focused = false;
+                            self.browse_button_selected = true;
+                            self.option_selected = 0; // Reset CSV option selection
+                        } else {
+                            // Let the TextArea handle the right arrow normally
+                            use tui_textarea::Input as TuiInput;
+                            let input: TuiInput = key.into();
+                            self.file_path_input.input(input);
+                            self.update_file_path(self.file_path_input.lines().join("\n"));
+                        }
                     } else if !self.file_path_focused && !self.browse_button_selected && !self.finish_button_selected {
                         // If a CSV option is selected, right arrow moves to finish button
                         self.finish_button_selected = true;

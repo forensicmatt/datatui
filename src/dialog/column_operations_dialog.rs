@@ -15,6 +15,7 @@ pub enum ColumnOperationKind {
     GenerateEmbeddings,
     Pca,
     Cluster,
+    SortByPromptSimilarity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -45,6 +46,7 @@ impl ColumnOperationsDialog {
                 ColumnOperationKind::GenerateEmbeddings,
                 ColumnOperationKind::Pca,
                 ColumnOperationKind::Cluster,
+                ColumnOperationKind::SortByPromptSimilarity,
             ],
             config: crate::config::Config::default(),
         }
@@ -55,6 +57,7 @@ impl ColumnOperationsDialog {
             ColumnOperationKind::GenerateEmbeddings => "Generate Embeddings",
             ColumnOperationKind::Pca => "PCA (Principal Component Analysis)",
             ColumnOperationKind::Cluster => "Cluster",
+            ColumnOperationKind::SortByPromptSimilarity => "Sort by Prompt Similarity",
         }
     }
 
@@ -63,6 +66,7 @@ impl ColumnOperationsDialog {
             ColumnOperationKind::GenerateEmbeddings => "Convert text data into numerical vectors for machine learning",
             ColumnOperationKind::Pca => "Reduce dimensionality while preserving most of the data variance",
             ColumnOperationKind::Cluster => "Group similar data points together using clustering algorithms",
+            ColumnOperationKind::SortByPromptSimilarity => "Compute cosine similarity of an embedding column to a user prompt and create a score column you can sort by",
         }
     }
 
@@ -71,6 +75,7 @@ impl ColumnOperationsDialog {
             ColumnOperationKind::GenerateEmbeddings => "Requires: Text columns, OpenAI API key",
             ColumnOperationKind::Pca => "Requires: Numerical columns only",
             ColumnOperationKind::Cluster => "Requires: Numerical columns, specify number of clusters",
+            ColumnOperationKind::SortByPromptSimilarity => "Requires: At least one embedding column to reference",
         }
     }
 
@@ -326,6 +331,7 @@ impl ColumnOperationsDialog {
                 ColumnOperationKind::GenerateEmbeddings => "GenerateEmbeddings".to_string(),
                 ColumnOperationKind::Pca => "Pca".to_string(),
                 ColumnOperationKind::Cluster => "Cluster".to_string(),
+                ColumnOperationKind::SortByPromptSimilarity => "SortByPromptSimilarity".to_string(),
             };
             return Some(Action::ColumnOperationRequested(op_name));
         }

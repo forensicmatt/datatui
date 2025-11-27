@@ -136,11 +136,13 @@ impl SqlDialog {
                 
                 // Render input prompt and field
                 buf.set_string(input_area.x, input_area.y, "Dataset name:", Style::default().fg(Color::Yellow));
+                
+                // Draw the full text first
                 buf.set_string(input_area.x, input_area.y + 1, &self.dataset_name_input, Style::default().fg(Color::White));
                 
-                // Render cursor
-                let cursor_x = input_area.x + self.dataset_name_input.len() as u16;
-                buf.set_string(cursor_x, input_area.y + 1, "_", Style::default().fg(Color::Yellow));
+                // Overlay block cursor at the end
+                let cursor_x = input_area.x + self.dataset_name_input.chars().map(|c| c.len_utf8()).sum::<usize>() as u16;
+                buf.set_string(cursor_x, input_area.y + 1, " ", self.config.style_config.cursor.block());
                 
                 buf.set_string(input_area.x, input_area.y + 3, "Enter: Create Dataset  Esc: Cancel", Style::default().fg(Color::Gray));
             }
