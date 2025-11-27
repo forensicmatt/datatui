@@ -293,7 +293,7 @@ impl LlmConfig {
     fn fetch_ollama_embeddings(
         &self,
         model_name: &str,
-        inputs: &Vec<String>,
+        inputs: &[String],
     ) -> color_eyre::Result<Vec<Vec<f32>>> {
         let cfg = self.ollama.as_ref().ok_or_else(|| color_eyre::eyre::eyre!("Ollama config is not set"))?;
         let url = format!("{}/api/embeddings", cfg.host.trim_end_matches('/'));
