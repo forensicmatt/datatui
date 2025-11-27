@@ -290,8 +290,8 @@ impl DataTableContainer {
         // Append similarity column
         let mut cols: Vec<polars::prelude::Column> = Vec::with_capacity(df_ref.width() + 1);
         for c in df_ref.get_columns() { cols.push(c.clone()); }
-        let mut new_name = if new_column_name.trim().is_empty() { format!("{}__prompt_sim", source_column) } else { new_column_name.to_string() };
-        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{}__sim", new_name); }
+        let mut new_name = if new_column_name.trim().is_empty() { format!("{source_column}__prompt_sim") } else { new_column_name.to_string() };
+        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{new_name}__sim"); }
         let series = Series::new(new_name.as_str().into(), sims);
         cols.push(series.into_column());
         let new_df = polars::prelude::DataFrame::new(cols)
@@ -352,7 +352,7 @@ impl DataTableContainer {
         let df_arc = self.datatable.get_dataframe()?;
         let df_ref = df_arc.as_ref();
         let mut new_name = if job.new_column_name.trim().is_empty() { format!("{}_emb", job.source_column) } else { job.new_column_name };
-        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{}__emb", new_name); }
+        if df_ref.get_column_names_owned().into_iter().any(|n| n.as_str() == new_name) { new_name = format!("{new_name}__emb"); }
         lc.rename(PlSmallStr::from_str(&new_name));
         let list_series = lc.into_series();
         // Append column to DataFrame

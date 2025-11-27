@@ -132,7 +132,7 @@ impl EmbeddingsPromptDialog {
                 let label_style = if is_selected && !self.emb_col_button_selected { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default() };
                 buf.set_string(inner.x + 1, y, label_text, label_style);
                 let col_name = self.columns.get(self.selected_column_index).cloned().unwrap_or_default();
-                let col_text = format!(" {}", col_name);
+                let col_text = format!(" {col_name}");
                 buf.set_string(inner.x + 1 + label_text.len() as u16, y, col_text, Style::default());
                 // Draw [From New Column] button at right
                 let button_text = "[From New Column]";
@@ -183,9 +183,9 @@ impl EmbeddingsPromptDialog {
                 let mut x = bx;
                 for (idx, b) in buttons.iter().enumerate() {
                     let style = if self.buttons_mode && self.selected_button == idx {
-                        Style::default().fg(Color::Black).bg(Color::White)
-                    } else if idx == 0 {
-                        Style::default().fg(Color::White)
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::White)
                     } else {
                         Style::default().fg(Color::White)
                     };

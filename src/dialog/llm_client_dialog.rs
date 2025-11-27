@@ -60,6 +60,7 @@ pub struct LlmClientDialog {
 }
 
 #[derive(Serialize, Deserialize)]
+#[derive(Default)]
 pub struct LlmConfig {
     pub azure: Option<AzureOpenAiConfig>,
     pub openai: Option<OpenAIConfig>,
@@ -97,16 +98,6 @@ impl PartialEq for LlmConfig {
 
 impl Eq for LlmConfig {}
 
-impl Default for LlmConfig {
-    fn default() -> Self {
-        Self {
-            azure: None,
-            openai: None,
-            ollama: None,
-            builders: HashMap::new(),
-        }
-    }
-}
 
 impl LlmConfig {
     /// Returns a list of configured providers
@@ -515,11 +506,8 @@ impl LlmClientDialog {
             LlmClientDialogMode::ProviderSelection => {
                 // First, check Global actions
                 if let Some(global_action) = &optional_global_action {
-                    match global_action {
-                        Action::Escape => {
-                            return Some(Action::DialogClose);
-                        }
-                        _ => {}
+                    if global_action == &Action::Escape {
+                        return Some(Action::DialogClose);
                     }
                 }
 

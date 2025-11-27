@@ -448,12 +448,9 @@ impl Component for KeybindingsDialog {
         // If message dialog is active, handle it first and block other events
         if let Some(ref mut msg) = self.message_dialog {
             if let Some(a) = Component::handle_key_event(msg, key)? {
-                match a {
-                    Action::DialogClose => {
-                        self.message_dialog = None;
-                        return Ok(None);
-                    }
-                    _ => {}
+                if a == Action::DialogClose {
+                    self.message_dialog = None;
+                    return Ok(None);
                 }
             }
             return Ok(None);

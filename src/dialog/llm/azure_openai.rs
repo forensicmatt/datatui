@@ -12,7 +12,7 @@ use crate::dialog::llm::LlmConfig;
 use arboard::Clipboard;
 
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AzureOpenAiConfig {
     pub api_key: String,
     pub base_url: String,
@@ -21,16 +21,6 @@ pub struct AzureOpenAiConfig {
 impl LlmConfig for AzureOpenAiConfig {
     fn is_configured(&self) -> bool {
         !self.api_key.is_empty() && !self.base_url.is_empty()
-    }
-}
-
-impl Default for AzureOpenAiConfig {
-    fn default() -> Self {
-        Self {
-            api_key: String::new(),
-            base_url: String::new(),
-            api_version: String::new(),
-        }
     }
 }
 

@@ -131,8 +131,8 @@ impl DataSource {
         let prefix = &first[..prefix_len];
         let suffix = if suffix_len > 0 { &first[first.len() - suffix_len..] } else { "" };
 
-        let core = if prefix_len == min_len { first.to_string() } else { format!("{}*{}", prefix, suffix) };
-        let with_ext = if let Some(ext) = common_ext { format!("{}.{}", core, ext) } else { core };
+        let core = if prefix_len == min_len { first.to_string() } else { format!("{prefix}*{suffix}") };
+        let with_ext = if let Some(ext) = common_ext { format!("{core}.{ext}") } else { core };
         Some(with_ext)
     }
 

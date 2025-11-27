@@ -154,13 +154,13 @@ impl Config {
                             self.llm_config = llm_config;
                         }
                         Err(e) => {
-                            eprintln!("Warning: Failed to parse LLM config file: {}", e);
+                            eprintln!("Warning: Failed to parse LLM config file: {e}");
                             // Keep default llm_config if parsing fails
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to read LLM config file: {}", e);
+                    eprintln!("Warning: Failed to read LLM config file: {e}");
                     // Keep default llm_config if reading fails
                 }
             }

@@ -508,7 +508,7 @@ impl DataTabManagerDialog {
                     area.width.saturating_sub(margin_x * 2),
                     area.height.saturating_sub(margin_y * 2),
                 );
-                let _ = self.project_settings_dialog.render(ps_area, frame.buffer_mut());
+                self.project_settings_dialog.render(ps_area, frame.buffer_mut());
             }
             // Render DataExport overlay if active
             if self.show_data_export_dialog {
@@ -569,7 +569,7 @@ impl DataTabManagerDialog {
                     area.width.saturating_sub(margin_x * 2),
                     area.height.saturating_sub(margin_y * 2),
                 );
-                let _ = self.project_settings_dialog.render(ps_area, frame.buffer_mut());
+                self.project_settings_dialog.render(ps_area, frame.buffer_mut());
             }
 
             // Render DataExport overlay if active
