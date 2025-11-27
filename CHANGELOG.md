@@ -8,7 +8,7 @@ and this project adheres to
 
 ## [0.3.0]
 ### Added
-- Similarity sort
+- Prompt similarity sorting to Column Operations
 
 ## [0.2.0]
 ### Added
