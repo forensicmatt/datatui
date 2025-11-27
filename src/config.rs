@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize, de::Deserializer};
 use directories::BaseDirs;
 
 use crate::action::Action;
+use crate::dialog::llm_client_dialog::LlmConfig;
+use crate::style::StyleConfig;
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
@@ -42,6 +44,7 @@ pub enum Mode {
     ProjectSettings,
     TableExport,
     KeybindingsDialog,
+    LlmClientDialog,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");
@@ -62,6 +65,10 @@ pub struct Config {
     pub keybindings: KeyBindings,
     #[serde(default)]
     pub styles: Styles,
+    #[serde(default)]
+    pub style_config: StyleConfig,
+    #[serde(default)]
+    pub llm_config: LlmConfig,
 }
 
 lazy_static! {
@@ -120,7 +127,66 @@ impl Config {
             }
         }
 
+        // Load LLM config from ~/.datatui-llm-settings.toml (ensure exists)
+        cfg.load_llm_config()?;
+
         Ok(cfg)
+    }
+
+    /// Load LLM configuration from ~/.datatui-llm-settings.toml file (ensure exists)
+    fn load_llm_config(&mut self) -> Result<(), config::ConfigError> {
+        let config_dir = get_config_dir();
+        let llm_config_path = config_dir.join(".datatui-llm-settings.toml");
+        
+        // Ensure default LLM config file exists at the target location
+        if !llm_config_path.exists() {
+            if let Some(parent) = llm_config_path.parent() { let _ = fs::create_dir_all(parent); }
+            let default_toml = toml::to_string_pretty(&self.llm_config)
+                .unwrap_or_else(|_| String::from("# LLM Settings\n# Configure providers like [openai], [azure], [ollama]\n"));
+            let _ = fs::write(&llm_config_path, default_toml);
+        }
+
+        if llm_config_path.exists() {
+            match fs::read_to_string(&llm_config_path) {
+                Ok(content) => {
+                    match toml::from_str::<LlmConfig>(&content) {
+                        Ok(llm_config) => {
+                            self.llm_config = llm_config;
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to parse LLM config file: {}", e);
+                            // Keep default llm_config if parsing fails
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to read LLM config file: {}", e);
+                    // Keep default llm_config if reading fails
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Save LLM configuration to ~/.datatui-llm-settings.toml file
+    pub fn save_llm_config(&self) -> Result<(), std::io::Error> {
+        let config_dir = get_config_dir();
+        let llm_config_path = config_dir.join(".datatui-llm-settings.toml");
+        
+        if let Some(parent) = llm_config_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        
+        let toml_content = toml::to_string_pretty(&self.llm_config)
+            .unwrap_or_else(|_| "# LLM Settings\n# This file contains configuration for LLM providers\n".to_string());
+        
+        fs::write(&llm_config_path, toml_content)
+    }
+
+    /// Get LLM config (always available now)
+    pub fn get_llm_config(&mut self) -> &mut LlmConfig {
+        &mut self.llm_config
     }
 
     /// Build instructions string from list of (mode, action) tuples
@@ -151,6 +217,8 @@ impl Config {
             Action::Right => "Right",
             Action::Tab => "Tab",
             Action::Paste => "Paste",
+            Action::SelectAllText => "Select All",
+            Action::DeleteWord => "Delete Word",
             Action::ToggleInstructions => "Toggle Instructions",
             Action::OpenKeybindings => "Key Bindings",
 
@@ -164,6 +232,7 @@ impl Config {
             Action::OpenSqlDialog => "SQL",
             Action::OpenJmesDialog => "JMESPath",
             Action::OpenColumnOperationsDialog => "Column Ops",
+            Action::OpenEmbeddingsPromptDialog => "Prompt Similarity",
             Action::OpenFindDialog => "Find",
             Action::OpenDataframeDetailsDialog => "Details",
             Action::OpenColumnWidthDialog => "Column Width",
@@ -215,7 +284,6 @@ impl Config {
             Action::PageDown => "Page Down",
             
             // SQL dialog actions
-            Action::SelectAllText => "Select All",
             Action::CopyText => "Copy Text",
             Action::RunQuery => "Run Query",
             Action::CreateNewDataset => "New Dataset",
@@ -409,8 +477,10 @@ pub fn get_data_dir() -> PathBuf {
 pub fn get_config_dir() -> PathBuf {
     if let Some(s) = CONFIG_FOLDER.clone() {
         s
+    } else if let Some(base) = BaseDirs::new() {
+        base.home_dir().to_path_buf()
     } else {
-        PathBuf::from(".").join(".config")
+        PathBuf::from(".")
     }
 }
 

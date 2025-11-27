@@ -25,6 +25,7 @@ pub enum Action {
     Escape,
     Enter,
     Backspace,
+    DeleteWord,
     Up,
     Down,
     Left,
@@ -215,6 +216,19 @@ pub enum Action {
     ColumnOperationRequested(String),
     /// User applied column operation options
     ColumnOperationOptionsApplied(crate::dialog::column_operation_options_dialog::ColumnOperationConfig),
+    /// User applied the embeddings prompt dialog with computed embedding
+    EmbeddingsPromptDialogApplied {
+        source_column: String,
+        new_column_name: String,
+        prompt_embedding: Vec<f32>,
+    },
+    /// Open the Embeddings Prompt dialog directly (F1)
+    OpenEmbeddingsPromptDialog,
+    /// EmbeddingsPromptDialog requests to generate embeddings first
+    EmbeddingsPromptDialogRequestGenerateEmbeddings {
+        prompt_text: String,
+        new_similarity_column: String,
+    },
     /// Internal container -> manager: open export dialog (alias already exists earlier)
     OpenDataExportDialogAlias,
     /// Sort dialog specific actions
@@ -330,6 +344,22 @@ pub enum Action {
     ResetKeybindings,
     /// Save keybindings to a chosen file path
     SaveKeybindingsAs,
+    /// Open the LLM Client dialog
+    OpenLlmClientDialog,
+    /// Close the LLM Client dialog
+    CloseLlmClientDialog,
+    /// User applied LLM client dialog with configuration
+    LlmClientDialogApplied(crate::dialog::llm_client_dialog::LlmConfig),
+    /// User cancelled LLM client dialog
+    LlmClientDialogCancel,
+    /// Open the LLM Client Create dialog for embeddings
+    OpenLlmClientCreateDialogEmbeddings,
+    /// Open the LLM Client Create dialog for completion
+    OpenLlmClientCreateDialogCompletion,
+    /// Close the LLM Client Create dialog
+    CloseLlmClientCreateDialog,
+    /// User applied LLM client create dialog with selection
+    LlmClientCreateDialogApplied(crate::dialog::llm_client_create_dialog::LlmClientSelection),
 }
 
 #[cfg(test)]
