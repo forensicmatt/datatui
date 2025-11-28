@@ -611,7 +611,7 @@ impl ColumnOperationOptionsDialog {
         self.num_dimensions_input = {
             let mut t = TextArea::default();
             t.set_block(Block::default());
-            t.insert_str(&dims.to_string());
+            t.insert_str(dims.to_string());
             t
         };
     }

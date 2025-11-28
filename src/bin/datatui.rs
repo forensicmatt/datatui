@@ -336,12 +336,17 @@ fn parse_load_spec(spec: &str) -> color_eyre::Result<Vec<DataImportConfig>> {
                     if kind == "psv" { opts.delimiter = '|'; }
                     if kind == "csv" { opts.delimiter = ','; }
                     // Guess from extension if not overridden
-                    if let Some(ext) = pb.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()) {
-                        if opts.delimiter == ',' {
-                            if ext == "tsv" { opts.delimiter = '\t'; }
-                            else if ext == "psv" { opts.delimiter = '|'; }
+                    if let Some(ext) = pb.extension()
+                            .and_then(|e| e.to_str())
+                            .map(|s| s.to_ascii_lowercase()
+                    )
+                        && opts.delimiter == ',' {
+                            if ext == "tsv" { 
+                                opts.delimiter = '\t';
+                            } else if ext == "psv" { 
+                                opts.delimiter = '|'; 
+                            }
                         }
-                    }
                     if let Some(v) = kv.get("delim").or_else(|| kv.get("delimiter")) {
                         opts.delimiter = parse_delimiter(v)?;
                     }
@@ -382,13 +387,12 @@ fn parse_load_spec(spec: &str) -> color_eyre::Result<Vec<DataImportConfig>> {
                 let mut worksheets = ExcelOperations::read_worksheet_info(&pb).unwrap_or_default();
                 // Filters
                 let all = kv.get("all_sheets").map(|v| parse_bool(v)).unwrap_or(true);
-                if !all {
-                    if let Some(names) = kv.get("sheets").or_else(|| kv.get("sheet")) {
+                if !all
+                    && let Some(names) = kv.get("sheets").or_else(|| kv.get("sheet")) {
                         let set: std::collections::HashSet<String> = names.split(',').map(|s| s.trim().to_string()).collect();
                         for ws in &mut worksheets { ws.load = set.contains(&ws.name); }
                         worksheets.retain(|w| w.load);
                     }
-                }
                 let opts = XlsxImportOptions { worksheets };
                 out.push(DataImportConfig::excel(pb, opts));
             }

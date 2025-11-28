@@ -60,6 +60,7 @@ pub struct LlmClientDialog {
 }
 
 #[derive(Serialize, Deserialize)]
+#[derive(Default)]
 pub struct LlmConfig {
     pub azure: Option<AzureOpenAiConfig>,
     pub openai: Option<OpenAIConfig>,
@@ -97,16 +98,6 @@ impl PartialEq for LlmConfig {
 
 impl Eq for LlmConfig {}
 
-impl Default for LlmConfig {
-    fn default() -> Self {
-        Self {
-            azure: None,
-            openai: None,
-            ollama: None,
-            builders: HashMap::new(),
-        }
-    }
-}
 
 impl LlmConfig {
     /// Returns a list of configured providers
@@ -302,7 +293,7 @@ impl LlmConfig {
     fn fetch_ollama_embeddings(
         &self,
         model_name: &str,
-        inputs: &Vec<String>,
+        inputs: &[String],
     ) -> color_eyre::Result<Vec<Vec<f32>>> {
         let cfg = self.ollama.as_ref().ok_or_else(|| color_eyre::eyre::eyre!("Ollama config is not set"))?;
         let url = format!("{}/api/embeddings", cfg.host.trim_end_matches('/'));
@@ -515,11 +506,8 @@ impl LlmClientDialog {
             LlmClientDialogMode::ProviderSelection => {
                 // First, check Global actions
                 if let Some(global_action) = &optional_global_action {
-                    match global_action {
-                        Action::Escape => {
-                            return Some(Action::DialogClose);
-                        }
-                        _ => {}
+                    if global_action == &Action::Escape {
+                        return Some(Action::DialogClose);
                     }
                 }
 

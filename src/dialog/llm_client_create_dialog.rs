@@ -317,10 +317,7 @@ impl LlmClientCreateDialog {
         match &mut self.ui_mode {
             UiMode::ProviderSelection => {
                 if let Some(global_action) = &optional_global_action {
-                    match global_action {
-                        Action::Escape => { return Some(Action::DialogClose); }
-                        _ => {}
-                    }
+                    if global_action == &Action::Escape { return Some(Action::DialogClose); }
                 }
 
                 if let Some(dialog_action) = &llm_dialog_action {
@@ -382,10 +379,7 @@ impl LlmClientCreateDialog {
             }
             UiMode::Options => {
                 if let Some(global_action) = &optional_global_action {
-                    match global_action {
-                        Action::Escape => { return Some(Action::DialogClose); }
-                        _ => {}
-                    }
+                    if global_action == &Action::Escape { return Some(Action::DialogClose); }
                 }
 
                 if let Some(dialog_action) = &llm_dialog_action {

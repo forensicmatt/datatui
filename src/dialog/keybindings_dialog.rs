@@ -354,22 +354,28 @@ impl KeybindingsDialog {
             .saturating_add(inner.width)
             .saturating_sub(1) // margin from border
             .saturating_sub(if has_right { 1 } else { 0 }); // space for right indicator
-		for i in start_index..end_index {
+
+            for (i, title) in titles.iter()
+                .enumerate()
+                .take(end_index)
+                .skip(start_index) {
             if x >= end_exclusive { break; }
-            let title = &titles[i];
             let remaining = end_exclusive.saturating_sub(x) as usize;
-            if remaining == 0 { break; }
             let draw_len = remaining.min(title.len());
             let to_draw = &title[..draw_len];
-
-            let mut style = Style::default();
-            if i == self.selected_grouping {
-                style = style.fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD);
-            }
-            if focused { style = style.add_modifier(Modifier::UNDERLINED); }
-
+            let style = if i == self.selected_grouping {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else if focused {
+                Style::default()
+                    .add_modifier(Modifier::UNDERLINED)
+            } else {
+                Style::default()
+            };
             buf.set_string(x, inner.y, to_draw, style);
-			x = x.saturating_add(draw_len as u16 + divider_width as u16);
+            x = x.saturating_add(draw_len as u16 + divider_width as u16);
         }
     }
 
@@ -448,12 +454,9 @@ impl Component for KeybindingsDialog {
         // If message dialog is active, handle it first and block other events
         if let Some(ref mut msg) = self.message_dialog {
             if let Some(a) = Component::handle_key_event(msg, key)? {
-                match a {
-                    Action::DialogClose => {
-                        self.message_dialog = None;
-                        return Ok(None);
-                    }
-                    _ => {}
+                if a == Action::DialogClose {
+                    self.message_dialog = None;
+                    return Ok(None);
                 }
             }
             return Ok(None);
