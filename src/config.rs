@@ -1,7 +1,5 @@
 #![allow(dead_code)] // Remove this once you start using the code
-
-use std::{collections::HashMap, env, fs, path::PathBuf};
-
+use std::{collections::HashMap, env, fs, path::{Path, PathBuf}};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use derive_deref::{Deref, DerefMut};
@@ -450,13 +448,16 @@ impl Config {
     }
 }
 
-fn expand_tilde(path: &PathBuf) -> PathBuf {
+fn expand_tilde(path: &Path) -> PathBuf {
     if let Some(s) = path.to_str() {
         if s.starts_with("~") {
-            if let Some(base) = BaseDirs::new() { return PathBuf::from(s.replacen("~", base.home_dir().to_str().unwrap_or(""), 1)); }
+            if let Some(base) = BaseDirs::new() {
+                return PathBuf::from(
+                    s.replacen("~", base.home_dir().to_str().unwrap_or(""), 1));
+            }
         }
     }
-    path.clone()
+    path.to_path_buf()
 }
 
 fn default_home_config_path() -> PathBuf {
