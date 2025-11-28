@@ -47,6 +47,7 @@ pub enum SelectedOption {
     LlmConfigBrowse,
     ConfigureLlmClients,
     AutoExpandValueDisplay,
+    UpdateCheck,
     Save,
 }
 
@@ -148,7 +149,6 @@ impl ProjectSettingsDialog {
                 // Inline fields: "Label: value" with selection highlighting
                 let line0_y = content_area.y + 1; // Workspace first
                 let line1_y = content_area.y + 3; // LLM Config second
-                let line2_y = content_area.y + 5; // Data Viewer section top
 
                 // Workspace Path line + [Browse]
                 let label_wp = "Workspace Path: ";
@@ -219,10 +219,24 @@ impl ProjectSettingsDialog {
                 };
                 buf.set_string(browse_x, line1_y, browse_text, browse_style);
 
+                // Update Check section (before Configure LLM Clients)
+                let update_check_y = line1_y + 2;
+                let update_check_label = "Check for Updates: ";
+                let update_check_value = if self.keybindings_config.next_update_check.is_some() { "enabled" } else { "disabled" };
+                let update_check_style = if self.selected_option == SelectedOption::UpdateCheck {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::White)
+                } else {
+                    Style::default()
+                        .fg(Color::White)
+                };
+                buf.set_string(content_area.x, update_check_y, format!("{update_check_label}{update_check_value}"), update_check_style);
+
                 // Configure LLM Clients button on a new line
                 let llm_client_text = "[Configure LLM Clients]";
                 let llm_client_x = content_area.x;
-                let llm_client_y = line1_y + 2;
+                let llm_client_y = update_check_y + 2;
                 let llm_client_style = if self.selected_option == SelectedOption::ConfigureLlmClients {
                     Style::default().fg(Color::Black).bg(Color::White)
                 } else {
@@ -233,7 +247,7 @@ impl ProjectSettingsDialog {
                 // Data Viewer section with bordered block
                 let dv_block_area = Rect {
                     x: content_area.x,
-                    y: line2_y + 1, // Move down one line to accommodate LLM Client button
+                    y: llm_client_y + 2, // Move down to accommodate Update Check and LLM Client button
                     width: content_area.width,
                     height: 3,
                 };
@@ -325,6 +339,14 @@ impl ProjectSettingsDialog {
                             // Toggle boolean when data viewer option is selected
                             if self.selected_option == SelectedOption::AutoExpandValueDisplay {
                                 self.config.data_viewer.auto_exapand_value_display = !self.config.data_viewer.auto_exapand_value_display;
+                            } else if self.selected_option == SelectedOption::UpdateCheck {
+                                // Toggle update check: if None, enable it (set to 1 day from now), otherwise disable (set to None)
+                                use crate::update_check::calculate_next_check_date;
+                                if self.keybindings_config.next_update_check.is_none() {
+                                    self.keybindings_config.next_update_check = Some(calculate_next_check_date());
+                                } else {
+                                    self.keybindings_config.next_update_check = None;
+                                }
                             }
                             return None;
                         }
@@ -386,12 +408,13 @@ impl ProjectSettingsDialog {
                     match key.code {
                         KeyCode::Up => {
                             // Up navigation:
-                            // Left side: Auto Expand Value Display -> Configure LLM Clients -> LLM Config Path -> Workspace Path
+                            // Left side: Auto Expand Value Display -> Configure LLM Clients -> Update Check -> LLM Config Path -> Workspace Path
                             // Right side: [Save] -> [Browse] (LLM config path) -> [Browse] (workspace path)
                             self.selected_option = match self.selected_option {
                                 // Left side navigation
                                 SelectedOption::AutoExpandValueDisplay => SelectedOption::ConfigureLlmClients,
-                                SelectedOption::ConfigureLlmClients => SelectedOption::LlmConfigPath,
+                                SelectedOption::ConfigureLlmClients => SelectedOption::UpdateCheck,
+                                SelectedOption::UpdateCheck => SelectedOption::LlmConfigPath,
                                 SelectedOption::LlmConfigPath => SelectedOption::WorkspacePath,
                                 SelectedOption::WorkspacePath => SelectedOption::AutoExpandValueDisplay, // wrap around
                                 
@@ -414,12 +437,13 @@ impl ProjectSettingsDialog {
                         }
                         KeyCode::Down => {
                             // Down navigation:
-                            // Left side: Workspace Path -> LLM Config Path -> Configure LLM Clients -> Auto Expand Value Display
+                            // Left side: Workspace Path -> LLM Config Path -> Update Check -> Configure LLM Clients -> Auto Expand Value Display
                             // Right side: [Browse] (workspace path) -> [Browse] (LLM config path) -> [Save]
                             self.selected_option = match self.selected_option {
                                 // Left side navigation
                                 SelectedOption::WorkspacePath => SelectedOption::LlmConfigPath,
-                                SelectedOption::LlmConfigPath => SelectedOption::ConfigureLlmClients,
+                                SelectedOption::LlmConfigPath => SelectedOption::UpdateCheck,
+                                SelectedOption::UpdateCheck => SelectedOption::ConfigureLlmClients,
                                 SelectedOption::ConfigureLlmClients => SelectedOption::AutoExpandValueDisplay,
                                 SelectedOption::AutoExpandValueDisplay => SelectedOption::WorkspacePath, // wrap around
                                 
@@ -685,6 +709,12 @@ impl ProjectSettingsDialog {
             serde_json::to_writer_pretty(file, &self.config)
                 .map_err(|e| color_eyre::eyre::eyre!("failed to write settings JSON: {}", e))?;
         }
+        
+        // Save update check setting to main config file
+        if let Err(e) = self.keybindings_config.save() {
+            eprintln!("Warning: Failed to save update check setting: {}", e);
+        }
+        
         Ok(())
     }
 

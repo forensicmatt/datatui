@@ -8,14 +8,17 @@ use crossterm::terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScree
 use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::prelude::{Rect, Widget};
 use std::time::Duration;
-use datatui::dialog::{DataTabManagerDialog, KeybindingsDialog};
+use datatui::dialog::{DataTabManagerDialog, KeybindingsDialog, MessageDialog};
 use datatui::style::StyleConfig;
 use datatui::config::Config;
 use datatui::components::Component;
 use datatui::tui::Event as TuiEvent;
 use datatui::action::Action;
+use datatui::update_check;
 use datatui::data_import_types::DataImportConfig;
+use std::thread;
 use datatui::dialog::csv_options_dialog::CsvImportOptions;
 use datatui::dialog::xlsx_options_dialog::XlsxImportOptions;
 use datatui::dialog::sqlite_options_dialog::SqliteImportOptions;
@@ -23,7 +26,7 @@ use datatui::dialog::parquet_options_dialog::ParquetImportOptions;
 use datatui::dialog::json_options_dialog::JsonImportOptions;
 use datatui::excel_operations::ExcelOperations;
 use color_eyre::Result;
-use tracing::{error, debug};
+use tracing::error;
 use uuid::Uuid;
 use glob::glob;
 
@@ -99,6 +102,23 @@ fn run_app<B: ratatui::backend::Backend>(
     let mut pending_load_specs: Option<Vec<String>> = if initial_load_specs.is_empty() { None } else { Some(initial_load_specs) };
     // Optional global Keybindings dialog overlay, opened via a global shortcut
     let mut keybindings_dialog: Option<KeybindingsDialog> = None;
+    // Optional update check message dialog
+    let mut update_message_dialog: Option<MessageDialog> = None;
+    
+    // Spawn update check in background thread if enabled (or if it's the first run and we just enabled it)
+    let mut update_check_receiver: Option<std::sync::mpsc::Receiver<Result<Option<update_check::UpdateInfo>, color_eyre::Report>>> = None;
+    if update_check::should_check_for_updates(tab_manager.config.next_update_check) {
+        let current_version = env!("CARGO_PKG_VERSION").to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        update_check_receiver = Some(rx);
+        
+        // Spawn blocking update check in background thread
+        thread::spawn(move || {
+            let result = update_check::check_for_update(&current_version);
+            let _ = tx.send(result);
+        });
+    }
+    
     loop {
         terminal.draw(|f| {
             let size = f.area();
@@ -106,6 +126,18 @@ fn run_app<B: ratatui::backend::Backend>(
             // When open, render the keybindings dialog on top
             if let Some(dialog) = &mut keybindings_dialog {
                 let _ = dialog.draw(f, size);
+            }
+            // When open, render the update message dialog on top (centered modal)
+            if let Some(dialog) = &mut update_message_dialog {
+                use ratatui::widgets::Clear;
+                Clear.render(size, f.buffer_mut());
+                // Center the dialog
+                let dialog_width = (size.width as f32 * 0.6).min(80.0) as u16;
+                let dialog_height = (size.height as f32 * 0.4).min(15.0) as u16;
+                let dialog_x = size.x + (size.width.saturating_sub(dialog_width)) / 2;
+                let dialog_y = size.y + (size.height.saturating_sub(dialog_height)) / 2;
+                let dialog_area = Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
+                let _ = dialog.draw(f, dialog_area);
             }
         })?;
         // After drawing, process queued Render work (overlay is now visible)
@@ -162,11 +194,62 @@ fn run_app<B: ratatui::backend::Backend>(
             }
         }
         
+        // Check if update check has completed (non-blocking)
+        if let Some(ref receiver) = update_check_receiver {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    update_check_receiver = None;
+                    let current_version = env!("CARGO_PKG_VERSION");
+                    match result {
+                        Ok(Some(update_info)) => {
+                            // Store update status in DataManagementDialog (Some(Some(...)) = update available)
+                            tab_manager.data_management_dialog.update_status = Some(Some(update_info.clone()));
+                            
+                            let message = format!(
+                                "A new version of DataTUI is available!\n\nCurrent version: v{}\nLatest version: {}\n\nDownload: {}",
+                                current_version,
+                                update_info.latest_version,
+                                update_info.download_url
+                            );
+                            let mut dialog = MessageDialog::with_title(message, "Update Available");
+                            let _ = dialog.register_config_handler(tab_manager.config.clone());
+                            update_message_dialog = Some(dialog);
+                            
+                            // Update next check date (1 day from now)
+                            tab_manager.config.next_update_check = Some(update_check::calculate_next_check_date());
+                            let _ = tab_manager.config.save();
+                        }
+                        Ok(None) => {
+                            // No update available - set to Some(None) to indicate check completed with no update
+                            tab_manager.data_management_dialog.update_status = Some(None);
+                            
+                            // Update next check date (1 day from now)
+                            tab_manager.config.next_update_check = Some(update_check::calculate_next_check_date());
+                            let _ = tab_manager.config.save();
+                        }
+                        Err(e) => {
+                            error!("Update check failed: {}", e);
+                            // Don't set update_status on error - leave it as is
+                            // Still update the check date to avoid checking again immediately
+                            tab_manager.config.next_update_check = Some(update_check::calculate_next_check_date());
+                            let _ = tab_manager.config.save();
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // Still waiting for result, continue
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // Sender dropped, check failed
+                    update_check_receiver = None;
+                }
+            }
+        }
+        
         // Poll for events
         if event::poll(Duration::from_millis(100))?
             && let CEvent::Key(key_event) = event::read()? {
                 if let Some(global_action) = tab_manager.config.action_for_key(datatui::config::Mode::Global, key_event){
-                    debug!("Global action: {global_action}");
                     match global_action {
                         Action::Quit => {
                             break;
@@ -187,6 +270,19 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                 }
 
+            // If update message dialog is open, it consumes events first
+            if let Some(dialog) = &mut update_message_dialog {
+                match dialog.handle_events(Some(TuiEvent::Key(key_event))) {
+                    Ok(Some(Action::DialogClose)) => {
+                        update_message_dialog = None;
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) => {}
+                    Err(e) => error!("Error handling UpdateMessageDialog event: {e}"),
+                }
+                continue;
+            }
+            
             // If keybindings dialog is open, it consumes events first
             if let Some(dialog) = &mut keybindings_dialog {
                 match dialog.handle_events(Some(TuiEvent::Key(key_event))) {
