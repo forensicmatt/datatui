@@ -983,6 +983,8 @@ pub struct DataManagementDialog {
     pub current_json_objects: Vec<serde_json::Map<String, serde_json::Value>>, 
     #[serde(skip)]
     pub current_json_options: Option<crate::dialog::json_options_dialog::JsonImportOptions>,
+    #[serde(skip)]
+    pub update_status: Option<Option<crate::update_check::UpdateInfo>>, // None = not checked yet, Some(None) = up-to-date, Some(Some(...)) = update available
 }
 
 impl Default for DataManagementDialog {
@@ -1090,6 +1092,7 @@ impl DataManagementDialog {
             current_json_pending: Vec::new(),
             current_json_objects: Vec::new(),
             current_json_options: None,
+            update_status: None,
         }
     }
 
@@ -1625,11 +1628,25 @@ impl DataManagementDialog {
         let all_datasets = self.get_all_datasets();
         
         if all_datasets.is_empty() {
+            // Show update status message above "No datasets available"
+            let update_status_msg = self.get_update_status_message();
+            let mut y_offset = 0;
+            
+            if !update_status_msg.is_empty() {
+                let status_paragraph = Paragraph::new(update_status_msg)
+                    .alignment(Alignment::Center)
+                    .style(Style::default().fg(Color::Cyan));
+                let status_area = Rect::new(area.x, area.y, area.width, 1);
+                status_paragraph.render(status_area, buf);
+                y_offset = 1;
+            }
+            
             let message = "No datasets available.\nUse the import dialogs to add data sources.";
+            let message_area = Rect::new(area.x, area.y + y_offset, area.width, area.height.saturating_sub(y_offset));
             let paragraph = Paragraph::new(message)
                 .alignment(Alignment::Center)
                 .style(Style::default().fg(Color::Gray));
-            paragraph.render(area, buf);
+            paragraph.render(message_area, buf);
             return;
         }
 
@@ -1686,6 +1703,28 @@ impl DataManagementDialog {
         .block(Block::default().borders(Borders::NONE));
 
         Widget::render(data_set_table, area, buf);
+    }
+
+    /// Get the update status message to display
+    fn get_update_status_message(&self) -> String {
+        if self.config.next_update_check.is_none() {
+            return "Update Check Disabled".to_string();
+        }
+        
+        match &self.update_status {
+            None => {
+                // Check hasn't completed yet - don't show anything or show "Checking..."
+                String::new()
+            }
+            Some(None) => {
+                // Check completed, no update available
+                "Up-to-Date".to_string()
+            }
+            Some(Some(update_info)) => {
+                // Check completed, update available
+                format!("Update Available: {}", update_info.latest_version)
+            }
+        }
     }
 }
 

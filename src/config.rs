@@ -12,6 +12,7 @@ use directories::BaseDirs;
 use crate::action::Action;
 use crate::dialog::llm_client_dialog::LlmConfig;
 use crate::style::StyleConfig;
+use chrono::{DateTime, Utc};
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
@@ -47,7 +48,7 @@ pub enum Mode {
 
 const CONFIG: &str = include_str!("../.config/config.json5");
 
-#[derive(Clone, Debug, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub data_dir: PathBuf,
@@ -55,7 +56,7 @@ pub struct AppConfig {
     pub config_dir: PathBuf,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default, flatten)]
     pub config: AppConfig,
@@ -67,6 +68,37 @@ pub struct Config {
     pub style_config: StyleConfig,
     #[serde(default)]
     pub llm_config: LlmConfig,
+    #[serde(default, serialize_with = "serialize_optional_datetime", deserialize_with = "deserialize_optional_datetime")]
+    pub next_update_check: Option<DateTime<Utc>>,
+}
+
+fn serialize_optional_datetime<S>(date: &Option<DateTime<Utc>>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match date {
+        None => serializer.serialize_none(),
+        Some(dt) => serializer.serialize_str(&dt.to_rfc3339()),
+    }
+}
+
+fn deserialize_optional_datetime<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    match s {
+        None => Ok(None),
+        Some(ref date_str) if date_str.is_empty() => Ok(None),
+        Some(date_str) => {
+            // Try parsing ISO 8601 format
+            DateTime::parse_from_rfc3339(&date_str)
+                .or_else(|_| DateTime::parse_from_str(&date_str, "%Y-%m-%d %H:%M:%S UTC"))
+                .map(|dt| Some(dt.with_timezone(&Utc)))
+                .map_err(|e| Error::custom(format!("Invalid date format: {} - {}", date_str, e)))
+        }
+    }
 }
 
 lazy_static! {
@@ -128,6 +160,18 @@ impl Config {
         // Load LLM config from ~/.datatui-llm-settings.toml (ensure exists)
         cfg.load_llm_config()?;
 
+        // Enable update checks by default if not set (set to now so it checks immediately on first run)
+        let was_none = cfg.next_update_check.is_none();
+        if was_none {
+            use chrono::Utc;
+            // Set to now so it triggers immediately on first run
+            cfg.next_update_check = Some(Utc::now());
+            // Save the default value to config file
+            if let Err(e) = cfg.save() {
+                eprintln!("Warning: Failed to save default update check setting: {}", e);
+            }
+        }
+
         Ok(cfg)
     }
 
@@ -185,6 +229,37 @@ impl Config {
     /// Get LLM config (always available now)
     pub fn get_llm_config(&mut self) -> &mut LlmConfig {
         &mut self.llm_config
+    }
+
+    /// Save config to the default config file (only updates next_update_check field)
+    pub fn save(&self) -> Result<(), std::io::Error> {
+        let home_cfg = default_home_config_path();
+        if let Some(parent) = home_cfg.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        
+        // Read existing config to preserve all other fields
+        let mut existing_config: serde_json::Value = if home_cfg.exists() {
+            match fs::read_to_string(&home_cfg) {
+                Ok(content) => json5::from_str(&content).unwrap_or_else(|_| serde_json::json!({})),
+                Err(_) => serde_json::json!({}),
+            }
+        } else {
+            serde_json::json!({})
+        };
+
+        // Update only the next_update_check field
+        if let Some(date) = &self.next_update_check {
+            existing_config["next_update_check"] = serde_json::Value::String(date.to_rfc3339());
+        } else {
+            existing_config["next_update_check"] = serde_json::Value::Null;
+        }
+
+        // Format as JSON5 (which is a superset of JSON)
+        let json5_content = serde_json::to_string_pretty(&existing_config)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to format config: {}", e)))?;
+
+        fs::write(&home_cfg, json5_content)
     }
 
     /// Build instructions string from list of (mode, action) tuples
@@ -488,6 +563,26 @@ pub fn get_config_dir() -> PathBuf {
 #[derive(Clone, Debug, Default, Deref, DerefMut)]
 pub struct KeyBindings(pub HashMap<Mode, HashMap<Vec<KeyEvent>, Action>>);
 
+impl Serialize for KeyBindings {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (mode, inner) in &self.0 {
+            let mut m: HashMap<String, Action> = HashMap::new();
+            for (seq, action) in inner.iter() {
+                let parts: Vec<String> = seq.iter().map(key_event_to_string).collect();
+                let key = format!("<{}>", parts.join("><"));
+                m.insert(key, action.clone());
+            }
+            map.serialize_entry(mode, &m)?;
+        }
+        map.end()
+    }
+}
+
 impl<'de> Deserialize<'de> for KeyBindings {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -683,6 +778,41 @@ pub fn parse_key_sequence(raw: &str) -> Result<Vec<KeyEvent>, String> {
 
 #[derive(Clone, Debug, Default, Deref, DerefMut)]
 pub struct Styles(pub HashMap<Mode, HashMap<String, Style>>);
+
+impl Serialize for Styles {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (mode, inner) in &self.0 {
+            let mut m: HashMap<String, String> = HashMap::new();
+            for (key, style) in inner.iter() {
+                // Convert Style back to string format
+                let mut parts = Vec::new();
+                if let Some(fg) = style.fg {
+                    parts.push(format!("{:?}", fg));
+                }
+                if let Some(bg) = style.bg {
+                    parts.push(format!("on {:?}", bg));
+                }
+                if style.add_modifier.contains(Modifier::BOLD) {
+                    parts.push("bold".to_string());
+                }
+                if style.add_modifier.contains(Modifier::UNDERLINED) {
+                    parts.push("underline".to_string());
+                }
+                if style.add_modifier.contains(Modifier::REVERSED) {
+                    parts.push("inverse".to_string());
+                }
+                m.insert(key.clone(), parts.join(" "));
+            }
+            map.serialize_entry(mode, &m)?;
+        }
+        map.end()
+    }
+}
 
 impl<'de> Deserialize<'de> for Styles {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
