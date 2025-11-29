@@ -460,6 +460,12 @@ impl Config {
 
             // StyleSetManagerDialog actions
             Action::OpenStyleSetBrowserDialog => "Open Style Set Browser",
+            Action::AddStyleSet => "Add Style Set",
+            Action::RemoveStyleSet => "Remove Style Set",
+            Action::ImportStyleSet => "Import Style Set",
+            Action::ExportStyleSet => "Export Style Set",
+            Action::DisableStyleSet => "Toggle Style Set",
+            Action::OpenStyleRuleEditorDialog => "Open Style Rule Editor",
             
             // Default to the debug representation for unknown actions
             _ => "Unknown",

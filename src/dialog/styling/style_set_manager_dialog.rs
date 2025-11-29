@@ -9,8 +9,10 @@ use crate::style::StyleConfig;
 use crate::components::Component;
 use crate::components::dialog_layout::split_dialog_area;
 use crate::dialog::styling::style_set_manager::StyleSetManager;
-use crate::dialog::styling::style_set::StyleSet;
+use crate::dialog::styling::style_set::{StyleSet, StyleRule, ApplicationScope, MatchedStyle, ScopeEnum};
+use crate::dialog::styling::style_rule_editor_dialog::StyleRuleEditorDialog;
 use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserAction, FileBrowserMode};
+use crate::dialog::filter_dialog::FilterExpr;
 use tracing::error;
 
 /// Dialog mode
@@ -18,6 +20,7 @@ use tracing::error;
 pub enum StyleSetManagerDialogMode {
     List,
     FileBrowser(Box<FileBrowserDialog>), // for loading/saving folders or files
+    StyleRuleEditor(Box<StyleRuleEditorDialog>), // for editing style rules
 }
 
 /// StyleSetManagerDialog: UI for managing style sets
@@ -32,6 +35,8 @@ pub struct StyleSetManagerDialog {
     pub style: StyleConfig,
     pub search_filter: String,
     pub export_selected_id: Option<String>, // ID of style set to export
+    pub rule_editor_style_set_id: Option<String>, // ID of style set being edited
+    pub rule_editor_rule_index: Option<usize>, // Index of rule being edited (None = new rule)
 }
 
 impl StyleSetManagerDialog {
@@ -47,6 +52,8 @@ impl StyleSetManagerDialog {
             style: StyleConfig::default(),
             search_filter: String::new(),
             export_selected_id: None,
+            rule_editor_style_set_id: None,
+            rule_editor_rule_index: None,
         }
     }
 
@@ -80,11 +87,19 @@ impl StyleSetManagerDialog {
                     (Mode::StyleSetManagerDialog, Action::ImportStyleSet),
                     (Mode::StyleSetManagerDialog, Action::ExportStyleSet),
                     (Mode::StyleSetManagerDialog, Action::OpenStyleSetBrowserDialog),
+                    (Mode::StyleSetManagerDialog, Action::OpenStyleRuleEditorDialog),
                     (Mode::Global, Action::ToggleInstructions),
                 ])
             }
             StyleSetManagerDialogMode::FileBrowser(_) => {
                 "Enter: OK  Esc: Cancel".to_string()
+            }
+            StyleSetManagerDialogMode::StyleRuleEditor(_) => {
+                self.config.actions_to_instructions(&[
+                    (Mode::Global, Action::Escape),
+                    (Mode::Global, Action::Enter),
+                    (Mode::Global, Action::ToggleInstructions),
+                ])
             }
         }
     }
@@ -171,6 +186,10 @@ impl StyleSetManagerDialog {
                 browser.render(content_area, buf);
                 return 0;
             }
+            StyleSetManagerDialogMode::StyleRuleEditor(editor) => {
+                editor.render(content_area, buf);
+                return 0;
+            }
         }
 
         // Render instructions
@@ -190,7 +209,54 @@ impl StyleSetManagerDialog {
     /// Handle a key event (public for external use)
     pub fn handle_key_event_pub(&mut self, key: KeyEvent) -> Option<Action> {
 
-        // Handle FileBrowser mode first
+        // Handle StyleRuleEditor mode first
+        if let StyleSetManagerDialogMode::StyleRuleEditor(editor) = &mut self.mode {
+            if let Some(action) = editor.handle_key_event_pub(key) {
+                match action {
+                    Action::CloseStyleRuleEditorDialog => {
+                        self.mode = StyleSetManagerDialogMode::List;
+                        self.rule_editor_style_set_id = None;
+                        self.rule_editor_rule_index = None;
+                        return None;
+                    }
+                    Action::StyleRuleEditorDialogApplied(rule) => {
+                        // Add or update the rule in the selected style set
+                        if let Some(ref style_set_id) = self.rule_editor_style_set_id {
+                            if let Some(style_set) = self.style_set_manager.get_set(style_set_id) {
+                                let mut updated_set = style_set.clone();
+                                if let Some(rule_idx) = self.rule_editor_rule_index {
+                                    // Update existing rule
+                                    if rule_idx < updated_set.rules.len() {
+                                        updated_set.rules[rule_idx] = rule;
+                                    }
+                                } else {
+                                    // Add new rule
+                                    updated_set.rules.push(rule);
+                                }
+                                // Update the style set in the manager
+                                // We need to remove and re-add since we can't mutate directly
+                                let id = style_set_id.clone();
+                                let was_enabled = self.style_set_manager.is_enabled(style_set_id);
+                                self.style_set_manager.remove_set(&id);
+                                let new_id = self.style_set_manager.add_set(updated_set);
+                                // Restore enabled state if it was enabled
+                                if was_enabled {
+                                    self.style_set_manager.enable_style_set(&new_id);
+                                }
+                            }
+                        }
+                        self.mode = StyleSetManagerDialogMode::List;
+                        self.rule_editor_style_set_id = None;
+                        self.rule_editor_rule_index = None;
+                        return None;
+                    }
+                    _ => {}
+                }
+            }
+            return None;
+        }
+
+        // Handle FileBrowser mode
         if let StyleSetManagerDialogMode::FileBrowser(browser) = &mut self.mode {
             if let Some(action) = browser.handle_key_event(key) {
                 match action {
@@ -303,11 +369,8 @@ impl StyleSetManagerDialog {
                     Action::AddStyleSet => {
                         if matches!(self.mode, StyleSetManagerDialogMode::List) {
                             // Create a new empty style set
-                            let new_set = StyleSet {
-                                name: format!("New Style Set {}", self.style_set_manager.get_all_sets().len() + 1),
-                                description: String::new(),
-                                rules: vec![],
-                            };
+                            let new_set = StyleSet::default()
+                                .with_name(format!("New Style Set {}", self.style_set_manager.get_all_sets().len() + 1));
                             let id = self.style_set_manager.add_set(new_set);
                             // Auto-enable the new set
                             self.style_set_manager.enable_style_set(&id);
@@ -422,6 +485,51 @@ impl StyleSetManagerDialog {
                             );
                             browser.register_config_handler(self.config.clone());
                             self.mode = StyleSetManagerDialogMode::FileBrowser(Box::new(browser));
+                        }
+                        return None;
+                    }
+                    Action::OpenStyleRuleEditorDialog => {
+                        if matches!(self.mode, StyleSetManagerDialogMode::List) {
+                            // Get selected style set
+                            let all_sets: Vec<String> = {
+                                let manager_sets = self.style_set_manager.get_all_sets();
+                                manager_sets.into_iter()
+                                    .filter(|(id, set, _)| {
+                                        self.search_filter.is_empty() ||
+                                        id.to_lowercase().contains(&self.search_filter.to_lowercase()) ||
+                                        set.name.to_lowercase().contains(&self.search_filter.to_lowercase()) ||
+                                        set.description.to_lowercase().contains(&self.search_filter.to_lowercase())
+                                    })
+                                    .map(|(id, _, _)| id.clone())
+                                    .collect()
+                            };
+                            if let Some(style_set_id) = all_sets.get(self.selected_index) {
+                                if self.style_set_manager.get_set(style_set_id).is_some() {
+                                    // Create a new empty rule for now (could be extended to edit existing rules)
+                                    let new_rule = StyleRule {
+                                        column_scope: None,
+                                        match_expr: FilterExpr::And(vec![]),
+                                        style: ApplicationScope {
+                                            scope: ScopeEnum::Row,
+                                            style: MatchedStyle {
+                                                fg: None,
+                                                bg: None,
+                                                modifiers: None,
+                                            },
+                                        },
+                                    };
+                                    // For now, use empty columns list - could be improved to get from active tab
+                                    let columns = vec![];
+                                    let mut editor = StyleRuleEditorDialog::new(new_rule, columns);
+                                    if let Err(e) = editor.register_config_handler(self.config.clone()) {
+                                        error!("Failed to register config with StyleRuleEditorDialog: {}", e);
+                                        return None;
+                                    }
+                                    self.rule_editor_style_set_id = Some(style_set_id.clone());
+                                    self.rule_editor_rule_index = None; // New rule
+                                    self.mode = StyleSetManagerDialogMode::StyleRuleEditor(Box::new(editor));
+                                }
+                            }
                         }
                         return None;
                     }

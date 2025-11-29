@@ -186,7 +186,8 @@
       "<Ctrl-d>": "RemoveStyleSet",
       "<Ctrl-o>": "ImportStyleSet",
       "<Ctrl-s>": "ExportStyleSet",
-      "<Ctrl-e>": "DisableStyleSet"
+      "<Ctrl-e>": "DisableStyleSet",
+      "<Ctrl-r>": "OpenStyleRuleEditorDialog"
     }
   }
 }

@@ -109,7 +109,6 @@ impl StyleRuleEditorDialog {
 
     /// Handle a key event
     pub fn handle_key_event_pub(&mut self, key: KeyEvent) -> Option<Action> {
-
         if key.kind == KeyEventKind::Press {
             // Check Global actions first
             if let Some(global_action) = self.config.action_for_key(Mode::Global, key) {

@@ -1,5 +1,6 @@
 //! StyleSet: Data structures for row/cell styling rules
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use ratatui::style::{Color, Modifier};
 use crate::dialog::filter_dialog::FilterExpr;
 
@@ -44,8 +45,12 @@ pub struct StyleRule {
 /// A collection of style rules with metadata
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StyleSet {
+    pub id: String,
     pub name: String,
+    pub categories: Option<Vec<String>>,
+    pub tags: Option<Vec<String>>,
     pub description: String,
+    pub yaml_path: Option<PathBuf>,
     pub rules: Vec<StyleRule>,
 }
 
@@ -246,6 +251,64 @@ pub fn matches_column(column: &str, patterns: &[String]) -> bool {
         }
     }
     false
+}
+
+impl Default for StyleSet {
+    fn default() -> Self {
+        StyleSet {
+            id: String::new(),
+            name: String::new(),
+            categories: None,
+            tags: None,
+            description: String::new(),
+            yaml_path: None,
+            rules: vec![],
+        }
+    }
+}
+
+impl StyleSet {
+    /// Set the ID and return self for method chaining
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    /// Set the name and return self for method chaining
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    /// Set the description and return self for method chaining
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    /// Set the categories and return self for method chaining
+    pub fn with_categories(mut self, categories: Option<Vec<String>>) -> Self {
+        self.categories = categories;
+        self
+    }
+
+    /// Set the tags and return self for method chaining
+    pub fn with_tags(mut self, tags: Option<Vec<String>>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    /// Set the YAML path and return self for method chaining
+    pub fn with_yaml_path(mut self, yaml_path: Option<PathBuf>) -> Self {
+        self.yaml_path = yaml_path;
+        self
+    }
+
+    /// Set the rules and return self for method chaining
+    pub fn with_rules(mut self, rules: Vec<StyleRule>) -> Self {
+        self.rules = rules;
+        self
+    }
 }
 
 
