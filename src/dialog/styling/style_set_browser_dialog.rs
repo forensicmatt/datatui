@@ -8,7 +8,7 @@ use crate::config::{Config, Mode};
 use crate::style::StyleConfig;
 use crate::components::Component;
 use crate::components::dialog_layout::split_dialog_area;
-use crate::dialog::style_set_manager::StyleSetManager;
+use crate::dialog::styling::style_set_manager::StyleSetManager;
 use crate::dialog::file_browser_dialog::{FileBrowserDialog, FileBrowserAction, FileBrowserMode};
 
 /// StyleSetBrowserDialog: UI for browsing folders and importing style sets
@@ -38,7 +38,7 @@ impl StyleSetBrowserDialog {
         self.config.actions_to_instructions(&[
             (Mode::Global, Action::Escape),
             (Mode::Global, Action::Enter),
-            (Mode::StyleSetBrowserDialog, Action::ToggleInstructions),
+            (Mode::Global, Action::ToggleInstructions),
         ])
     }
 

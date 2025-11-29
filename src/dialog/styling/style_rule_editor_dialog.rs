@@ -8,7 +8,7 @@ use crate::config::{Config, Mode};
 use crate::style::StyleConfig;
 use crate::components::Component;
 use crate::components::dialog_layout::split_dialog_area;
-use crate::dialog::style_set::{StyleRule, ScopeEnum};
+use crate::dialog::styling::style_set::{StyleRule, ScopeEnum};
 use crate::dialog::filter_dialog::FilterDialog;
 use ratatui::style::Color;
 
@@ -52,7 +52,7 @@ impl StyleRuleEditorDialog {
         self.config.actions_to_instructions(&[
             (Mode::Global, Action::Escape),
             (Mode::Global, Action::Enter),
-            (Mode::StyleRuleEditorDialog, Action::ToggleInstructions),
+            (Mode::Global, Action::ToggleInstructions),
         ])
     }
 

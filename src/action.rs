@@ -375,9 +375,15 @@ pub enum Action {
     /// User applied Style Set Manager dialog with enabled sets
     StyleSetManagerDialogApplied(Vec<String>), // enabled style set identifiers
     /// User applied Style Rule Editor dialog with a rule
-    StyleRuleEditorDialogApplied(crate::dialog::style_set::StyleRule),
+    StyleRuleEditorDialogApplied(crate::dialog::styling::StyleRule),
     /// User applied Style Set Browser dialog with imported sets
     StyleSetBrowserDialogApplied(Vec<String>), // imported style set identifiers
+    /// StyleSetManagerDialog specific actions
+    AddStyleSet,
+    RemoveStyleSet,
+    ImportStyleSet,
+    ExportStyleSet,
+    DisableStyleSet,
 }
 
 #[cfg(test)]

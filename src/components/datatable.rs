@@ -21,7 +21,7 @@ use ratatui::style::{Modifier, Style};
 use polars::prelude::DataFrame;
 use crate::dialog::find_dialog::{FindOptions, SearchMode};
 use crate::dialog::column_width_dialog::ColumnWidthConfig;
-use crate::dialog::style_set::{StyleSet, matches_column};
+use crate::dialog::styling::{StyleSet, matches_column};
 use polars::prelude::{AnyValue};
 use regex::Regex;
 use serde_json::{Value, Number};
@@ -1092,11 +1092,11 @@ impl Component for DataTable {
                             let matched_style = rule.style.style.to_ratatui_style();
                             
                             match rule.style.scope {
-                                crate::dialog::style_set::ScopeEnum::Row => {
+                                crate::dialog::styling::ScopeEnum::Row => {
                                     // Apply to entire row
                                     row_style = Some(matched_style);
                                 }
-                                crate::dialog::style_set::ScopeEnum::Cell => {
+                                crate::dialog::styling::ScopeEnum::Cell => {
                                     // Apply to matching cells (those in column_scope)
                                     if let Some(ref column_scope) = rule.column_scope {
                                         for (j, col_name) in visible_columns_slice.iter().enumerate() {

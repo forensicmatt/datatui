@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::fs;
 use color_eyre::Result;
 use serde_yaml;
-use crate::dialog::style_set::StyleSet;
+use crate::dialog::styling::style_set::StyleSet;
 
 /// Manages all StyleSets, including loading from folders and tracking enabled sets
 #[derive(Debug, Clone)]
@@ -139,6 +139,17 @@ impl StyleSetManager {
         self.style_sets.get(identifier)
     }
 
+    /// Add a new style set
+    pub fn add_set(&mut self, style_set: StyleSet) -> String {
+        let identifier = if style_set.name.is_empty() {
+            format!("style_set_{}", self.style_sets.len())
+        } else {
+            style_set.name.clone()
+        };
+        self.style_sets.insert(identifier.clone(), style_set);
+        identifier
+    }
+
     /// Remove a style set
     pub fn remove_set(&mut self, identifier: &str) -> bool {
         self.enabled_sets.remove(identifier);
@@ -178,4 +189,5 @@ impl Default for StyleSetManager {
         Self::new()
     }
 }
+
 

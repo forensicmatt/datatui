@@ -181,7 +181,12 @@
       "<esc>": "CancelRebinding"
     },
     "StyleSetManagerDialog": {
-      "<Ctrl-b>": "OpenStyleSetBrowserDialog"
+      "<Ctrl-b>": "OpenStyleSetBrowserDialog",
+      "<Ctrl-a>": "AddStyleSet",
+      "<Ctrl-d>": "RemoveStyleSet",
+      "<Ctrl-o>": "ImportStyleSet",
+      "<Ctrl-s>": "ExportStyleSet",
+      "<Ctrl-e>": "DisableStyleSet"
     }
   }
 }
