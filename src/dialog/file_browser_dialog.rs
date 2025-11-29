@@ -3,8 +3,9 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use std::fs;
 use std::path::{PathBuf};
-use crossterm::event::{KeyEvent, KeyEventKind};
+use crossterm::event::{KeyEvent, KeyEventKind, KeyCode};
 use ratatui::style::Color;
+use directories::BaseDirs;
 use crate::components::dialog_layout::split_dialog_area;
 use crate::config::Config;
 
@@ -123,6 +124,10 @@ impl FileBrowserDialog {
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         let mut instructions = self.build_instructions_from_config();
+        if !instructions.is_empty() {
+            instructions.push('\n');
+        }
+        instructions.push_str("~: Go to home directory");
         if self.mode == FileBrowserMode::Save {
             if !instructions.is_empty() {
                 instructions.push('\n');
@@ -383,6 +388,20 @@ impl FileBrowserDialog {
             
             return None;
         }
+        
+        // Handle tilde key to navigate to home directory
+        if let KeyCode::Char('~') = key.code {
+            if let Some(base_dirs) = BaseDirs::new() {
+                let home_dir = base_dirs.home_dir().to_path_buf();
+                self.current_dir = home_dir;
+                self.entries = Self::read_dir(&self.current_dir, self.filter_ext.as_ref(), self.folder_only);
+                self.selected = 0;
+                self.scroll_offset = 0;
+                self.error = None;
+            }
+            return None;
+        }
+        
         let entries_offset = if self.at_root() { 0 } else { 1 };
         let total_items = self.entries.len() + entries_offset;
         
@@ -433,7 +452,6 @@ impl FileBrowserDialog {
             }
             
             // Fallback for character input
-            use crossterm::event::KeyCode;
             if let KeyCode::Char(c) = key.code {
                 self.filename_input.insert(self.filename_cursor, c);
                 self.filename_cursor += 1;

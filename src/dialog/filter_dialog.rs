@@ -340,7 +340,16 @@ impl FilterDialog {
         if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
             match global_action {
                 Action::Escape => {
-                    return Some(Action::DialogClose);
+                    match &self.mode {
+                        FilterDialogMode::Add | FilterDialogMode::Edit(_) | FilterDialogMode::AddGroup => {
+                            self.mode = FilterDialogMode::List;
+                            self.add_insertion_path = None;
+                            return None;
+                        }
+                        _ => {
+                            return Some(Action::DialogClose);
+                        }
+                    }
                 }
                 Action::Enter => {
                     match &self.mode {

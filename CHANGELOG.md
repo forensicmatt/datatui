@@ -10,6 +10,9 @@ and this project adheres to
 ### Added
 - Add update check
 
+### Fixed
+- Various dialog navigation issues
+
 ## [0.3.0]
 ### Added
 - Prompt similarity sorting to Column Operations
