@@ -1087,6 +1087,92 @@ impl ColumnFilter {
             },
         }
     }
+
+    /// Evaluate this filter condition against a single row's data
+    /// row_data: Map of column names to string values
+    pub fn evaluate_row(&self, row_data: &std::collections::BTreeMap<String, String>) -> color_eyre::Result<bool> {
+        let cell_value = row_data.get(&self.column)
+            .map(|s| s.as_str())
+            .unwrap_or("");
+
+        match &self.condition {
+            FilterCondition::Contains { value, case_sensitive } => {
+                if *case_sensitive {
+                    Ok(cell_value.contains(value))
+                } else {
+                    Ok(cell_value.to_lowercase().contains(&value.to_lowercase()))
+                }
+            }
+            FilterCondition::Regex { pattern, case_sensitive } => {
+                use regex::Regex;
+                let re = if *case_sensitive {
+                    Regex::new(pattern)
+                } else {
+                    Regex::new(&format!("(?i){}", pattern))
+                }.map_err(|e| color_eyre::eyre::eyre!("Invalid regex pattern: {}", e))?;
+                Ok(re.is_match(cell_value))
+            }
+            FilterCondition::Equals { value, case_sensitive } => {
+                if *case_sensitive {
+                    Ok(cell_value == value)
+                } else {
+                    Ok(cell_value.to_lowercase() == value.to_lowercase())
+                }
+            }
+            FilterCondition::GreaterThan { value } => {
+                // Try to parse as number and compare
+                if let Ok(cell_num) = cell_value.parse::<f64>() {
+                    if let Ok(val_num) = value.parse::<f64>() {
+                        return Ok(cell_num > val_num);
+                    }
+                }
+                // Fall back to string comparison
+                Ok(cell_value > value.as_str())
+            }
+            FilterCondition::LessThan { value } => {
+                // Try to parse as number and compare
+                if let Ok(cell_num) = cell_value.parse::<f64>() {
+                    if let Ok(val_num) = value.parse::<f64>() {
+                        return Ok(cell_num < val_num);
+                    }
+                }
+                // Fall back to string comparison
+                Ok(cell_value < value.as_str())
+            }
+            FilterCondition::GreaterThanOrEqual { value } => {
+                // Try to parse as number and compare
+                if let Ok(cell_num) = cell_value.parse::<f64>() {
+                    if let Ok(val_num) = value.parse::<f64>() {
+                        return Ok(cell_num >= val_num);
+                    }
+                }
+                // Fall back to string comparison
+                Ok(cell_value >= value.as_str())
+            }
+            FilterCondition::LessThanOrEqual { value } => {
+                // Try to parse as number and compare
+                if let Ok(cell_num) = cell_value.parse::<f64>() {
+                    if let Ok(val_num) = value.parse::<f64>() {
+                        return Ok(cell_num <= val_num);
+                    }
+                }
+                // Fall back to string comparison
+                Ok(cell_value <= value.as_str())
+            }
+            FilterCondition::IsEmpty => {
+                Ok(cell_value.is_empty())
+            }
+            FilterCondition::IsNotEmpty => {
+                Ok(!cell_value.is_empty())
+            }
+            FilterCondition::NotNull => {
+                Ok(!cell_value.is_empty() && cell_value != "null" && cell_value != "NULL")
+            }
+            FilterCondition::IsNull => {
+                Ok(cell_value.is_empty() || cell_value == "null" || cell_value == "NULL")
+            }
+        }
+    }
 }
 
 impl FilterExpr {
@@ -1171,6 +1257,42 @@ impl FilterExpr {
         match self {
             FilterExpr::And(children) | FilterExpr::Or(children) => children.len(),
             FilterExpr::Condition(_) => 0,
+        }
+    }
+
+    /// Evaluate this filter expression against a single row's data
+    /// row_data: Map of column names to string values
+    pub fn evaluate_row(&self, row_data: &std::collections::BTreeMap<String, String>) -> color_eyre::Result<bool> {
+        match self {
+            FilterExpr::Condition(filter) => {
+                filter.evaluate_row(row_data)
+            }
+            FilterExpr::And(children) => {
+                if children.is_empty() {
+                    Ok(true) // Empty AND returns true
+                } else {
+                    // All children must be true
+                    for child in children {
+                        if !child.evaluate_row(row_data)? {
+                            return Ok(false);
+                        }
+                    }
+                    Ok(true)
+                }
+            }
+            FilterExpr::Or(children) => {
+                if children.is_empty() {
+                    Ok(false) // Empty OR returns false
+                } else {
+                    // At least one child must be true
+                    for child in children {
+                        if child.evaluate_row(row_data)? {
+                            return Ok(true);
+                        }
+                    }
+                    Ok(false)
+                }
+            }
         }
     }
 }

@@ -21,9 +21,11 @@ use ratatui::style::{Modifier, Style};
 use polars::prelude::DataFrame;
 use crate::dialog::find_dialog::{FindOptions, SearchMode};
 use crate::dialog::column_width_dialog::ColumnWidthConfig;
+use crate::dialog::style_set::{StyleSet, matches_column};
 use polars::prelude::{AnyValue};
 use regex::Regex;
 use serde_json::{Value, Number};
+use std::collections::BTreeMap;
 
 
 
@@ -117,6 +119,8 @@ pub struct DataTable {
     pub last_area_height: u16,
     /// Last rendered area width (for horizontal scroll logic)
     pub last_area_width: u16,
+    /// Enabled style sets for conditional styling
+    pub style_sets: Vec<StyleSet>,
 }
 
 impl DataTable {
@@ -134,7 +138,13 @@ impl DataTable {
             style,
             last_area_height: 0,
             last_area_width: 0,
+            style_sets: Vec::new(),
         }
+    }
+
+    /// Set the style sets to apply
+    pub fn set_style_sets(&mut self, style_sets: Vec<StyleSet>) {
+        self.style_sets = style_sets;
     }
     
     /// Set the column width configuration
@@ -1044,26 +1054,105 @@ impl Component for DataTable {
             .bg(ratatui::style::Color::Yellow)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED | Modifier::UNDERLINED);
     
+        // Build row data for style rule evaluation
         let row_widgets: Vec<Row> = visible_rows.iter().enumerate().map(|(i, row)| {
             let global_row = row_start + i;
-            let cells = (0..visible_columns_slice.len()).map(|j| {
+            
+            // Build row data map for style rule evaluation
+            let mut row_data = BTreeMap::new();
+            for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                let value = &row[j];
+                let cell_str = anyvalue_to_display_string(value);
+                row_data.insert(col_name.clone(), cell_str);
+            }
+            
+            // Evaluate all style rules and collect matched styles
+            let mut row_style: Option<ratatui::style::Style> = None;
+            let mut cell_styles: Vec<Option<ratatui::style::Style>> = vec![None; visible_columns_slice.len()];
+            
+            for style_set in &self.style_sets {
+                for rule in &style_set.rules {
+                    // Filter row_data by column_scope if specified
+                    let eval_data: BTreeMap<String, String> = if let Some(ref column_scope) = rule.column_scope {
+                        if column_scope.is_empty() {
+                            row_data.clone()
+                        } else {
+                            row_data.iter()
+                                .filter(|(col_name, _)| matches_column(col_name, column_scope))
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect()
+                        }
+                    } else {
+                        row_data.clone()
+                    };
+                    
+                    // Evaluate the rule
+                    if let Ok(matches) = rule.match_expr.evaluate_row(&eval_data) {
+                        if matches {
+                            let matched_style = rule.style.style.to_ratatui_style();
+                            
+                            match rule.style.scope {
+                                crate::dialog::style_set::ScopeEnum::Row => {
+                                    // Apply to entire row
+                                    row_style = Some(matched_style);
+                                }
+                                crate::dialog::style_set::ScopeEnum::Cell => {
+                                    // Apply to matching cells (those in column_scope)
+                                    if let Some(ref column_scope) = rule.column_scope {
+                                        for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                                            if column_scope.is_empty() || matches_column(col_name, column_scope) {
+                                                cell_styles[j] = Some(matched_style);
+                                            }
+                                        }
+                                    } else {
+                                        // Apply to all cells if no column_scope
+                                        for j in 0..visible_columns_slice.len() {
+                                            cell_styles[j] = Some(matched_style);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Create cells with applied styles
+            let cells: Vec<Cell> = (0..visible_columns_slice.len()).map(|j| {
                 let col_idx = col_start + j;
                 let value = &row[j];
                 let cell_str = anyvalue_to_display_string(value);
-                let mut cell = Cell::from(cell_str)
-                    .style(self.style.table_cell);
+                let mut cell = Cell::from(cell_str);
+                
+                // Apply cell-specific style if set
+                if let Some(ref cell_style) = cell_styles[j] {
+                    cell = cell.style(*cell_style);
+                } else {
+                    cell = cell.style(self.style.table_cell);
+                }
+                
+                // Selected cell style overrides
                 if global_row == self.selection.row && col_idx == self.selection.col {
                     cell = cell.style(selected_cell_style);
                 }
                 cell
-            });
+            }).collect();
+            
+            // Create row with applied styles
             let mut r = Row::new(cells);
-            if global_row == self.selection.row {
-                r = r.style(Style::default().add_modifier(Modifier::REVERSED));
-            } else if global_row % 2 == 0 {
-                r = r.style(self.style.table_row_even);
+            
+            // Apply row-level style if set
+            if let Some(ref rs) = row_style {
+                r = r.style(*rs);
             } else {
-                r = r.style(self.style.table_row_odd);
+                // Default row styling
+                if global_row == self.selection.row {
+                    r = r.style(Style::default().add_modifier(Modifier::REVERSED));
+                } else if global_row % 2 == 0 {
+                    r = r.style(self.style.table_row_even);
+                } else {
+                    r = r.style(self.style.table_row_odd);
+                }
             }
             r
         }).collect();

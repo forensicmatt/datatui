@@ -44,6 +44,9 @@ pub enum Mode {
     TableExport,
     KeybindingsDialog,
     LlmClientDialog,
+    StyleSetManagerDialog,
+    StyleRuleEditorDialog,
+    StyleSetBrowserDialog,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");
@@ -322,6 +325,7 @@ impl Config {
             Action::PrevTab => "Prev Tab",
             Action::NextTab => "Next Tab",
             Action::SyncTabs => "Sync Tabs",
+            Action::OpenStyleSetManagerDialog => "Manage Style Sets",
             
             // Dialog actions
             Action::DeleteSelectedSource => "Delete Source",
@@ -453,6 +457,9 @@ impl Config {
             Action::Suspend => "Suspend",
             Action::Help => "Help",
             Action::DialogClose => "Close",
+
+            // StyleSetManagerDialog actions
+            Action::OpenStyleSetBrowserDialog => "Open Style Set Browser",
             
             // Default to the debug representation for unknown actions
             _ => "Unknown",

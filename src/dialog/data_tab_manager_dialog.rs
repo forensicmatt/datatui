@@ -25,6 +25,8 @@ use crate::dataframe::manager::ManagedDataFrame;
 use crate::dialog::data_management_dialog::{LoadedDataset, DataManagementDialog};
 use crate::dialog::project_settings_dialog::{ProjectSettingsDialog, ProjectSettingsConfig};
 use crate::dialog::data_export_dialog::{DataExportDialog, DataExportMode};
+use crate::dialog::style_set_manager::StyleSetManager;
+use crate::dialog::style_set_manager_dialog::StyleSetManagerDialog;
 use crate::style::StyleConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -87,6 +89,9 @@ pub struct DataTabManagerDialog {
     pub tab_order: Vec<String>, // Maintains the order of tabs for reordering functionality
     pub data_export_dialog: Option<DataExportDialog>,
     pub show_data_export_dialog: bool,
+    pub style_set_manager: StyleSetManager,
+    pub style_set_manager_dialog: StyleSetManagerDialog,
+    pub show_style_set_manager: bool,
 }
 
 impl DataTabManagerDialog {
@@ -106,6 +111,9 @@ impl DataTabManagerDialog {
             tab_order: Vec::new(),
             data_export_dialog: None,
             show_data_export_dialog: false,
+            style_set_manager: StyleSetManager::new(),
+            style_set_manager_dialog: StyleSetManagerDialog::new(StyleSetManager::new()),
+            show_style_set_manager: false,
         }
     }
     
@@ -121,6 +129,7 @@ impl DataTabManagerDialog {
             (crate::config::Mode::DataTabManager, crate::action::Action::MoveTabRight),
             (crate::config::Mode::DataTabManager, crate::action::Action::PrevTab),
             (crate::config::Mode::DataTabManager, crate::action::Action::NextTab),
+            (crate::config::Mode::DataTabManager, crate::action::Action::OpenStyleSetManagerDialog),
         ])
     }
 
@@ -253,7 +262,10 @@ impl DataTabManagerDialog {
                 );
                 
                 // Create DataTable and DataTableContainer for this tab
-                let datatable = DataTable::new(managed_df, self.style.clone());
+                let mut datatable = DataTable::new(managed_df, self.style.clone());
+                // Set enabled style sets
+                let enabled_sets = self.style_set_manager.get_enabled_sets();
+                datatable.set_style_sets(enabled_sets.into_iter().cloned().collect());
                 let mut container = DataTableContainer::new_with_dataframes(
                     datatable, self.style.clone(), available_datasets.clone()
                 );
@@ -510,6 +522,20 @@ impl DataTabManagerDialog {
                 );
                 self.project_settings_dialog.render(ps_area, frame.buffer_mut());
             }
+            // Render StyleSetManager overlay if active
+            if self.show_style_set_manager {
+                let margin_x = (area.width as f32 * 0.10) as u16;
+                let margin_y = (area.height as f32 * 0.10) as u16;
+                let ssm_area = Rect::new(
+                    area.x + margin_x,
+                    area.y + margin_y,
+                    area.width.saturating_sub(margin_x * 2),
+                    area.height.saturating_sub(margin_y * 2),
+                );
+                // Sync manager before rendering
+                self.style_set_manager_dialog.sync_manager(&self.style_set_manager);
+                self.style_set_manager_dialog.render(ssm_area, frame.buffer_mut());
+            }
             // Render DataExport overlay if active
             if self.show_data_export_dialog {
                 let margin_x = (area.width as f32 * 0.10) as u16;
@@ -570,6 +596,20 @@ impl DataTabManagerDialog {
                     area.height.saturating_sub(margin_y * 2),
                 );
                 self.project_settings_dialog.render(ps_area, frame.buffer_mut());
+            }
+
+            // Render StyleSetManager overlay if active
+            if self.show_style_set_manager {
+                let margin_x = (area.width as f32 * 0.10) as u16;
+                let margin_y = (area.height as f32 * 0.10) as u16;
+                let ssm_area = Rect::new(
+                    area.x + margin_x,
+                    area.y + margin_y,
+                    area.width.saturating_sub(margin_x * 2),
+                    area.height.saturating_sub(margin_y * 2),
+                );
+                self.style_set_manager_dialog.sync_manager(&self.style_set_manager);
+                self.style_set_manager_dialog.render(ssm_area, frame.buffer_mut());
             }
 
             // Render DataExport overlay if active
@@ -753,6 +793,10 @@ impl DataTabManagerDialog {
             && let Some(container) = self.containers.get_mut(&active_tab.id()) {
                 container.additional_instructions = Some(instructions.to_string());
 
+                // Sync style sets to datatable
+                let enabled_sets = self.style_set_manager.get_enabled_sets();
+                container.datatable.set_style_sets(enabled_sets.into_iter().cloned().collect());
+
                 // Render the container in the content area
                 // Sync auto expand option from project settings to container before draw
                 container.auto_expand_value_display = self.project_settings_dialog
@@ -881,6 +925,13 @@ impl Component for DataTabManagerDialog {
                     self.show_data_management = true;
                     return Ok(None);
                 }
+                Action::OpenStyleSetManagerDialog => {
+                    // Sync manager and register config
+                    self.style_set_manager_dialog.sync_manager(&self.style_set_manager);
+                    self.style_set_manager_dialog.register_config_handler(self.config.clone())?;
+                    self.show_style_set_manager = true;
+                    return Ok(None);
+                }
                 _ => {}
             }
         }
@@ -934,6 +985,24 @@ impl Component for DataTabManagerDialog {
                     }
                 }
             }
+            return Ok(None);
+        } else if self.show_style_set_manager {
+            // Route to style set manager dialog
+            // Sync manager before handling events
+            self.style_set_manager_dialog.sync_manager(&self.style_set_manager);
+            if let Some(action) = self.style_set_manager_dialog.handle_key_event_pub(key) {
+                match action {
+                    Action::CloseStyleSetManagerDialog => {
+                        // Sync manager back before closing
+                        self.style_set_manager = self.style_set_manager_dialog.get_manager().clone();
+                        self.show_style_set_manager = false;
+                        return Ok(None);
+                    }
+                    _ => {}
+                }
+            }
+            // Sync manager back after handling (in case it changed)
+            self.style_set_manager = self.style_set_manager_dialog.get_manager().clone();
             return Ok(None);
         } else if self.show_data_management {
             debug!("DataTabManagerDialog handle_key_event<show_data_management>: {:?}", key);

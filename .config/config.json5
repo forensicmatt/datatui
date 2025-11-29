@@ -1,6 +1,7 @@
 {
   "keybindings": {
     "DataTabManager": {
+      "<Alt-y>": "OpenStyleSetManagerDialog",
       "<Alt-s>": "OpenProjectSettingsDialog",
       "<Alt-m>": "OpenDataManagementDialog",
       "<Alt-f>": "MoveTabToFront",
@@ -178,6 +179,9 @@
       "<Ctrl-r>": "ResetKeybindings",
       "<delete>": "ClearBinding",
       "<esc>": "CancelRebinding"
+    },
+    "StyleSetManagerDialog": {
+      "<Ctrl-b>": "OpenStyleSetBrowserDialog"
     }
   }
 }

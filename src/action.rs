@@ -360,6 +360,24 @@ pub enum Action {
     CloseLlmClientCreateDialog,
     /// User applied LLM client create dialog with selection
     LlmClientCreateDialogApplied(crate::dialog::llm_client_create_dialog::LlmClientSelection),
+    /// Open the Style Set Manager dialog
+    OpenStyleSetManagerDialog,
+    /// Close the Style Set Manager dialog
+    CloseStyleSetManagerDialog,
+    /// Open the Style Rule Editor dialog
+    OpenStyleRuleEditorDialog,
+    /// Close the Style Rule Editor dialog
+    CloseStyleRuleEditorDialog,
+    /// Open the Style Set Browser dialog
+    OpenStyleSetBrowserDialog,
+    /// Close the Style Set Browser dialog
+    CloseStyleSetBrowserDialog,
+    /// User applied Style Set Manager dialog with enabled sets
+    StyleSetManagerDialogApplied(Vec<String>), // enabled style set identifiers
+    /// User applied Style Rule Editor dialog with a rule
+    StyleRuleEditorDialogApplied(crate::dialog::style_set::StyleRule),
+    /// User applied Style Set Browser dialog with imported sets
+    StyleSetBrowserDialogApplied(Vec<String>), // imported style set identifiers
 }
 
 #[cfg(test)]

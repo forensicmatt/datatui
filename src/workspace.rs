@@ -24,6 +24,9 @@ pub struct WorkspaceState {
     pub data_sources: Vec<DataSource>,
     // DataTableContainer dialog states (per active tab) are captured by index order
     pub tabs: Vec<TabState>,
+    // Enabled style set identifiers
+    #[serde(default)]
+    pub enabled_style_sets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +77,7 @@ impl WorkspaceState {
             project: manager.project_settings_dialog.config.clone(),
             data_sources,
             tabs,
+            enabled_style_sets: manager.style_set_manager.get_enabled_identifiers(),
         })
     }
 
@@ -236,6 +240,9 @@ impl WorkspaceState {
                 }
             }
         }
+        // Apply enabled style sets
+        manager.style_set_manager.set_enabled_identifiers(self.enabled_style_sets);
+
         // After applying state, refresh active container so UI reflects latest data
         if let Some(container) = manager.get_active_container() {
             let _ = container.datatable.scroll_to_selection();
