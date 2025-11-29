@@ -66,4 +66,4 @@ pub use llm_client_dialog::{LlmClientDialog, LlmProvider, LlmConfig};
 pub use llm_client_create_dialog::{LlmClientCreateDialog, LlmClientCreateMode, LlmClientSelection};
 pub use llm::{AzureOpenAiConfig, OpenAIConfig, OllamaConfig};
 pub use embeddings_prompt_dialog::EmbeddingsPromptDialog;
-pub use styling::{StyleSet, StyleRule, MatchedStyle, ScopeEnum, ApplicationScope, StyleSetManager, StyleSetManagerDialog, StyleRuleEditorDialog, StyleSetBrowserDialog};
+pub use styling::{StyleSet, StyleRule, MatchedStyle, ScopeEnum, ApplicationScope, StyleSetManager, StyleSetManagerDialog, StyleRuleEditorDialog, StyleSetBrowserDialog, StyleSetEditorDialog, ApplicationScopeEditorDialog, ColorPickerDialog};

@@ -186,8 +186,32 @@
       "<Ctrl-d>": "RemoveStyleSet",
       "<Ctrl-o>": "ImportStyleSet",
       "<Ctrl-s>": "ExportStyleSet",
-      "<Ctrl-e>": "DisableStyleSet",
-      "<Ctrl-r>": "OpenStyleRuleEditorDialog"
+      "<Ctrl-e>": "EditStyleSet",
+      "<space>": "DisableStyleSet",
+      "<Ctrl-t>": "ToggleCategoryPanel",
+      "<Ctrl-l>": "FocusCategoryTree",
+      "<Ctrl-r>": "FocusStyleSetTable"
+    },
+    "StyleSetEditorDialog": {
+      "<Ctrl-a>": "AddStyleRule",
+      "<Ctrl-e>": "EditStyleRule",
+      "<Ctrl-d>": "DeleteStyleRule",
+      "<Ctrl-up>": "MoveRuleUp",
+      "<Ctrl-down>": "MoveRuleDown",
+      "<Ctrl-s>": "SaveStyleSet"
+    },
+    "StyleRuleEditorDialog": {
+      "<Ctrl-s>": "SaveStyleSet"
+    },
+    "ApplicationScopeEditorDialog": {
+      "<tab>": "ToggleScope",
+      "<f>": "OpenForegroundColorPicker",
+      "<b>": "OpenBackgroundColorPicker",
+      "<Ctrl-f>": "ClearForeground",
+      "<Ctrl-b>": "ClearBackground",
+      "<space>": "ToggleModifier"
+    },
+    "ColorPickerDialog": {
     }
   }
 }

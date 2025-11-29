@@ -384,6 +384,36 @@ pub enum Action {
     ImportStyleSet,
     ExportStyleSet,
     DisableStyleSet,
+    ToggleCategoryPanel,
+    FocusCategoryTree,
+    FocusStyleSetTable,
+    EditStyleSet,
+    /// StyleSetEditorDialog specific actions
+    OpenStyleSetEditorDialog,
+    CloseStyleSetEditorDialog,
+    StyleSetEditorDialogApplied(crate::dialog::styling::StyleSet),
+    AddStyleRule,
+    EditStyleRule,
+    DeleteStyleRule,
+    MoveRuleUp,
+    MoveRuleDown,
+    SaveStyleSet,
+    /// ApplicationScopeEditorDialog specific actions
+    OpenApplicationScopeEditorDialog,
+    CloseApplicationScopeEditorDialog,
+    ApplicationScopeEditorDialogApplied(crate::dialog::styling::ApplicationScope),
+    ToggleScope,
+    OpenForegroundColorPicker,
+    OpenBackgroundColorPicker,
+    ClearForeground,
+    ClearBackground,
+    ToggleModifier,
+    /// ColorPickerDialog specific actions
+    OpenColorPickerDialog,
+    CloseColorPickerDialog,
+    ColorPickerDialogApplied(Option<ratatui::style::Color>),
+    SelectNextColor,
+    SelectPrevColor,
 }
 
 #[cfg(test)]
