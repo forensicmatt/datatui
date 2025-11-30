@@ -1127,7 +1127,10 @@ impl Component for DataTable {
                 // Apply cell-specific style if set
                 if let Some(ref cell_style) = cell_styles[j] {
                     cell = cell.style(*cell_style);
-                } else {
+                } else if row_style.is_none() {
+                    // Only apply default cell style when no row style is set
+                    // This allows matched row styles to show through without being
+                    // overridden by the default table_cell style
                     cell = cell.style(self.style.table_cell);
                 }
                 
