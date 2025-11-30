@@ -6,8 +6,10 @@ pub mod style_set_browser_dialog;
 pub mod style_set_editor_dialog;
 pub mod application_scope_editor_dialog;
 pub mod color_picker_dialog;
+pub mod templates;
 
-pub use style_set::{StyleSet, StyleRule, MatchedStyle, ScopeEnum, ApplicationScope, matches_column};
+pub use style_set::{StyleSet, StyleRule, MatchedStyle, ScopeEnum, ApplicationScope, matches_column, MergeMode, SchemaHint, ColumnMatcher, ExpectedType, GradientStyle, GradientScale, CategoricalStyle, DynamicStyle};
+pub use templates::{get_all_templates, get_template_categories, create_template_styleset, TemplateCategory};
 pub use style_set_manager::StyleSetManager;
 pub use style_set_manager_dialog::StyleSetManagerDialog;
 pub use style_rule_editor_dialog::StyleRuleEditorDialog;

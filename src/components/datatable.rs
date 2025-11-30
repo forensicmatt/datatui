@@ -21,7 +21,7 @@ use ratatui::style::{Modifier, Style};
 use polars::prelude::DataFrame;
 use crate::dialog::find_dialog::{FindOptions, SearchMode};
 use crate::dialog::column_width_dialog::ColumnWidthConfig;
-use crate::dialog::styling::{StyleSet, matches_column};
+use crate::dialog::styling::{StyleSet, matches_column, MergeMode, DynamicStyle};
 use polars::prelude::{AnyValue};
 use regex::Regex;
 use serde_json::{Value, Number};
@@ -35,6 +35,50 @@ fn anyvalue_to_display_string(value: &AnyValue) -> String {
         AnyValue::Null => "".to_string(),
         AnyValue::String(s) => s.to_string(),
         other => format!("{other}"),
+    }
+}
+
+/// Merge two styles according to the merge mode
+fn merge_styles(existing: Option<Style>, new_style: Style, mode: MergeMode) -> Option<Style> {
+    match mode {
+        MergeMode::Override => Some(new_style),
+        MergeMode::Merge => {
+            if let Some(existing) = existing {
+                // Merge: only override non-default properties from new style
+                let mut merged = existing;
+                if new_style.fg.is_some() {
+                    merged.fg = new_style.fg;
+                }
+                if new_style.bg.is_some() {
+                    merged.bg = new_style.bg;
+                }
+                if !new_style.add_modifier.is_empty() {
+                    merged = merged.add_modifier(new_style.add_modifier);
+                }
+                if !new_style.sub_modifier.is_empty() {
+                    merged = merged.remove_modifier(new_style.sub_modifier);
+                }
+                Some(merged)
+            } else {
+                Some(new_style)
+            }
+        }
+        MergeMode::Additive => {
+            if let Some(existing) = existing {
+                // Additive: add modifiers, prefer existing colors
+                let mut merged = existing;
+                if merged.fg.is_none() {
+                    merged.fg = new_style.fg;
+                }
+                if merged.bg.is_none() {
+                    merged.bg = new_style.bg;
+                }
+                merged = merged.add_modifier(new_style.add_modifier);
+                Some(merged)
+            } else {
+                Some(new_style)
+            }
+        }
     }
 }
 
@@ -337,6 +381,28 @@ impl DataTable {
             .clamp(Self::MIN_COL_WIDTH as usize, Self::MAX_COL_WIDTH as usize) as u16
     }
 
+    /// Get the calculated widths for all columns (for use when locking column widths)
+    pub fn get_all_column_widths(&self) -> Result<std::collections::HashMap<String, u16>> {
+        let df = self.get_dataframe()?;
+        let columns: Vec<String> = df.get_column_names_owned()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        
+        let row_count = df.height();
+        // Sample rows for width calculation (similar to visible_col_range)
+        let row_start = 0;
+        let row_end = row_count.min(100); // Sample first 100 rows for performance
+        
+        let mut widths = std::collections::HashMap::new();
+        for (col_idx, col_name) in columns.iter().enumerate() {
+            let width = self.desired_column_width(&df, &columns, col_idx, row_start, row_end);
+            widths.insert(col_name.clone(), width);
+        }
+        
+        Ok(widths)
+    }
+
     /// Get visible columns (excluding hidden ones)
     pub fn get_visible_columns(&self) -> Result<Vec<String>> {
         let df = self.get_dataframe()?;
@@ -353,6 +419,110 @@ impl DataTable {
                     .unwrap_or(&false)
             })
             .collect())
+    }
+    
+    /// Compute min/max bounds for gradient columns in active style rules
+    fn compute_gradient_bounds(&self, df: &DataFrame, visible_columns: &[String]) -> BTreeMap<String, (f64, f64)> {
+        let mut bounds: BTreeMap<String, (f64, f64)> = BTreeMap::new();
+        
+        // Collect all gradient source columns that don't have explicit bounds
+        for style_set in &self.style_sets {
+            for rule in &style_set.rules {
+                if let Some(DynamicStyle::Gradient(gradient)) = &rule.style.dynamic_style {
+                    // Skip if bounds are already specified
+                    if gradient.bounds.is_some() {
+                        continue;
+                    }
+                    // Skip if already computed
+                    if bounds.contains_key(&gradient.source_column) {
+                        continue;
+                    }
+                    // Compute bounds from data
+                    if let Ok(col) = df.column(&gradient.source_column) {
+                        let mut min = f64::MAX;
+                        let mut max = f64::MIN;
+                        for i in 0..col.len() {
+                            if let Ok(val) = col.get(i) {
+                                let num_val = match val {
+                                    AnyValue::Int8(v) => Some(v as f64),
+                                    AnyValue::Int16(v) => Some(v as f64),
+                                    AnyValue::Int32(v) => Some(v as f64),
+                                    AnyValue::Int64(v) => Some(v as f64),
+                                    AnyValue::UInt8(v) => Some(v as f64),
+                                    AnyValue::UInt16(v) => Some(v as f64),
+                                    AnyValue::UInt32(v) => Some(v as f64),
+                                    AnyValue::UInt64(v) => Some(v as f64),
+                                    AnyValue::Float32(v) => Some(v as f64),
+                                    AnyValue::Float64(v) => Some(v),
+                                    AnyValue::String(s) => s.parse::<f64>().ok(),
+                                    _ => None,
+                                };
+                                if let Some(v) = num_val {
+                                    if v < min { min = v; }
+                                    if v > max { max = v; }
+                                }
+                            }
+                        }
+                        if min != f64::MAX && max != f64::MIN {
+                            bounds.insert(gradient.source_column.clone(), (min, max));
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Also compute bounds for visible numeric columns that might be used
+        for col_name in visible_columns {
+            if bounds.contains_key(col_name) {
+                continue;
+            }
+            if let Ok(col) = df.column(col_name) {
+                // Only compute if it's a numeric type
+                let dtype = col.dtype();
+                let is_numeric = matches!(dtype,
+                    polars::datatypes::DataType::Int8 |
+                    polars::datatypes::DataType::Int16 |
+                    polars::datatypes::DataType::Int32 |
+                    polars::datatypes::DataType::Int64 |
+                    polars::datatypes::DataType::UInt8 |
+                    polars::datatypes::DataType::UInt16 |
+                    polars::datatypes::DataType::UInt32 |
+                    polars::datatypes::DataType::UInt64 |
+                    polars::datatypes::DataType::Float32 |
+                    polars::datatypes::DataType::Float64
+                );
+                if is_numeric {
+                    let mut min = f64::MAX;
+                    let mut max = f64::MIN;
+                    for i in 0..col.len() {
+                        if let Ok(val) = col.get(i) {
+                            let num_val = match val {
+                                AnyValue::Int8(v) => Some(v as f64),
+                                AnyValue::Int16(v) => Some(v as f64),
+                                AnyValue::Int32(v) => Some(v as f64),
+                                AnyValue::Int64(v) => Some(v as f64),
+                                AnyValue::UInt8(v) => Some(v as f64),
+                                AnyValue::UInt16(v) => Some(v as f64),
+                                AnyValue::UInt32(v) => Some(v as f64),
+                                AnyValue::UInt64(v) => Some(v as f64),
+                                AnyValue::Float32(v) => Some(v as f64),
+                                AnyValue::Float64(v) => Some(v),
+                                _ => None,
+                            };
+                            if let Some(v) = num_val {
+                                if v < min { min = v; }
+                                if v > max { max = v; }
+                            }
+                        }
+                    }
+                    if min != f64::MAX && max != f64::MIN {
+                        bounds.insert(col_name.clone(), (min, max));
+                    }
+                }
+            }
+        }
+        
+        bounds
     }
 
     /// Get the dataframe
@@ -1054,6 +1224,9 @@ impl Component for DataTable {
             .bg(ratatui::style::Color::Yellow)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED | Modifier::UNDERLINED);
     
+        // Pre-compute gradient bounds for columns that need it
+        let gradient_bounds: BTreeMap<String, (f64, f64)> = self.compute_gradient_bounds(df, &visible_columns_slice);
+        
         // Build row data for style rule evaluation
         let row_widgets: Vec<Row> = visible_rows.iter().enumerate().map(|(i, row)| {
             let global_row = row_start + i;
@@ -1070,47 +1243,97 @@ impl Component for DataTable {
             let mut row_style: Option<ratatui::style::Style> = None;
             let mut cell_styles: Vec<Option<ratatui::style::Style>> = vec![None; visible_columns_slice.len()];
             
-            for style_set in &self.style_sets {
-                for rule in &style_set.rules {
-                    // Filter row_data by column_scope if specified
-                    let eval_data: BTreeMap<String, String> = if let Some(ref column_scope) = rule.column_scope {
-                        if column_scope.is_empty() {
-                            row_data.clone()
-                        } else {
-                            row_data.iter()
-                                .filter(|(col_name, _)| matches_column(col_name, column_scope))
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect()
-                        }
-                    } else {
+            // Collect and sort rules by priority
+            let mut all_rules: Vec<_> = self.style_sets.iter()
+                .flat_map(|ss| ss.rules.iter())
+                .collect();
+            all_rules.sort_by_key(|r| r.priority);
+            
+            for rule in all_rules {
+                // Filter row_data by condition_columns if specified
+                let eval_data: BTreeMap<String, String> = if let Some(ref condition_columns) = rule.condition_columns {
+                    if condition_columns.is_empty() {
                         row_data.clone()
-                    };
-                    
-                    // Evaluate the rule
-                    if let Ok(matches) = rule.match_expr.evaluate_row(&eval_data) {
-                        if matches {
-                            let matched_style = rule.style.style.to_ratatui_style();
-                            
-                            match rule.style.scope {
-                                crate::dialog::styling::ScopeEnum::Row => {
-                                    // Apply to entire row
-                                    row_style = Some(matched_style);
-                                }
-                                crate::dialog::styling::ScopeEnum::Cell => {
-                                    // Apply to matching cells (those in column_scope)
-                                    if let Some(ref column_scope) = rule.column_scope {
-                                        for (j, col_name) in visible_columns_slice.iter().enumerate() {
-                                            if column_scope.is_empty() || matches_column(col_name, column_scope) {
-                                                cell_styles[j] = Some(matched_style);
-                                            }
-                                        }
-                                    } else {
-                                        // Apply to all cells if no column_scope
-                                        for j in 0..visible_columns_slice.len() {
-                                            cell_styles[j] = Some(matched_style);
+                    } else {
+                        row_data.iter()
+                            .filter(|(col_name, _)| matches_column(col_name, condition_columns))
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect()
+                    }
+                } else {
+                    row_data.clone()
+                };
+                
+                // Evaluate the rule
+                if let Ok(matches) = rule.match_expr.evaluate_row(&eval_data) {
+                    if matches {
+                        // Compute style based on dynamic_style or fall back to static style
+                        let compute_style = |_col_name: &str, cell_value: &str| -> ratatui::style::Style {
+                            if let Some(ref dynamic) = rule.style.dynamic_style {
+                                match dynamic {
+                                    DynamicStyle::Static(matched) => matched.to_ratatui_style(),
+                                    DynamicStyle::Gradient(gradient) => {
+                                        // Get the value from the source column
+                                        let value_str = row_data.get(&gradient.source_column)
+                                            .map(|s| s.as_str())
+                                            .unwrap_or(cell_value);
+                                        if let Ok(value) = value_str.parse::<f64>() {
+                                            let (min, max) = gradient.bounds.unwrap_or_else(|| {
+                                                *gradient_bounds.get(&gradient.source_column)
+                                                    .unwrap_or(&(0.0, 1.0))
+                                            });
+                                            let normalized = gradient.normalize(value, min, max);
+                                            gradient.interpolate(normalized).to_ratatui_style()
+                                        } else {
+                                            rule.style.style.to_ratatui_style()
                                         }
                                     }
+                                    DynamicStyle::Categorical(categorical) => {
+                                        // Get the value from the source column
+                                        let value_str = row_data.get(&categorical.source_column)
+                                            .map(|s| s.as_str())
+                                            .unwrap_or(cell_value);
+                                        categorical.get_style_for_value(value_str).to_ratatui_style()
+                                    }
                                 }
+                            } else {
+                                rule.style.style.to_ratatui_style()
+                            }
+                        };
+                        
+                        // Determine target columns: use target_columns if set, else condition_columns
+                        let target_cols = rule.style.target_columns.as_ref()
+                            .or(rule.condition_columns.as_ref());
+                        
+                        match rule.style.scope {
+                            crate::dialog::styling::ScopeEnum::Row => {
+                                // For row scope with dynamic styles, compute based on first matching column
+                                let first_col = visible_columns_slice.first().map(|s| s.as_str()).unwrap_or("");
+                                let first_val = row_data.get(first_col).map(|s| s.as_str()).unwrap_or("");
+                                let matched_style = compute_style(first_col, first_val);
+                                row_style = merge_styles(row_style, matched_style, rule.merge_mode);
+                            }
+                            crate::dialog::styling::ScopeEnum::Cell => {
+                                // Apply to matching cells (those in target_columns)
+                                if let Some(ref target) = target_cols {
+                                    for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                                        if target.is_empty() || matches_column(col_name, target) {
+                                            let cell_val = row_data.get(col_name).map(|s| s.as_str()).unwrap_or("");
+                                            let matched_style = compute_style(col_name, cell_val);
+                                            cell_styles[j] = merge_styles(cell_styles[j], matched_style, rule.merge_mode);
+                                        }
+                                    }
+                                } else {
+                                    // Apply to all cells if no target_columns
+                                    for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                                        let cell_val = row_data.get(col_name).map(|s| s.as_str()).unwrap_or("");
+                                        let matched_style = compute_style(col_name, cell_val);
+                                        cell_styles[j] = merge_styles(cell_styles[j], matched_style, rule.merge_mode);
+                                    }
+                                }
+                            }
+                            crate::dialog::styling::ScopeEnum::Header => {
+                                // Header styling is handled separately during header rendering
                             }
                         }
                     }

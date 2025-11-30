@@ -113,6 +113,7 @@ impl StyleSetEditorDialog {
             description: String::new(),
             yaml_path: None,
             rules: vec![],
+            schema_hint: None,
         };
         Self::new(style_set, columns)
     }
@@ -151,6 +152,7 @@ impl StyleSetEditorDialog {
             tags,
             yaml_path: self.style_set.yaml_path.clone(),
             rules: self.style_set.rules.clone(),
+            schema_hint: self.style_set.schema_hint.clone(),
         }
     }
 
@@ -287,7 +289,7 @@ impl StyleSetEditorDialog {
 
     /// Get a summary of a rule for display
     fn get_rule_summary(rule: &StyleRule) -> String {
-        let col_scope = rule.column_scope.as_ref()
+        let col_scope = rule.condition_columns.as_ref()
             .map(|v| v.join(", "))
             .unwrap_or_else(|| "all".to_string());
         
@@ -301,6 +303,7 @@ impl StyleSetEditorDialog {
         let scope = match rule.style.scope {
             ScopeEnum::Row => "Row",
             ScopeEnum::Cell => "Cell",
+            ScopeEnum::Header => "Header",
         };
 
         let mut style_parts = vec![];

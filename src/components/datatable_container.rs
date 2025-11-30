@@ -2154,6 +2154,10 @@ impl Component for DataTableContainer {
                     self.column_width_dialog.set_columns(columns);
                     let config = self.datatable.get_column_width_config();
                     self.column_width_dialog.set_config(config);
+                    // Pass current calculated widths so columns can be locked when auto_expand is disabled
+                    if let Ok(widths) = self.datatable.get_all_column_widths() {
+                        self.column_width_dialog.set_current_calculated_widths(widths);
+                    }
                     self.column_width_dialog_active = true;
                     return Ok(None);
                 }

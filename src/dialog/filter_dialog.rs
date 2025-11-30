@@ -32,7 +32,28 @@ pub enum FilterCondition {
     IsNotEmpty,
     NotNull,
     IsNull,
-    // Extend with more types as needed
+    // Phase 1: New condition types
+    /// Range check: value between min and max
+    Between { min: String, max: String, inclusive: bool },
+    /// Set membership: value in list of values
+    InList { values: Vec<String>, case_sensitive: bool },
+    /// Negation: NOT condition
+    Not(Box<FilterCondition>),
+    /// Phase 2: Column comparison
+    CompareColumns { other_column: String, operator: CompareOp },
+    /// Phase 2: String length check
+    StringLength { operator: CompareOp, length: usize },
+}
+
+/// Comparison operator for advanced conditions
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompareOp {
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Lte,
+    Gte,
 }
 
 /// Filter applied to a column
@@ -246,6 +267,11 @@ impl FilterDialog {
                     Some(FilterCondition::IsNotEmpty) => "Is Not Empty",
                     Some(FilterCondition::NotNull) => "Not Null",
                     Some(FilterCondition::IsNull) => "Is Null",
+                    Some(FilterCondition::Between { .. }) => "Between",
+                    Some(FilterCondition::InList { .. }) => "In List",
+                    Some(FilterCondition::Not(_)) => "Not",
+                    Some(FilterCondition::CompareColumns { .. }) => "Compare Columns",
+                    Some(FilterCondition::StringLength { .. }) => "String Length",
                     None => "<select>",
                 });
                 buf.set_string(start_x, field_y + 2, type_label, highlight(FilterDialogField::Type));
@@ -285,6 +311,11 @@ impl FilterDialog {
                     Some(FilterCondition::IsNotEmpty) => "Is Not Empty",
                     Some(FilterCondition::NotNull) => "Not Null",
                     Some(FilterCondition::IsNull) => "Is Null",
+                    Some(FilterCondition::Between { .. }) => "Between",
+                    Some(FilterCondition::InList { .. }) => "In List",
+                    Some(FilterCondition::Not(_)) => "Not",
+                    Some(FilterCondition::CompareColumns { .. }) => "Compare Columns",
+                    Some(FilterCondition::StringLength { .. }) => "String Length",
                     None => "<select>",
                 });
                 buf.set_string(start_x, field_y + 2, type_label, highlight(FilterDialogField::Type));
@@ -399,6 +430,31 @@ impl FilterDialog {
                                 FilterCondition::IsNotEmpty => FilterCondition::IsNotEmpty,
                                 FilterCondition::NotNull => FilterCondition::NotNull,
                                 FilterCondition::IsNull => FilterCondition::IsNull,
+                                // Phase 1: New conditions - parse value as needed
+                                FilterCondition::Between { inclusive, .. } => {
+                                    // Parse value as "min,max" or use defaults
+                                    let parts: Vec<&str> = self.add_value.split(',').collect();
+                                    let min = parts.first().map(|s| s.trim().to_string()).unwrap_or_default();
+                                    let max = parts.get(1).map(|s| s.trim().to_string()).unwrap_or_default();
+                                    FilterCondition::Between { min, max, inclusive }
+                                },
+                                FilterCondition::InList { case_sensitive, .. } => {
+                                    // Parse value as comma-separated list
+                                    let values: Vec<String> = self.add_value.split(',')
+                                        .map(|s| s.trim().to_string())
+                                        .filter(|s| !s.is_empty())
+                                        .collect();
+                                    FilterCondition::InList { values, case_sensitive }
+                                },
+                                FilterCondition::Not(inner) => FilterCondition::Not(inner),
+                                // Phase 2: Advanced conditions
+                                FilterCondition::CompareColumns { operator, .. } => {
+                                    FilterCondition::CompareColumns { other_column: self.add_value.clone(), operator }
+                                },
+                                FilterCondition::StringLength { operator, .. } => {
+                                    let length = self.add_value.parse().unwrap_or(0);
+                                    FilterCondition::StringLength { operator, length }
+                                },
                             };
                             let filter = ColumnFilter { column, condition };
                             if let Some(path) = self.add_insertion_path.clone() {
@@ -548,7 +604,12 @@ impl FilterDialog {
                                         Some(FilterCondition::GreaterThanOrEqual { .. }) => Some(FilterCondition::GreaterThan { value: self.add_value.clone() }),
                                         Some(FilterCondition::GreaterThan { .. }) => Some(FilterCondition::Equals { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
                                         Some(FilterCondition::Equals { .. }) => Some(FilterCondition::Regex { pattern: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::Regex { .. }) => Some(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
+                                        Some(FilterCondition::Regex { .. }) => Some(FilterCondition::Between { min: String::new(), max: String::new(), inclusive: true }),
+                                        Some(FilterCondition::Between { .. }) => Some(FilterCondition::InList { values: vec![], case_sensitive: self.add_case_sensitive }),
+                                        Some(FilterCondition::InList { .. }) => Some(FilterCondition::CompareColumns { other_column: String::new(), operator: CompareOp::Eq }),
+                                        Some(FilterCondition::CompareColumns { .. }) => Some(FilterCondition::StringLength { operator: CompareOp::Eq, length: 0 }),
+                                        Some(FilterCondition::StringLength { .. }) => Some(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
+                                        Some(FilterCondition::Not(_)) => Some(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
                                     };
                                 }
                                 FilterDialogField::CaseSensitive => {
@@ -597,7 +658,12 @@ impl FilterDialog {
                                         Some(FilterCondition::IsEmpty) => Some(FilterCondition::IsNull),
                                         Some(FilterCondition::IsNull) => Some(FilterCondition::IsNotEmpty),
                                         Some(FilterCondition::IsNotEmpty) => Some(FilterCondition::NotNull),
-                                        Some(FilterCondition::NotNull) | None => Some(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
+                                        Some(FilterCondition::NotNull) => Some(FilterCondition::Between { min: String::new(), max: String::new(), inclusive: true }),
+                                        Some(FilterCondition::Between { .. }) => Some(FilterCondition::InList { values: vec![], case_sensitive: self.add_case_sensitive }),
+                                        Some(FilterCondition::InList { .. }) => Some(FilterCondition::CompareColumns { other_column: String::new(), operator: CompareOp::Eq }),
+                                        Some(FilterCondition::CompareColumns { .. }) => Some(FilterCondition::StringLength { operator: CompareOp::Eq, length: 0 }),
+                                        Some(FilterCondition::StringLength { .. }) | None => Some(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
+                                        Some(FilterCondition::Not(_)) => Some(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
                                     };
                                 }
                                 FilterDialogField::CaseSensitive => {
@@ -697,11 +763,17 @@ impl FilterDialog {
                                     FilterCondition::IsNotEmpty => "".to_string(),
                                     FilterCondition::NotNull => "".to_string(),
                                     FilterCondition::IsNull => "".to_string(),
+                                    FilterCondition::Between { min, max, .. } => format!("{},{}", min, max),
+                                    FilterCondition::InList { values, .. } => values.join(","),
+                                    FilterCondition::Not(_) => "".to_string(),
+                                    FilterCondition::CompareColumns { other_column, .. } => other_column.clone(),
+                                    FilterCondition::StringLength { length, .. } => length.to_string(),
                                 };
                                 self.add_case_sensitive = match &col_filter.condition {
                                     FilterCondition::Contains { case_sensitive, .. }
                                     | FilterCondition::Regex { case_sensitive, .. }
-                                    | FilterCondition::Equals { case_sensitive, .. } => *case_sensitive,
+                                    | FilterCondition::Equals { case_sensitive, .. }
+                                    | FilterCondition::InList { case_sensitive, .. } => *case_sensitive,
                                     _ => false
                                 };
                             }
@@ -919,7 +991,8 @@ impl ColumnFilter {
         let cs = match &self.condition {
             FilterCondition::Contains { case_sensitive, .. }
             | FilterCondition::Regex { case_sensitive, .. }
-            | FilterCondition::Equals { case_sensitive, .. } => {
+            | FilterCondition::Equals { case_sensitive, .. }
+            | FilterCondition::InList { case_sensitive, .. } => {
                 if *case_sensitive { "[Aa]" } else { "[aA]" }
             },
             _ => ""
@@ -936,6 +1009,50 @@ impl ColumnFilter {
             FilterCondition::IsNotEmpty => format!("{} is not empty", self.column),
             FilterCondition::NotNull => format!("{} is not null", self.column),
             FilterCondition::IsNull => format!("{} is null", self.column),
+            // Phase 1: New conditions
+            FilterCondition::Between { min, max, inclusive } => {
+                let op = if *inclusive { "between" } else { "between (exclusive)" };
+                format!("{} {} {} and {}", self.column, op, min, max)
+            },
+            FilterCondition::InList { values, .. } => {
+                let display_values = if values.len() > 3 {
+                    format!("{}, {}... ({} total)", values[0], values[1], values.len())
+                } else {
+                    values.join(", ")
+                };
+                format!("{} in [{}] {}", self.column, display_values, cs)
+            },
+            FilterCondition::Not(inner) => {
+                // Create a temporary ColumnFilter to get inner summary
+                let inner_filter = ColumnFilter {
+                    column: self.column.clone(),
+                    condition: (**inner).clone(),
+                };
+                format!("NOT ({})", inner_filter.summary())
+            },
+            // Phase 2: Advanced conditions
+            FilterCondition::CompareColumns { other_column, operator } => {
+                let op_str = match operator {
+                    CompareOp::Eq => "=",
+                    CompareOp::Ne => "≠",
+                    CompareOp::Lt => "<",
+                    CompareOp::Gt => ">",
+                    CompareOp::Lte => "≤",
+                    CompareOp::Gte => "≥",
+                };
+                format!("{} {} {}", self.column, op_str, other_column)
+            },
+            FilterCondition::StringLength { operator, length } => {
+                let op_str = match operator {
+                    CompareOp::Eq => "=",
+                    CompareOp::Ne => "≠",
+                    CompareOp::Lt => "<",
+                    CompareOp::Gt => ">",
+                    CompareOp::Lte => "≤",
+                    CompareOp::Gte => "≥",
+                };
+                format!("len({}) {} {}", self.column, op_str, length)
+            },
         }
     }
 
@@ -1150,6 +1267,165 @@ impl ColumnFilter {
                     }
                 }
             },
+            // Phase 1: New conditions
+            FilterCondition::Between { min, max, inclusive } => {
+                match column_type {
+                    DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+                        let min_val = min.parse::<i64>().map_err(|_| color_eyre::eyre::eyre!("Invalid min value: {}", min))?;
+                        let max_val = max.parse::<i64>().map_err(|_| color_eyre::eyre::eyre!("Invalid max value: {}", max))?;
+                        let col = column.i64()?;
+                        if *inclusive {
+                            Ok(col.gt_eq(min_val) & col.lt_eq(max_val))
+                        } else {
+                            Ok(col.gt(min_val) & col.lt(max_val))
+                        }
+                    }
+                    DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
+                        let min_val = min.parse::<u64>().map_err(|_| color_eyre::eyre::eyre!("Invalid min value: {}", min))?;
+                        let max_val = max.parse::<u64>().map_err(|_| color_eyre::eyre::eyre!("Invalid max value: {}", max))?;
+                        let col = column.u64()?;
+                        if *inclusive {
+                            Ok(col.gt_eq(min_val) & col.lt_eq(max_val))
+                        } else {
+                            Ok(col.gt(min_val) & col.lt(max_val))
+                        }
+                    }
+                    DataType::Float32 | DataType::Float64 => {
+                        let min_val = min.parse::<f64>().map_err(|_| color_eyre::eyre::eyre!("Invalid min value: {}", min))?;
+                        let max_val = max.parse::<f64>().map_err(|_| color_eyre::eyre::eyre!("Invalid max value: {}", max))?;
+                        let col = column.f64()?;
+                        if *inclusive {
+                            Ok(col.gt_eq(min_val) & col.lt_eq(max_val))
+                        } else {
+                            Ok(col.gt(min_val) & col.lt(max_val))
+                        }
+                    }
+                    DataType::String => {
+                        // String comparison for between
+                        let col = column.str()?;
+                        let min_str = min.as_str();
+                        let max_str = max.as_str();
+                        if *inclusive {
+                            Ok(col.gt_eq(min_str) & col.lt_eq(max_str))
+                        } else {
+                            Ok(col.gt(min_str) & col.lt(max_str))
+                        }
+                    }
+                    _ => {
+                        Err(color_eyre::eyre::eyre!("Unsupported column type for Between: {}", column_type))
+                    }
+                }
+            },
+            FilterCondition::InList { values, case_sensitive } => {
+                match column_type {
+                    DataType::String => {
+                        let col = column.str()?;
+                        if *case_sensitive {
+                            // Create a mask for each value and OR them together
+                            let mut result = BooleanChunked::full("".into(), false, df.height());
+                            for v in values {
+                                result = result | col.equal(v.as_str());
+                            }
+                            Ok(result)
+                        } else {
+                            let col_lower = col.to_lowercase();
+                            let mut result = BooleanChunked::full("".into(), false, df.height());
+                            for v in values {
+                                result = result | col_lower.equal(v.to_lowercase().as_str());
+                            }
+                            Ok(result)
+                        }
+                    }
+                    DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+                        let col = column.i64()?;
+                        let mut result = BooleanChunked::full("".into(), false, df.height());
+                        for v in values {
+                            if let Ok(num) = v.parse::<i64>() {
+                                result = result | col.equal(num);
+                            }
+                        }
+                        Ok(result)
+                    }
+                    DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
+                        let col = column.u64()?;
+                        let mut result = BooleanChunked::full("".into(), false, df.height());
+                        for v in values {
+                            if let Ok(num) = v.parse::<u64>() {
+                                result = result | col.equal(num);
+                            }
+                        }
+                        Ok(result)
+                    }
+                    DataType::Float32 | DataType::Float64 => {
+                        let col = column.f64()?;
+                        let mut result = BooleanChunked::full("".into(), false, df.height());
+                        for v in values {
+                            if let Ok(num) = v.parse::<f64>() {
+                                result = result | col.equal(num);
+                            }
+                        }
+                        Ok(result)
+                    }
+                    _ => {
+                        Err(color_eyre::eyre::eyre!("Unsupported column type for InList: {}", column_type))
+                    }
+                }
+            },
+            FilterCondition::Not(inner) => {
+                // Create a temporary ColumnFilter with the inner condition
+                let inner_filter = ColumnFilter {
+                    column: self.column.clone(),
+                    condition: (**inner).clone(),
+                };
+                let inner_mask = inner_filter.create_mask(df)?;
+                Ok(!inner_mask)
+            },
+            // Phase 2: Advanced conditions
+            FilterCondition::CompareColumns { other_column, operator } => {
+                let other = df.column(other_column)?;
+                
+                // Try numeric comparison first
+                if let (Ok(col_f64), Ok(other_f64)) = (column.cast(&DataType::Float64), other.cast(&DataType::Float64)) {
+                    let col = col_f64.f64()?;
+                    let other = other_f64.f64()?;
+                    match operator {
+                        CompareOp::Eq => Ok(col.equal(other)),
+                        CompareOp::Ne => Ok(col.not_equal(other)),
+                        CompareOp::Lt => Ok(col.lt(other)),
+                        CompareOp::Gt => Ok(col.gt(other)),
+                        CompareOp::Lte => Ok(col.lt_eq(other)),
+                        CompareOp::Gte => Ok(col.gt_eq(other)),
+                    }
+                } else {
+                    // Fall back to string comparison
+                    let col = column.cast(&DataType::String)?;
+                    let other = other.cast(&DataType::String)?;
+                    let col_str = col.str()?;
+                    let other_str = other.str()?;
+                    match operator {
+                        CompareOp::Eq => Ok(col_str.equal(other_str)),
+                        CompareOp::Ne => Ok(col_str.not_equal(other_str)),
+                        CompareOp::Lt => Ok(col_str.lt(other_str)),
+                        CompareOp::Gt => Ok(col_str.gt(other_str)),
+                        CompareOp::Lte => Ok(col_str.lt_eq(other_str)),
+                        CompareOp::Gte => Ok(col_str.gt_eq(other_str)),
+                    }
+                }
+            },
+            FilterCondition::StringLength { operator, length } => {
+                let col = column.cast(&DataType::String)?;
+                let str_col = col.str()?;
+                let lengths = str_col.str_len_chars();
+                let len_val = *length as u32;
+                match operator {
+                    CompareOp::Eq => Ok(lengths.equal(len_val)),
+                    CompareOp::Ne => Ok(lengths.not_equal(len_val)),
+                    CompareOp::Lt => Ok(lengths.lt(len_val)),
+                    CompareOp::Gt => Ok(lengths.gt(len_val)),
+                    CompareOp::Lte => Ok(lengths.lt_eq(len_val)),
+                    CompareOp::Gte => Ok(lengths.gt_eq(len_val)),
+                }
+            },
         }
     }
 
@@ -1235,6 +1511,79 @@ impl ColumnFilter {
             }
             FilterCondition::IsNull => {
                 Ok(cell_value.is_empty() || cell_value == "null" || cell_value == "NULL")
+            }
+            // Phase 1: New conditions
+            FilterCondition::Between { min, max, inclusive } => {
+                // Try numeric comparison first
+                if let Ok(cell_num) = cell_value.parse::<f64>() {
+                    if let (Ok(min_num), Ok(max_num)) = (min.parse::<f64>(), max.parse::<f64>()) {
+                        return if *inclusive {
+                            Ok(cell_num >= min_num && cell_num <= max_num)
+                        } else {
+                            Ok(cell_num > min_num && cell_num < max_num)
+                        };
+                    }
+                }
+                // Fall back to string comparison
+                if *inclusive {
+                    Ok(cell_value >= min.as_str() && cell_value <= max.as_str())
+                } else {
+                    Ok(cell_value > min.as_str() && cell_value < max.as_str())
+                }
+            }
+            FilterCondition::InList { values, case_sensitive } => {
+                if *case_sensitive {
+                    Ok(values.iter().any(|v| v == cell_value))
+                } else {
+                    let cell_lower = cell_value.to_lowercase();
+                    Ok(values.iter().any(|v| v.to_lowercase() == cell_lower))
+                }
+            }
+            FilterCondition::Not(inner) => {
+                let inner_filter = ColumnFilter {
+                    column: self.column.clone(),
+                    condition: (**inner).clone(),
+                };
+                let inner_result = inner_filter.evaluate_row(row_data)?;
+                Ok(!inner_result)
+            }
+            // Phase 2: Advanced conditions
+            FilterCondition::CompareColumns { other_column, operator } => {
+                let other_value = row_data.get(other_column)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                
+                // Try numeric comparison first
+                if let (Ok(cell_num), Ok(other_num)) = (cell_value.parse::<f64>(), other_value.parse::<f64>()) {
+                    return match operator {
+                        CompareOp::Eq => Ok((cell_num - other_num).abs() < f64::EPSILON),
+                        CompareOp::Ne => Ok((cell_num - other_num).abs() >= f64::EPSILON),
+                        CompareOp::Lt => Ok(cell_num < other_num),
+                        CompareOp::Gt => Ok(cell_num > other_num),
+                        CompareOp::Lte => Ok(cell_num <= other_num),
+                        CompareOp::Gte => Ok(cell_num >= other_num),
+                    };
+                }
+                // Fall back to string comparison
+                match operator {
+                    CompareOp::Eq => Ok(cell_value == other_value),
+                    CompareOp::Ne => Ok(cell_value != other_value),
+                    CompareOp::Lt => Ok(cell_value < other_value),
+                    CompareOp::Gt => Ok(cell_value > other_value),
+                    CompareOp::Lte => Ok(cell_value <= other_value),
+                    CompareOp::Gte => Ok(cell_value >= other_value),
+                }
+            }
+            FilterCondition::StringLength { operator, length } => {
+                let cell_len = cell_value.chars().count();
+                match operator {
+                    CompareOp::Eq => Ok(cell_len == *length),
+                    CompareOp::Ne => Ok(cell_len != *length),
+                    CompareOp::Lt => Ok(cell_len < *length),
+                    CompareOp::Gt => Ok(cell_len > *length),
+                    CompareOp::Lte => Ok(cell_len <= *length),
+                    CompareOp::Gte => Ok(cell_len >= *length),
+                }
             }
         }
     }

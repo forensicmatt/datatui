@@ -204,12 +204,10 @@
       "<Ctrl-s>": "SaveStyleSet"
     },
     "ApplicationScopeEditorDialog": {
-      "<tab>": "ToggleScope",
       "<f>": "OpenForegroundColorPicker",
       "<b>": "OpenBackgroundColorPicker",
       "<Ctrl-f>": "ClearForeground",
-      "<Ctrl-b>": "ClearBackground",
-      "<space>": "ToggleModifier"
+      "<Ctrl-b>": "ClearBackground"
     },
     "ColorPickerDialog": {
     }

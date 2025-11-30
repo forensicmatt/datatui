@@ -182,6 +182,67 @@ impl StyleSetManager {
             }
         }
     }
+    
+    /// Find StyleSets that match the given column names based on schema hints
+    /// Returns a list of (identifier, StyleSet, confidence_score) sorted by confidence
+    pub fn find_matching_sets(&self, columns: &[String]) -> Vec<(&String, &StyleSet, f32)> {
+        let mut matches: Vec<_> = self.style_sets
+            .iter()
+            .filter_map(|(id, set)| {
+                if let Some(ref hint) = set.schema_hint {
+                    let (score, _, _, _, _) = hint.calculate_confidence(columns);
+                    if score >= hint.min_confidence {
+                        Some((id, set, score))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        
+        // Sort by confidence score (descending)
+        matches.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        matches
+    }
+    
+    /// Get suggested StyleSets for a dataset's columns
+    /// Returns suggested sets that aren't already enabled
+    pub fn get_suggestions(&self, columns: &[String]) -> Vec<(&String, &StyleSet, f32)> {
+        self.find_matching_sets(columns)
+            .into_iter()
+            .filter(|(id, _, _)| !self.enabled_sets.contains(*id))
+            .collect()
+    }
+    
+    /// Auto-enable matching StyleSets above the given confidence threshold
+    pub fn auto_enable_matching(&mut self, columns: &[String], min_confidence: f32) -> Vec<String> {
+        let matching: Vec<String> = self.style_sets
+            .iter()
+            .filter_map(|(id, set)| {
+                if self.enabled_sets.contains(id) {
+                    return None; // Already enabled
+                }
+                if let Some(ref hint) = set.schema_hint {
+                    let (score, _, _, _, _) = hint.calculate_confidence(columns);
+                    if score >= min_confidence.max(hint.min_confidence) {
+                        Some(id.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        
+        for id in &matching {
+            self.enabled_sets.insert(id.clone());
+        }
+        
+        matching
+    }
 }
 
 impl Default for StyleSetManager {

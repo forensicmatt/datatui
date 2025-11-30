@@ -7,7 +7,7 @@ use crate::action::Action;
 use crate::config::{Config, Mode};
 use crate::components::Component;
 use crate::components::dialog_layout::split_dialog_area;
-use crate::dialog::styling::style_set::{StyleRule, ApplicationScope, MatchedStyle, ScopeEnum};
+use crate::dialog::styling::style_set::{StyleRule, ApplicationScope, MatchedStyle, ScopeEnum, MergeMode};
 use crate::dialog::styling::application_scope_editor_dialog::ApplicationScopeEditorDialog;
 use crate::dialog::styling::color_picker_dialog::color_to_hex_string;
 use crate::dialog::filter_dialog::{FilterDialog, FilterExpr};
@@ -17,9 +17,11 @@ use arboard::Clipboard;
 /// Focus field in the editor
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StyleRuleField {
-    ColumnScope,
+    ConditionColumns,  // Renamed from ColumnScope
     MatchExpr,
     ApplicationScope,
+    Priority,          // New field
+    MergeMode,         // New field
 }
 
 /// Dialog mode
@@ -33,15 +35,19 @@ pub enum StyleRuleEditorMode {
 /// StyleRuleEditorDialog: UI for editing a single StyleRule
 #[derive(Debug)]
 pub struct StyleRuleEditorDialog {
-    /// Column scope patterns (comma-separated glob patterns)
-    pub column_scope_input: String,
+    /// Condition columns patterns (comma-separated glob patterns)
+    pub condition_columns_input: String,
     /// Match expression (FilterExpr)
     pub match_expr: FilterExpr,
     /// Application scope (scope + style)
     pub app_scope: ApplicationScope,
+    /// Rule priority (higher = processed later)
+    pub priority: i32,
+    /// Merge mode
+    pub merge_mode: MergeMode,
     /// Current focus field
     pub focus_field: StyleRuleField,
-    /// Cursor position in column scope input
+    /// Cursor position in current text input
     pub cursor_position: usize,
     /// Selection start for text input
     pub selection_start: Option<usize>,
@@ -62,15 +68,17 @@ pub struct StyleRuleEditorDialog {
 impl StyleRuleEditorDialog {
     /// Create a new StyleRuleEditorDialog
     pub fn new(rule: StyleRule, columns: Vec<String>) -> Self {
-        let column_scope_input = rule.column_scope
+        let condition_columns_input = rule.condition_columns
             .map(|v| v.join(", "))
             .unwrap_or_default();
         
         Self {
-            column_scope_input,
+            condition_columns_input,
             match_expr: rule.match_expr,
             app_scope: rule.style,
-            focus_field: StyleRuleField::ColumnScope,
+            priority: rule.priority,
+            merge_mode: rule.merge_mode,
+            focus_field: StyleRuleField::ConditionColumns,
             cursor_position: 0,
             selection_start: None,
             selection_end: None,
@@ -86,16 +94,20 @@ impl StyleRuleEditorDialog {
     pub fn new_empty(columns: Vec<String>) -> Self {
         Self::new(
             StyleRule {
-                column_scope: None,
+                condition_columns: None,
                 match_expr: FilterExpr::And(vec![]),
                 style: ApplicationScope {
                     scope: ScopeEnum::Row,
+                    target_columns: None,
                     style: MatchedStyle {
                         fg: None,
                         bg: None,
                         modifiers: None,
                     },
+                    dynamic_style: None,
                 },
+                priority: 0,
+                merge_mode: MergeMode::Override,
             },
             columns,
         )
@@ -103,11 +115,11 @@ impl StyleRuleEditorDialog {
 
     /// Build the resulting StyleRule
     pub fn build_style_rule(&self) -> StyleRule {
-        let column_scope = if self.column_scope_input.trim().is_empty() {
+        let condition_columns = if self.condition_columns_input.trim().is_empty() {
             None
         } else {
             Some(
-                self.column_scope_input
+                self.condition_columns_input
                     .split(',')
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
@@ -116,9 +128,11 @@ impl StyleRuleEditorDialog {
         };
 
         StyleRule {
-            column_scope,
+            condition_columns,
             match_expr: self.match_expr.clone(),
             style: self.app_scope.clone(),
+            priority: self.priority,
+            merge_mode: self.merge_mode,
         }
     }
 
@@ -141,7 +155,7 @@ impl StyleRuleEditorDialog {
 
     /// Select all text
     fn select_all(&mut self) {
-        let len = self.column_scope_input.chars().count();
+        let len = self.condition_columns_input.chars().count();
         self.selection_start = Some(0);
         self.selection_end = Some(len);
         self.cursor_position = len;
@@ -150,8 +164,8 @@ impl StyleRuleEditorDialog {
     /// Delete the selected text if a selection exists
     fn delete_selection(&mut self) -> bool {
         if let Some((start, end)) = self.get_selection_range() {
-            let chars: Vec<char> = self.column_scope_input.chars().collect();
-            self.column_scope_input = chars[..start].iter().chain(chars[end..].iter()).collect();
+            let chars: Vec<char> = self.condition_columns_input.chars().collect();
+            self.condition_columns_input = chars[..start].iter().chain(chars[end..].iter()).collect();
             self.cursor_position = start;
             self.clear_selection();
             true
@@ -163,10 +177,10 @@ impl StyleRuleEditorDialog {
     /// Copy text to clipboard
     fn copy_to_clipboard(&self) {
         let text_to_copy = if let Some((start, end)) = self.get_selection_range() {
-            let chars: Vec<char> = self.column_scope_input.chars().collect();
+            let chars: Vec<char> = self.condition_columns_input.chars().collect();
             chars[start..end].iter().collect::<String>()
         } else {
-            self.column_scope_input.clone()
+            self.condition_columns_input.clone()
         };
 
         if let Ok(mut clipboard) = Clipboard::new() {
@@ -180,11 +194,11 @@ impl StyleRuleEditorDialog {
             return;
         }
 
-        if self.column_scope_input.is_empty() || self.cursor_position == 0 {
+        if self.condition_columns_input.is_empty() || self.cursor_position == 0 {
             return;
         }
 
-        let chars: Vec<char> = self.column_scope_input.chars().collect();
+        let chars: Vec<char> = self.condition_columns_input.chars().collect();
         let mut pos = self.cursor_position.min(chars.len());
 
         if pos == 0 {
@@ -209,7 +223,7 @@ impl StyleRuleEditorDialog {
             0
         };
 
-        self.column_scope_input = chars[..word_start].iter().chain(chars[self.cursor_position..].iter()).collect();
+        self.condition_columns_input = chars[..word_start].iter().chain(chars[self.cursor_position..].iter()).collect();
         self.cursor_position = word_start;
     }
 
@@ -218,9 +232,11 @@ impl StyleRuleEditorDialog {
         match &self.mode {
             StyleRuleEditorMode::Editing => {
                 let field_hint = match self.focus_field {
-                    StyleRuleField::ColumnScope => "Type glob patterns (e.g., col_*, *_id)",
+                    StyleRuleField::ConditionColumns => "Type glob patterns (e.g., col_*, *_id)",
                     StyleRuleField::MatchExpr => "Enter: Edit Filter Expression",
                     StyleRuleField::ApplicationScope => "Enter: Edit Scope & Style",
+                    StyleRuleField::Priority => "←/→: Adjust priority (-100 to 100)",
+                    StyleRuleField::MergeMode => "←/→: Cycle merge mode",
                 };
                 format!(
                     "{}  {}",
@@ -259,6 +275,7 @@ impl StyleRuleEditorDialog {
         let scope_str = match self.app_scope.scope {
             ScopeEnum::Row => "Row",
             ScopeEnum::Cell => "Cell",
+            ScopeEnum::Header => "Header",
         };
         
         let mut parts = vec![format!("Scope: {}", scope_str)];
@@ -345,16 +362,16 @@ impl StyleRuleEditorDialog {
         buf.set_string(start_x, y, "Column Scope (glob patterns, comma-separated):", Style::default().fg(Color::Gray));
         y += 1;
 
-        let scope_style = if self.focus_field == StyleRuleField::ColumnScope {
+        let scope_style = if self.focus_field == StyleRuleField::ConditionColumns {
             Style::default().fg(Color::White)
         } else {
             Style::default().fg(Color::Cyan)
         };
 
         // Render column scope input with selection
-        if self.focus_field == StyleRuleField::ColumnScope {
+        if self.focus_field == StyleRuleField::ConditionColumns {
             if let Some((sel_start, sel_end)) = self.get_selection_range() {
-                let chars: Vec<char> = self.column_scope_input.chars().collect();
+                let chars: Vec<char> = self.condition_columns_input.chars().collect();
                 let mut x_pos = start_x;
 
                 if sel_start > 0 {
@@ -373,20 +390,20 @@ impl StyleRuleEditorDialog {
                     buf.set_string(x_pos, y, &after, scope_style);
                 }
             } else {
-                buf.set_string(start_x, y, &self.column_scope_input, scope_style);
+                buf.set_string(start_x, y, &self.condition_columns_input, scope_style);
                 // Render cursor
                 if self.get_selection_range().is_none() {
                     let cursor_x = start_x + self.cursor_position as u16;
-                    let cursor_char = self.column_scope_input.chars().nth(self.cursor_position).unwrap_or(' ');
+                    let cursor_char = self.condition_columns_input.chars().nth(self.cursor_position).unwrap_or(' ');
                     let cursor_style = self.config.style_config.cursor.block();
                     buf.set_string(cursor_x, y, cursor_char.to_string(), cursor_style);
                 }
             }
         } else {
-            let display_text = if self.column_scope_input.is_empty() {
+            let display_text = if self.condition_columns_input.is_empty() {
                 "(all columns)"
             } else {
-                &self.column_scope_input
+                &self.condition_columns_input
             };
             buf.set_string(start_x, y, display_text, scope_style);
         }
@@ -474,7 +491,7 @@ impl StyleRuleEditorDialog {
                 }
                 Action::Enter => {
                     match self.focus_field {
-                        StyleRuleField::ColumnScope => {
+                        StyleRuleField::ConditionColumns => {
                             // Move to next field
                             self.focus_field = StyleRuleField::MatchExpr;
                         }
@@ -492,35 +509,43 @@ impl StyleRuleEditorDialog {
                             let _ = scope_dialog.register_config_handler(self.config.clone());
                             self.mode = StyleRuleEditorMode::ApplicationScopeEditor(Box::new(scope_dialog));
                         }
+                        StyleRuleField::Priority | StyleRuleField::MergeMode => {
+                            // Move to next field
+                            self.focus_field = StyleRuleField::ConditionColumns;
+                        }
                     }
                     return None;
                 }
                 Action::Up => {
                     self.focus_field = match self.focus_field {
-                        StyleRuleField::ColumnScope => StyleRuleField::ApplicationScope,
-                        StyleRuleField::MatchExpr => StyleRuleField::ColumnScope,
+                        StyleRuleField::ConditionColumns => StyleRuleField::MergeMode,
+                        StyleRuleField::MatchExpr => StyleRuleField::ConditionColumns,
                         StyleRuleField::ApplicationScope => StyleRuleField::MatchExpr,
+                        StyleRuleField::Priority => StyleRuleField::ApplicationScope,
+                        StyleRuleField::MergeMode => StyleRuleField::Priority,
                     };
                     return None;
                 }
                 Action::Down => {
                     self.focus_field = match self.focus_field {
-                        StyleRuleField::ColumnScope => StyleRuleField::MatchExpr,
+                        StyleRuleField::ConditionColumns => StyleRuleField::MatchExpr,
                         StyleRuleField::MatchExpr => StyleRuleField::ApplicationScope,
-                        StyleRuleField::ApplicationScope => StyleRuleField::ColumnScope,
+                        StyleRuleField::ApplicationScope => StyleRuleField::Priority,
+                        StyleRuleField::Priority => StyleRuleField::MergeMode,
+                        StyleRuleField::MergeMode => StyleRuleField::ConditionColumns,
                     };
                     return None;
                 }
                 Action::Left => {
-                    if self.focus_field == StyleRuleField::ColumnScope && self.cursor_position > 0 {
+                    if self.focus_field == StyleRuleField::ConditionColumns && self.cursor_position > 0 {
                         self.cursor_position -= 1;
                         self.clear_selection();
                     }
                     return None;
                 }
                 Action::Right => {
-                    if self.focus_field == StyleRuleField::ColumnScope {
-                        let len = self.column_scope_input.chars().count();
+                    if self.focus_field == StyleRuleField::ConditionColumns {
+                        let len = self.condition_columns_input.chars().count();
                         if self.cursor_position < len {
                             self.cursor_position += 1;
                             self.clear_selection();
@@ -529,10 +554,10 @@ impl StyleRuleEditorDialog {
                     return None;
                 }
                 Action::Backspace => {
-                    if self.focus_field == StyleRuleField::ColumnScope {
+                    if self.focus_field == StyleRuleField::ConditionColumns {
                         if !self.delete_selection() && self.cursor_position > 0 {
-                            let chars: Vec<char> = self.column_scope_input.chars().collect();
-                            self.column_scope_input = chars[..self.cursor_position - 1]
+                            let chars: Vec<char> = self.condition_columns_input.chars().collect();
+                            self.condition_columns_input = chars[..self.cursor_position - 1]
                                 .iter()
                                 .chain(chars[self.cursor_position..].iter())
                                 .collect();
@@ -542,32 +567,32 @@ impl StyleRuleEditorDialog {
                     return None;
                 }
                 Action::SelectAllText => {
-                    if self.focus_field == StyleRuleField::ColumnScope {
+                    if self.focus_field == StyleRuleField::ConditionColumns {
                         self.select_all();
                     }
                     return None;
                 }
                 Action::CopyText => {
-                    if self.focus_field == StyleRuleField::ColumnScope {
+                    if self.focus_field == StyleRuleField::ConditionColumns {
                         self.copy_to_clipboard();
                     }
                     return None;
                 }
                 Action::DeleteWord => {
-                    if self.focus_field == StyleRuleField::ColumnScope {
+                    if self.focus_field == StyleRuleField::ConditionColumns {
                         self.delete_word_backward();
                     }
                     return None;
                 }
                 Action::Paste => {
-                    if self.focus_field == StyleRuleField::ColumnScope {
+                    if self.focus_field == StyleRuleField::ConditionColumns {
                         if let Ok(mut clipboard) = Clipboard::new() {
                             if let Ok(text) = clipboard.get_text() {
                                 self.delete_selection();
-                                let chars: Vec<char> = self.column_scope_input.chars().collect();
+                                let chars: Vec<char> = self.condition_columns_input.chars().collect();
                                 let before: String = chars[..self.cursor_position].iter().collect();
                                 let after: String = chars[self.cursor_position..].iter().collect();
-                                self.column_scope_input = format!("{}{}{}", before, text, after);
+                                self.condition_columns_input = format!("{}{}{}", before, text, after);
                                 self.cursor_position += text.chars().count();
                                 self.clear_selection();
                             }
@@ -595,22 +620,22 @@ impl StyleRuleEditorDialog {
         }
 
         // Handle character input for column scope field
-        if self.focus_field == StyleRuleField::ColumnScope {
+        if self.focus_field == StyleRuleField::ConditionColumns {
             if let KeyCode::Char(c) = key.code {
                 self.delete_selection();
-                let chars: Vec<char> = self.column_scope_input.chars().collect();
+                let chars: Vec<char> = self.condition_columns_input.chars().collect();
                 let before: String = chars[..self.cursor_position].iter().collect();
                 let after: String = chars[self.cursor_position..].iter().collect();
-                self.column_scope_input = format!("{}{}{}", before, c, after);
+                self.condition_columns_input = format!("{}{}{}", before, c, after);
                 self.cursor_position += 1;
                 self.clear_selection();
                 return None;
             }
             if key.code == KeyCode::Delete {
                 if !self.delete_selection() {
-                    let chars: Vec<char> = self.column_scope_input.chars().collect();
+                    let chars: Vec<char> = self.condition_columns_input.chars().collect();
                     if self.cursor_position < chars.len() {
-                        self.column_scope_input = chars[..self.cursor_position]
+                        self.condition_columns_input = chars[..self.cursor_position]
                             .iter()
                             .chain(chars[self.cursor_position + 1..].iter())
                             .collect();
