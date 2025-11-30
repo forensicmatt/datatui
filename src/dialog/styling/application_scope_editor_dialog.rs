@@ -31,6 +31,7 @@ pub enum ApplicationScopeField {
     Foreground,
     Background,
     Modifiers,
+    Buttons,
 }
 
 /// Dialog mode
@@ -54,8 +55,14 @@ pub struct ApplicationScopeEditorDialog {
     pub modifiers: Vec<Modifier>,
     /// Current focus field
     pub focus_field: ApplicationScopeField,
+    /// Previous focus field (for returning from buttons with Left)
+    pub previous_focus_field: ApplicationScopeField,
+    /// Previous modifier index (for returning from buttons with Left)
+    pub previous_modifier_index: usize,
     /// Selected modifier index (when in Modifiers field)
     pub selected_modifier_index: usize,
+    /// Selected button index (0 = Apply, 1 = Cancel)
+    pub selected_button: usize,
     /// Dialog mode
     pub mode: ApplicationScopeEditorMode,
     /// Show instructions
@@ -73,7 +80,10 @@ impl ApplicationScopeEditorDialog {
             bg: app_scope.style.bg,
             modifiers: app_scope.style.modifiers.unwrap_or_default(),
             focus_field: ApplicationScopeField::Scope,
+            previous_focus_field: ApplicationScopeField::Scope,
+            previous_modifier_index: 0,
             selected_modifier_index: 0,
+            selected_button: 0,
             mode: ApplicationScopeEditorMode::Editing,
             show_instructions: true,
             config: Config::default(),
@@ -127,10 +137,11 @@ impl ApplicationScopeEditorDialog {
         match &self.mode {
             ApplicationScopeEditorMode::Editing => {
                 let field_hint = match self.focus_field {
-                    ApplicationScopeField::Scope => "Space: Toggle Row/Cell",
-                    ApplicationScopeField::Foreground => "Enter: Color Picker  Del: Clear",
-                    ApplicationScopeField::Background => "Enter: Color Picker  Del: Clear",
-                    ApplicationScopeField::Modifiers => "Space: Toggle Modifier",
+                    ApplicationScopeField::Scope => "Space: Toggle Row/Cell  →: Buttons",
+                    ApplicationScopeField::Foreground => "Enter: Color Picker  Del: Clear  →: Buttons",
+                    ApplicationScopeField::Background => "Enter: Color Picker  Del: Clear  →: Buttons",
+                    ApplicationScopeField::Modifiers => "Space: Toggle Modifier  →: Buttons",
+                    ApplicationScopeField::Buttons => "Enter: Activate  ↑/↓: Switch  ←: Back",
                 };
                 format!(
                     "{}  {}",
@@ -138,7 +149,6 @@ impl ApplicationScopeEditorDialog {
                     self.config.actions_to_instructions(&[
                         (Mode::Global, Action::Up),
                         (Mode::Global, Action::Down),
-                        (Mode::Global, Action::Enter),
                         (Mode::Global, Action::Escape),
                     ])
                 )
@@ -274,6 +284,23 @@ impl ApplicationScopeEditorDialog {
         let preview_text = "Sample Text Preview";
         buf.set_string(start_x, y, preview_text, preview_style);
 
+        // Render Apply and Cancel buttons
+        let buttons = ["[Apply]", "[Cancel]"];
+        let total_len: u16 = buttons.iter().map(|b| b.len() as u16 + 1).sum();
+        let bx = inner.x + inner.width.saturating_sub(total_len + 1);
+        let by = inner.y + inner.height.saturating_sub(1);
+        let mut x = bx;
+        let is_buttons_focused = self.focus_field == ApplicationScopeField::Buttons;
+        for (idx, b) in buttons.iter().enumerate() {
+            let style = if is_buttons_focused && self.selected_button == idx {
+                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            buf.set_string(x, by, *b, style);
+            x += b.len() as u16 + 1;
+        }
+
         // Render instructions
         if self.show_instructions {
             if let Some(instr_area) = instructions_area {
@@ -347,28 +374,26 @@ impl ApplicationScopeEditorDialog {
                             self.mode = ApplicationScopeEditorMode::BackgroundColorPicker(Box::new(picker));
                             return None;
                         }
-                        ApplicationScopeField::Scope => {
-                            // Toggle scope
-                            self.scope = match self.scope {
-                                ScopeEnum::Row => ScopeEnum::Cell,
-                                ScopeEnum::Cell => ScopeEnum::Row,
-                            };
+                        ApplicationScopeField::Scope | ApplicationScopeField::Modifiers => {
+                            // Enter does NOT toggle - use Space instead
                             return None;
                         }
-                        ApplicationScopeField::Modifiers => {
-                            // Toggle current modifier
-                            if let Some((modifier, _)) = AVAILABLE_MODIFIERS.get(self.selected_modifier_index) {
-                                self.toggle_modifier(*modifier);
+                        ApplicationScopeField::Buttons => {
+                            // Apply or Cancel based on selected button
+                            if self.selected_button == 0 {
+                                let app_scope = self.build_application_scope();
+                                return Some(Action::ApplicationScopeEditorDialogApplied(app_scope));
+                            } else {
+                                return Some(Action::CloseApplicationScopeEditorDialog);
                             }
-                            return None;
                         }
                     }
                 }
                 Action::Up => {
                     match self.focus_field {
                         ApplicationScopeField::Scope => {
-                            self.focus_field = ApplicationScopeField::Modifiers;
-                            self.selected_modifier_index = AVAILABLE_MODIFIERS.len().saturating_sub(1);
+                            self.focus_field = ApplicationScopeField::Buttons;
+                            self.selected_button = 0;
                         }
                         ApplicationScopeField::Foreground => {
                             self.focus_field = ApplicationScopeField::Scope;
@@ -381,6 +406,14 @@ impl ApplicationScopeEditorDialog {
                                 self.selected_modifier_index -= 1;
                             } else {
                                 self.focus_field = ApplicationScopeField::Background;
+                            }
+                        }
+                        ApplicationScopeField::Buttons => {
+                            // Switch between Apply and Cancel
+                            if self.selected_button < 1 {
+                                self.selected_button = 1;
+                            } else {
+                                self.selected_button = 0;
                             }
                         }
                     }
@@ -402,9 +435,37 @@ impl ApplicationScopeEditorDialog {
                             if self.selected_modifier_index < AVAILABLE_MODIFIERS.len() - 1 {
                                 self.selected_modifier_index += 1;
                             } else {
-                                self.focus_field = ApplicationScopeField::Scope;
+                                self.focus_field = ApplicationScopeField::Buttons;
+                                self.selected_button = 0;
                             }
                         }
+                        ApplicationScopeField::Buttons => {
+                            // Switch between Apply and Cancel
+                            if self.selected_button < 1 {
+                                self.selected_button = 1;
+                            } else {
+                                self.selected_button = 0;
+                            }
+                        }
+                    }
+                    return None;
+                }
+                Action::Left => {
+                    if self.focus_field == ApplicationScopeField::Buttons {
+                        // Move back to the previously selected option
+                        self.focus_field = self.previous_focus_field;
+                        self.selected_modifier_index = self.previous_modifier_index;
+                    }
+                    return None;
+                }
+                Action::Right => {
+                    if self.focus_field != ApplicationScopeField::Buttons {
+                        // Save current position before moving to buttons
+                        self.previous_focus_field = self.focus_field;
+                        self.previous_modifier_index = self.selected_modifier_index;
+                        // Move to [Apply] button
+                        self.focus_field = ApplicationScopeField::Buttons;
+                        self.selected_button = 0;
                     }
                     return None;
                 }
@@ -489,12 +550,6 @@ impl ApplicationScopeEditorDialog {
                 _ => {}
             }
             return None;
-        }
-
-        // Handle Ctrl+Enter to apply
-        if key.code == KeyCode::Enter && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
-            let app_scope = self.build_application_scope();
-            return Some(Action::ApplicationScopeEditorDialogApplied(app_scope));
         }
 
         None

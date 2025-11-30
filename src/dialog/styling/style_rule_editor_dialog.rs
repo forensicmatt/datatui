@@ -477,9 +477,10 @@ impl StyleRuleEditorDialog {
                             self.focus_field = StyleRuleField::MatchExpr;
                         }
                         StyleRuleField::MatchExpr => {
-                            // Open filter editor
+                            // Open filter editor with free column mode enabled for JMESPath queries
                             let mut filter_dialog = FilterDialog::new(self.columns.clone());
                             filter_dialog.set_root_expr(self.match_expr.clone());
+                            filter_dialog.set_free_column(true);
                             let _ = filter_dialog.register_config_handler(self.config.clone());
                             self.mode = StyleRuleEditorMode::FilterEditor(Box::new(filter_dialog));
                         }

@@ -684,8 +684,9 @@ impl StyleSetEditorDialog {
                 Action::SelectAllText => {
                     if self.is_text_field() {
                         self.select_all();
+                        return None;
                     }
-                    return None;
+                    // Don't return - let it fall through to dialog-specific actions
                 }
                 Action::CopyText => {
                     if self.is_text_field() {

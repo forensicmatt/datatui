@@ -91,6 +91,9 @@ pub struct FilterDialog {
     pub add_group_and: bool, // new: true=AND, false=OR for AddGroup mode
     pub show_instructions: bool, // new: show instructions area (default true)
     pub config: Config,
+    // Free column mode: allows typing a JMESPath query for the column
+    pub enabled_free_column: bool,
+    pub add_column_text: String, // stores the free-typed column (JMESPath query)
 }
 
 impl FilterDialog {
@@ -112,7 +115,20 @@ impl FilterDialog {
             add_group_and: true,
             show_instructions: true,
             config: Config::default(),
+            enabled_free_column: false,
+            add_column_text: String::new(),
         }
+    }
+
+    /// Enable free column mode, allowing the user to type a JMESPath query for the column
+    pub fn with_free_column(mut self) -> Self {
+        self.enabled_free_column = true;
+        self
+    }
+
+    /// Set free column mode, allowing the user to type a JMESPath query for the column
+    pub fn set_free_column(&mut self, enabled: bool) {
+        self.enabled_free_column = enabled;
     }
 
     /// Get a reference to the root filter expression
@@ -128,6 +144,7 @@ impl FilterDialog {
         self.add_insertion_path = None;
         self.add_group_and = true;
         self.show_instructions = true;
+        self.add_column_text.clear();
         // Invalidate cached rendered lines so they are recomputed for the new expression
         // *self.last_rendered_lines.borrow_mut() = None;
         // Ensure we're in list mode after restore
@@ -206,11 +223,15 @@ impl FilterDialog {
                     }
                 };
                 // Field 1: Column
-                let col_label = format!(
-                    "Column: {}",
-                    self.columns.get(self.add_column_index)
-                        .unwrap_or(&"".to_string())
-                );
+                let col_label = if self.enabled_free_column {
+                    format!("Column: {}", self.add_column_text)
+                } else {
+                    format!(
+                        "Column: {}",
+                        self.columns.get(self.add_column_index)
+                            .unwrap_or(&"".to_string())
+                    )
+                };
                 buf.set_string(start_x, field_y, col_label, highlight(FilterDialogField::Column));
                 // Field 2: Type
                 let type_label = format!("Type: {}", match self.add_condition {
@@ -245,7 +266,11 @@ impl FilterDialog {
                     }
                 };
                 // Field 1: Column
-                let col_label = format!("Column: {}", self.columns.get(self.add_column_index).unwrap_or(&"".to_string()));
+                let col_label = if self.enabled_free_column {
+                    format!("Column: {}", self.add_column_text)
+                } else {
+                    format!("Column: {}", self.columns.get(self.add_column_index).unwrap_or(&"".to_string()))
+                };
                 buf.set_string(start_x, field_y, col_label, highlight(FilterDialogField::Column));
                 // Field 2: Type
                 let type_label = format!("Type: {}", match self.add_condition {
@@ -357,7 +382,11 @@ impl FilterDialog {
                             return Some(Action::FilterDialogApplied(self.root_expr.clone()));
                         }
                         FilterDialogMode::Add | FilterDialogMode::Edit(_) => {
-                            let column = self.columns.get(self.add_column_index).cloned().unwrap_or_default();
+                            let column = if self.enabled_free_column {
+                                self.add_column_text.clone()
+                            } else {
+                                self.columns.get(self.add_column_index).cloned().unwrap_or_default()
+                            };
                             let condition = match self.add_condition.clone().unwrap_or(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }) {
                                 FilterCondition::Contains { .. } => FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive },
                                 FilterCondition::Regex { .. } => FilterCondition::Regex { pattern: self.add_value.clone(), case_sensitive: self.add_case_sensitive },
@@ -500,6 +529,12 @@ impl FilterDialog {
                                     } else {
                                         self.add_column_index -= 1;
                                     }
+                                    // When cycling columns, also update free column text
+                                    if self.enabled_free_column {
+                                        if let Some(col) = self.columns.get(self.add_column_index) {
+                                            self.add_column_text = col.clone();
+                                        }
+                                    }
                                 }
                                 FilterDialogField::Type => {
                                     self.add_condition = match self.add_condition {
@@ -543,6 +578,12 @@ impl FilterDialog {
                                     } else {
                                         self.add_column_index = (self.add_column_index + 1) % self.columns.len();
                                     }
+                                    // When cycling columns, also update free column text
+                                    if self.enabled_free_column {
+                                        if let Some(col) = self.columns.get(self.add_column_index) {
+                                            self.add_column_text = col.clone();
+                                        }
+                                    }
                                 }
                                 FilterDialogField::Type => {
                                     self.add_condition = match self.add_condition {
@@ -570,10 +611,17 @@ impl FilterDialog {
                     return None;
                 }
                 Action::Backspace => {
-                    if matches!(&self.mode, FilterDialogMode::Add | FilterDialogMode::Edit(_))
-                        && self.focus_field == FilterDialogField::Value {
-                            self.add_value.pop();
+                    if matches!(&self.mode, FilterDialogMode::Add | FilterDialogMode::Edit(_)) {
+                        match self.focus_field {
+                            FilterDialogField::Value => {
+                                self.add_value.pop();
+                            }
+                            FilterDialogField::Column if self.enabled_free_column => {
+                                self.add_column_text.pop();
+                            }
+                            _ => {}
                         }
+                    }
                     return None;
                 }
                 Action::ToggleInstructions => {
@@ -600,6 +648,7 @@ impl FilterDialog {
                                 self.add_condition = None;
                                 self.add_value.clear();
                                 self.add_case_sensitive = false;
+                                self.add_column_text.clear();
                             }
                             Some(FilterExpr::Condition(_)) => {
                                 if let Some(parent_path) = parent_path_of(&self.selected_path) {
@@ -613,6 +662,7 @@ impl FilterDialog {
                                     self.add_condition = None;
                                     self.add_value.clear();
                                     self.add_case_sensitive = false;
+                                    self.add_column_text.clear();
                                 }
                             }
                             _ => {}
@@ -633,6 +683,7 @@ impl FilterDialog {
                                 self.add_insertion_path = Some(self.selected_path.clone());
                                 self.focus_field = FilterDialogField::Column;
                                 self.add_column_index = self.columns.iter().position(|c| c == &col_filter.column).unwrap_or(0);
+                                self.add_column_text = col_filter.column.clone();
                                 self.add_condition = Some(col_filter.condition.clone());
                                 self.add_value = match &col_filter.condition {
                                     FilterCondition::Contains { value, .. } => value.clone(),
@@ -738,17 +789,31 @@ impl FilterDialog {
             }
             FilterDialogMode::Add => {
                 if key.kind == KeyEventKind::Press
-                    && let KeyCode::Char(c) = key.code
-                        && self.focus_field == FilterDialogField::Value {
-                            self.add_value.push(c);
+                    && let KeyCode::Char(c) = key.code {
+                        match self.focus_field {
+                            FilterDialogField::Value => {
+                                self.add_value.push(c);
+                            }
+                            FilterDialogField::Column if self.enabled_free_column => {
+                                self.add_column_text.push(c);
+                            }
+                            _ => {}
                         }
+                    }
             }
             FilterDialogMode::Edit(_idx) => {
                 if key.kind == KeyEventKind::Press
-                    && let KeyCode::Char(c) = key.code
-                        && self.focus_field == FilterDialogField::Value {
-                            self.add_value.push(c);
+                    && let KeyCode::Char(c) = key.code {
+                        match self.focus_field {
+                            FilterDialogField::Value => {
+                                self.add_value.push(c);
+                            }
+                            FilterDialogField::Column if self.enabled_free_column => {
+                                self.add_column_text.push(c);
+                            }
+                            _ => {}
                         }
+                    }
             }
             FilterDialogMode::AddGroup => {
                 // All AddGroup functionality handled by config actions above
