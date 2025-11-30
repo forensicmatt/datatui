@@ -333,7 +333,9 @@ impl StyleRuleEditorDialog {
 
         let highlight = |field: StyleRuleField| -> Style {
             if self.focus_field == field {
-                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD)
+                Style::default().fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(ratatui::style::Modifier::BOLD)
             } else {
                 Style::default()
             }

@@ -928,6 +928,15 @@ impl Component for DataTabManagerDialog {
                     // Sync manager and register config
                     self.style_set_manager_dialog.sync_manager(&self.style_set_manager);
                     self.style_set_manager_dialog.register_config_handler(self.config.clone())?;
+                    // Pass current columns from active container for filter expressions
+                    if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
+                        if let Some(container) = self.containers.get(&active_tab.id()) {
+                            if let Ok(df) = container.datatable.get_dataframe() {
+                                let columns: Vec<String> = df.get_column_names().iter().map(|s| s.to_string()).collect();
+                                self.style_set_manager_dialog.set_columns(columns);
+                            }
+                        }
+                    }
                     self.show_style_set_manager = true;
                     return Ok(None);
                 }
