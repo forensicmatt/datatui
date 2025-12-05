@@ -331,26 +331,23 @@ impl StyleRuleEditorDialog {
 
     /// Helper to render a text field with block cursor
     fn render_text_field(&self, buf: &mut Buffer, x: u16, y: u16, text: &str, placeholder: &str, is_focused: bool, cursor_pos: usize) {
-        let display_text = if text.is_empty() { placeholder } else { text };
-        let text_style = if is_focused {
-            Style::default().fg(Color::White)
-        } else {
-            Style::default().fg(Color::Cyan)
-        };
-        
-        // Draw the text
-        buf.set_string(x, y, display_text, text_style);
-        
-        // If focused and not showing placeholder, draw block cursor
-        if is_focused && !text.is_empty() {
+        if is_focused {
+            // When focused: show text (no placeholder) with cursor
+            let text_style = Style::default().fg(Color::White);
+            buf.set_string(x, y, text, text_style);
+            
+            // Draw block cursor
             let cursor_x = x + cursor_pos as u16;
             let char_at_cursor = text.chars().nth(cursor_pos).unwrap_or(' ');
             let cursor_style = self.config.style_config.cursor.block();
             buf.set_string(cursor_x, y, char_at_cursor.to_string(), cursor_style);
-        } else if is_focused && text.is_empty() {
-            // Show cursor at start for empty field
-            let cursor_style = self.config.style_config.cursor.block();
-            buf.set_string(x, y, " ", cursor_style);
+        } else {
+            // When not focused: show placeholder in gray if empty
+            if text.is_empty() {
+                buf.set_string(x, y, placeholder, Style::default().fg(Color::DarkGray));
+            } else {
+                buf.set_string(x, y, text, Style::default().fg(Color::Cyan));
+            }
         }
     }
     

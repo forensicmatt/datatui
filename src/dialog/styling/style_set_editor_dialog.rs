@@ -323,7 +323,7 @@ impl StyleSetEditorDialog {
                     StyleSetEditorField::Categories => "Comma-separated categories",
                     StyleSetEditorField::Description => "Enter description",
                     StyleSetEditorField::Tags => "Comma-separated tags",
-                    StyleSetEditorField::Rules => "Ctrl+A: Add  Ctrl+E: Edit  Ctrl+D: Delete",
+                    StyleSetEditorField::Rules => "+: Add, -: Delete, Enter: Edit, Ctrl+↑/↓: Move",
                 };
                 format!(
                     "{}  {}",
@@ -505,16 +505,23 @@ impl StyleSetEditorDialog {
                     buf.set_string(x_pos, y, &after, style);
                 }
             } else {
+                // Draw text (no placeholder when focused)
                 buf.set_string(x, y, value, style);
-                // Render cursor
+                // Render block cursor
                 let cursor_x = x + self.cursor_position as u16;
                 let cursor_char = value.chars().nth(self.cursor_position).unwrap_or(' ');
                 let cursor_style = self.config.style_config.cursor.block();
                 buf.set_string(cursor_x, y, cursor_char.to_string(), cursor_style);
             }
         } else {
+            // When not focused, show placeholder for empty fields
             let display = if value.is_empty() { "(empty)" } else { value };
-            buf.set_string(x, y, display, style);
+            let display_style = if value.is_empty() {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                style
+            };
+            buf.set_string(x, y, display, display_style);
         }
     }
 
@@ -773,6 +780,29 @@ impl StyleSetEditorDialog {
                     return Some(Action::StyleSetEditorDialogApplied(style_set));
                 }
                 _ => {}
+            }
+        }
+        
+        // Direct +/- key handling for Rules field
+        if self.focus_field == StyleSetEditorField::Rules {
+            if key.code == KeyCode::Char('+') || key.code == KeyCode::Insert {
+                // Add new rule
+                let editor = StyleRuleEditorDialog::new_empty(self.columns.clone());
+                let mut editor = editor;
+                let _ = editor.register_config_handler(self.config.clone());
+                self.editing_rule_index = None; // New rule
+                self.mode = StyleSetEditorMode::RuleEditor(Box::new(editor));
+                return None;
+            }
+            if key.code == KeyCode::Char('-') || key.code == KeyCode::Delete {
+                // Delete selected rule
+                if !self.style_set.rules.is_empty() {
+                    self.style_set.rules.remove(self.selected_rule_index);
+                    if self.selected_rule_index >= self.style_set.rules.len() && self.selected_rule_index > 0 {
+                        self.selected_rule_index -= 1;
+                    }
+                }
+                return None;
             }
         }
 
