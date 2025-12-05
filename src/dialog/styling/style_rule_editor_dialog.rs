@@ -49,6 +49,14 @@ impl LogicTypeSelection {
         }
     }
     
+    pub fn prev(&self) -> Self {
+        match self {
+            Self::Conditional => Self::Categorical,
+            Self::Gradient => Self::Conditional,
+            Self::Categorical => Self::Gradient,
+        }
+    }
+    
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Conditional => "Conditional",
@@ -71,6 +79,11 @@ impl ConditionTypeSelection {
             Self::Filter => Self::Regex,
             Self::Regex => Self::Filter,
         }
+    }
+    
+    pub fn prev(&self) -> Self {
+        // Same as next for 2 options
+        self.next()
     }
     
     pub fn display_name(&self) -> &'static str {
@@ -267,7 +280,7 @@ impl StyleRuleEditorDialog {
                     StyleRuleField::ConditionColumns => "Type glob patterns (e.g., col_*, *_id)",
                     StyleRuleField::FilterExpr => "Enter: Edit Filter Expression",
                     StyleRuleField::RegexPattern => "Type regex pattern",
-                    StyleRuleField::Applications => "Enter: Edit Style Application",
+                    StyleRuleField::Applications => "Enter: Edit, +: Add, -: Remove, ←/→: Select",
                     StyleRuleField::Priority => "←/→: Adjust priority",
                     StyleRuleField::MergeMode => "Space: Toggle merge mode",
                 };
@@ -316,6 +329,52 @@ impl StyleRuleEditorDialog {
         parts.join("  ")
     }
 
+    /// Helper to render a text field with block cursor
+    fn render_text_field(&self, buf: &mut Buffer, x: u16, y: u16, text: &str, placeholder: &str, is_focused: bool, cursor_pos: usize) {
+        let display_text = if text.is_empty() { placeholder } else { text };
+        let text_style = if is_focused {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+        
+        // Draw the text
+        buf.set_string(x, y, display_text, text_style);
+        
+        // If focused and not showing placeholder, draw block cursor
+        if is_focused && !text.is_empty() {
+            let cursor_x = x + cursor_pos as u16;
+            let char_at_cursor = text.chars().nth(cursor_pos).unwrap_or(' ');
+            let cursor_style = self.config.style_config.cursor.block();
+            buf.set_string(cursor_x, y, char_at_cursor.to_string(), cursor_style);
+        } else if is_focused && text.is_empty() {
+            // Show cursor at start for empty field
+            let cursor_style = self.config.style_config.cursor.block();
+            buf.set_string(x, y, " ", cursor_style);
+        }
+    }
+    
+    /// Helper to render a label with highlight when focused
+    fn render_label(&self, buf: &mut Buffer, x: u16, y: u16, label: &str, field: StyleRuleField) -> u16 {
+        let style = if self.focus_field == field {
+            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        buf.set_string(x, y, label, style);
+        label.len() as u16
+    }
+    
+    /// Helper to render a value with appropriate style
+    fn render_value(&self, buf: &mut Buffer, x: u16, y: u16, value: &str, field: StyleRuleField) {
+        let style = if self.focus_field == field {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+        buf.set_string(x, y, value, style);
+    }
+
     /// Render the dialog
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         // If in sub-editor mode, render that instead
@@ -357,73 +416,109 @@ impl StyleRuleEditorDialog {
         block.render(content_area, buf);
 
         let start_x = inner.x;
+        let label_width: u16 = 16; // Consistent label column width
+        let value_x = start_x + label_width;
         let mut y = inner.y;
 
-        let highlight = |field: StyleRuleField| -> Style {
-            if self.focus_field == field {
-                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(ratatui::style::Modifier::BOLD)
-            } else {
-                Style::default()
-            }
-        };
-
-        let text_style = |field: StyleRuleField| -> Style {
-            if self.focus_field == field {
-                Style::default().fg(Color::White)
-            } else {
-                Style::default().fg(Color::Cyan)
-            }
-        };
-
-        // Name field
-        buf.set_string(start_x, y, "Name:", highlight(StyleRuleField::Name));
-        let name_display = if self.name.is_empty() { "(unnamed)" } else { &self.name };
-        buf.set_string(start_x + 7, y, name_display, text_style(StyleRuleField::Name));
+        // Name field (text input with cursor)
+        self.render_label(buf, start_x, y, "Name:", StyleRuleField::Name);
+        self.render_text_field(
+            buf, value_x, y, 
+            &self.name, "(unnamed)", 
+            self.focus_field == StyleRuleField::Name,
+            self.cursor_position
+        );
         y += 2;
 
-        // Logic Type field
-        buf.set_string(start_x, y, "Logic Type:", highlight(StyleRuleField::LogicType));
-        buf.set_string(start_x + 13, y, self.logic_type.display_name(), text_style(StyleRuleField::LogicType));
+        // Logic Type field (toggle)
+        self.render_label(buf, start_x, y, "Logic Type:", StyleRuleField::LogicType);
+        let logic_indicator = if self.focus_field == StyleRuleField::LogicType { "◀ " } else { "  " };
+        let logic_display = format!("{}{}", logic_indicator, self.logic_type.display_name());
+        self.render_value(buf, value_x, y, &logic_display, StyleRuleField::LogicType);
+        if self.focus_field == StyleRuleField::LogicType {
+            buf.set_string(value_x + logic_display.len() as u16, y, " ▶", Style::default().fg(Color::Yellow));
+        }
         y += 2;
 
         // Conditional-specific fields
         if self.logic_type == LogicTypeSelection::Conditional {
-            // Condition Type
-            buf.set_string(start_x, y, "Condition Type:", highlight(StyleRuleField::ConditionType));
-            buf.set_string(start_x + 17, y, self.condition_type.display_name(), text_style(StyleRuleField::ConditionType));
+            // Condition Type (toggle)
+            self.render_label(buf, start_x, y, "Condition:", StyleRuleField::ConditionType);
+            let cond_indicator = if self.focus_field == StyleRuleField::ConditionType { "◀ " } else { "  " };
+            let cond_display = format!("{}{}", cond_indicator, self.condition_type.display_name());
+            self.render_value(buf, value_x, y, &cond_display, StyleRuleField::ConditionType);
+            if self.focus_field == StyleRuleField::ConditionType {
+                buf.set_string(value_x + cond_display.len() as u16, y, " ▶", Style::default().fg(Color::Yellow));
+            }
             y += 1;
 
-            // Condition Columns
-            buf.set_string(start_x, y, "Column Scope:", highlight(StyleRuleField::ConditionColumns));
-            let cols_display = if self.condition_columns.is_empty() { "(all columns)" } else { &self.condition_columns };
-            buf.set_string(start_x + 14, y, cols_display, text_style(StyleRuleField::ConditionColumns));
+            // Condition Columns (text input with cursor)
+            self.render_label(buf, start_x, y, "Columns:", StyleRuleField::ConditionColumns);
+            self.render_text_field(
+                buf, value_x, y,
+                &self.condition_columns, "(all columns)",
+                self.focus_field == StyleRuleField::ConditionColumns,
+                self.cursor_position
+            );
             y += 1;
 
             // Filter or Regex
             match self.condition_type {
                 ConditionTypeSelection::Filter => {
-                    buf.set_string(start_x, y, "Filter:", highlight(StyleRuleField::FilterExpr));
-                    buf.set_string(start_x + 8, y, &self.get_filter_expr_summary(), text_style(StyleRuleField::FilterExpr));
+                    self.render_label(buf, start_x, y, "Filter:", StyleRuleField::FilterExpr);
+                    let filter_summary = self.get_filter_expr_summary();
+                    let filter_style = if self.focus_field == StyleRuleField::FilterExpr {
+                        Style::default().fg(Color::White).add_modifier(ratatui::style::Modifier::UNDERLINED)
+                    } else {
+                        Style::default().fg(Color::Cyan)
+                    };
+                    buf.set_string(value_x, y, &filter_summary, filter_style);
+                    if self.focus_field == StyleRuleField::FilterExpr {
+                        buf.set_string(value_x + filter_summary.len() as u16 + 1, y, "[Enter to edit]", Style::default().fg(Color::DarkGray));
+                    }
                 }
                 ConditionTypeSelection::Regex => {
-                    buf.set_string(start_x, y, "Regex:", highlight(StyleRuleField::RegexPattern));
-                    let pattern_display = if self.regex_pattern.is_empty() { "(no pattern)" } else { &self.regex_pattern };
-                    buf.set_string(start_x + 7, y, pattern_display, text_style(StyleRuleField::RegexPattern));
+                    self.render_label(buf, start_x, y, "Pattern:", StyleRuleField::RegexPattern);
+                    self.render_text_field(
+                        buf, value_x, y,
+                        &self.regex_pattern, "(no pattern)",
+                        self.focus_field == StyleRuleField::RegexPattern,
+                        self.cursor_position
+                    );
                 }
             }
             y += 2;
 
-            // Applications
-            buf.set_string(start_x, y, "Style Applications:", highlight(StyleRuleField::Applications));
+            // Applications section
+            self.render_label(buf, start_x, y, "Applications:", StyleRuleField::Applications);
+            let app_count = self.applications.len();
+            let app_hint = if self.focus_field == StyleRuleField::Applications {
+                format!("({}) [+: Add, -: Remove, Enter: Edit]", app_count)
+            } else {
+                format!("({})", app_count)
+            };
+            buf.set_string(value_x, y, &app_hint, Style::default().fg(Color::DarkGray));
             y += 1;
+            
             for (i, app) in self.applications.iter().enumerate() {
-                let marker = if i == self.selected_application_index && self.focus_field == StyleRuleField::Applications {
-                    "▶ "
+                let is_selected = i == self.selected_application_index && self.focus_field == StyleRuleField::Applications;
+                let marker = if is_selected { "▶ " } else { "  " };
+                let marker_style = if is_selected {
+                    Style::default().fg(Color::Yellow).add_modifier(ratatui::style::Modifier::BOLD)
                 } else {
-                    "  "
+                    Style::default().fg(Color::DarkGray)
                 };
-                buf.set_string(start_x, y, marker, Style::default().fg(Color::Yellow));
-                buf.set_string(start_x + 2, y, &self.get_application_summary(app), Style::default().fg(Color::Gray));
+                let summary_style = if is_selected {
+                    Style::default().fg(Color::White)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                
+                // Show index number
+                let index_str = format!("{}.", i + 1);
+                buf.set_string(start_x + 2, y, marker, marker_style);
+                buf.set_string(start_x + 4, y, &index_str, Style::default().fg(Color::DarkGray));
+                buf.set_string(start_x + 7, y, &self.get_application_summary(app), summary_style);
                 y += 1;
             }
             y += 1;
@@ -432,36 +527,46 @@ impl StyleRuleEditorDialog {
         // Gradient-specific fields
         if self.logic_type == LogicTypeSelection::Gradient {
             buf.set_string(start_x, y, "Source Column:", Style::default().fg(Color::Gray));
-            buf.set_string(start_x + 15, y, &self.gradient_style.source_column, Style::default().fg(Color::Cyan));
+            buf.set_string(value_x, y, &self.gradient_style.source_column, Style::default().fg(Color::Cyan));
             y += 1;
             buf.set_string(start_x, y, "Scale:", Style::default().fg(Color::Gray));
-            buf.set_string(start_x + 7, y, self.gradient_style.scale.display_name(), Style::default().fg(Color::Cyan));
+            buf.set_string(value_x, y, self.gradient_style.scale.display_name(), Style::default().fg(Color::Cyan));
             y += 2;
         }
 
         // Categorical-specific fields
         if self.logic_type == LogicTypeSelection::Categorical {
             buf.set_string(start_x, y, "Source Column:", Style::default().fg(Color::Gray));
-            buf.set_string(start_x + 15, y, &self.categorical_style.source_column, Style::default().fg(Color::Cyan));
+            buf.set_string(value_x, y, &self.categorical_style.source_column, Style::default().fg(Color::Cyan));
             y += 1;
             buf.set_string(start_x, y, "Palette:", Style::default().fg(Color::Gray));
-            buf.set_string(start_x + 9, y, &format!("{} colors", self.categorical_style.palette.len()), Style::default().fg(Color::Cyan));
+            buf.set_string(value_x, y, &format!("{} colors", self.categorical_style.palette.len()), Style::default().fg(Color::Cyan));
             y += 2;
         }
 
-        // Priority
-        buf.set_string(start_x, y, "Priority:", highlight(StyleRuleField::Priority));
-        buf.set_string(start_x + 10, y, &self.priority.to_string(), text_style(StyleRuleField::Priority));
+        // Priority (number with arrows)
+        self.render_label(buf, start_x, y, "Priority:", StyleRuleField::Priority);
+        let priority_display = if self.focus_field == StyleRuleField::Priority {
+            format!("◀ {} ▶", self.priority)
+        } else {
+            self.priority.to_string()
+        };
+        self.render_value(buf, value_x, y, &priority_display, StyleRuleField::Priority);
         y += 1;
 
-        // Merge Mode
-        buf.set_string(start_x, y, "Merge Mode:", highlight(StyleRuleField::MergeMode));
+        // Merge Mode (toggle)
+        self.render_label(buf, start_x, y, "Merge Mode:", StyleRuleField::MergeMode);
         let merge_str = match self.merge_mode {
             MergeMode::Override => "Override",
             MergeMode::Merge => "Merge",
             MergeMode::Additive => "Additive",
         };
-        buf.set_string(start_x + 12, y, merge_str, text_style(StyleRuleField::MergeMode));
+        let merge_indicator = if self.focus_field == StyleRuleField::MergeMode { "◀ " } else { "  " };
+        let merge_display = format!("{}{}", merge_indicator, merge_str);
+        self.render_value(buf, value_x, y, &merge_display, StyleRuleField::MergeMode);
+        if self.focus_field == StyleRuleField::MergeMode {
+            buf.set_string(value_x + merge_display.len() as u16, y, " ▶", Style::default().fg(Color::Yellow));
+        }
 
         // Render instructions
         if self.show_instructions {
@@ -557,6 +662,25 @@ impl StyleRuleEditorDialog {
                         StyleRuleField::Priority => {
                             self.priority = (self.priority - 1).max(-100);
                         }
+                        StyleRuleField::LogicType => {
+                            self.logic_type = self.logic_type.prev();
+                        }
+                        StyleRuleField::ConditionType => {
+                            self.condition_type = self.condition_type.prev();
+                        }
+                        StyleRuleField::MergeMode => {
+                            self.merge_mode = match self.merge_mode {
+                                MergeMode::Override => MergeMode::Additive,
+                                MergeMode::Merge => MergeMode::Override,
+                                MergeMode::Additive => MergeMode::Merge,
+                            };
+                        }
+                        StyleRuleField::Applications => {
+                            // Navigate up through applications list
+                            if self.selected_application_index > 0 {
+                                self.selected_application_index -= 1;
+                            }
+                        }
                         StyleRuleField::Name | StyleRuleField::ConditionColumns | StyleRuleField::RegexPattern => {
                             if self.cursor_position > 0 {
                                 self.cursor_position -= 1;
@@ -570,6 +694,25 @@ impl StyleRuleEditorDialog {
                     match self.focus_field {
                         StyleRuleField::Priority => {
                             self.priority = (self.priority + 1).min(100);
+                        }
+                        StyleRuleField::LogicType => {
+                            self.logic_type = self.logic_type.next();
+                        }
+                        StyleRuleField::ConditionType => {
+                            self.condition_type = self.condition_type.next();
+                        }
+                        StyleRuleField::MergeMode => {
+                            self.merge_mode = match self.merge_mode {
+                                MergeMode::Override => MergeMode::Merge,
+                                MergeMode::Merge => MergeMode::Additive,
+                                MergeMode::Additive => MergeMode::Override,
+                            };
+                        }
+                        StyleRuleField::Applications => {
+                            // Navigate down through applications list
+                            if self.selected_application_index < self.applications.len().saturating_sub(1) {
+                                self.selected_application_index += 1;
+                            }
                         }
                         StyleRuleField::Name | StyleRuleField::ConditionColumns | StyleRuleField::RegexPattern => {
                             let len = self.get_current_text().chars().count();
@@ -621,6 +764,25 @@ impl StyleRuleEditorDialog {
                     return None;
                 }
                 _ => {}
+            }
+        }
+        
+        // Insert key or '+' to add new StyleApplication
+        if self.focus_field == StyleRuleField::Applications {
+            if key.code == KeyCode::Insert || key.code == KeyCode::Char('+') {
+                // Add a new default StyleApplication
+                self.applications.push(StyleApplication::default());
+                self.selected_application_index = self.applications.len() - 1;
+                return None;
+            }
+            // Delete key or '-' to remove selected StyleApplication
+            if (key.code == KeyCode::Delete || key.code == KeyCode::Char('-')) && self.applications.len() > 1 {
+                // Keep at least one application
+                self.applications.remove(self.selected_application_index);
+                if self.selected_application_index >= self.applications.len() {
+                    self.selected_application_index = self.applications.len().saturating_sub(1);
+                }
+                return None;
             }
         }
 

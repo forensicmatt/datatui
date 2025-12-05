@@ -139,6 +139,41 @@ impl ApplicationScopeEditorDialog {
         format!("{}", field_hint)
     }
 
+    /// Helper to render a text field with block cursor
+    fn render_text_field(&self, buf: &mut Buffer, x: u16, y: u16, text: &str, placeholder: &str, is_focused: bool) {
+        let display_text = if text.is_empty() { placeholder } else { text };
+        let text_style = if is_focused {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+        
+        // Draw the text
+        buf.set_string(x, y, display_text, text_style);
+        
+        // If focused and not showing placeholder, draw block cursor
+        if is_focused && !text.is_empty() {
+            let cursor_x = x + self.cursor_position as u16;
+            let char_at_cursor = text.chars().nth(self.cursor_position).unwrap_or(' ');
+            let cursor_style = self.config.style_config.cursor.block();
+            buf.set_string(cursor_x, y, char_at_cursor.to_string(), cursor_style);
+        } else if is_focused && text.is_empty() {
+            // Show cursor at start for empty field
+            let cursor_style = self.config.style_config.cursor.block();
+            buf.set_string(x, y, " ", cursor_style);
+        }
+    }
+    
+    /// Helper to render a label
+    fn render_label(&self, buf: &mut Buffer, x: u16, y: u16, label: &str, field: ApplicationScopeField) {
+        let style = if self.focus_field == field {
+            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        buf.set_string(x, y, label, style);
+    }
+
     /// Render the dialog
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
         // If in color picker mode, render that instead
@@ -180,37 +215,57 @@ impl ApplicationScopeEditorDialog {
         block.render(content_area, buf);
 
         let start_x = inner.x;
+        let label_width: u16 = 16;
+        let value_x = start_x + label_width;
         let mut y = inner.y;
 
-        let highlight = |field: ApplicationScopeField| -> Style {
-            if self.focus_field == field {
-                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            }
+        // Scope field (toggle)
+        self.render_label(buf, start_x, y, "Scope:", ApplicationScopeField::Scope);
+        let scope_indicator = if self.focus_field == ApplicationScopeField::Scope { "◀ " } else { "  " };
+        let scope_display = format!("{}{}", scope_indicator, self.scope.display_name());
+        let scope_style = if self.focus_field == ApplicationScopeField::Scope {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::Cyan)
         };
-
-        // Scope field
-        buf.set_string(start_x, y, "Scope:", highlight(ApplicationScopeField::Scope));
-        buf.set_string(start_x + 8, y, self.scope.display_name(), Style::default().fg(Color::Cyan));
+        buf.set_string(value_x, y, &scope_display, scope_style);
+        if self.focus_field == ApplicationScopeField::Scope {
+            buf.set_string(value_x + scope_display.len() as u16, y, " ▶", Style::default().fg(Color::Yellow));
+        }
         y += 2;
 
         // Foreground color
-        buf.set_string(start_x, y, "Foreground:", highlight(ApplicationScopeField::Foreground));
+        self.render_label(buf, start_x, y, "Foreground:", ApplicationScopeField::Foreground);
         let fg_text = self.fg.map(|c| color_to_hex_string(&c)).unwrap_or_else(|| "None".to_string());
-        let fg_style = self.fg.map(|c| Style::default().fg(c)).unwrap_or_else(|| Style::default().fg(Color::Gray));
-        buf.set_string(start_x + 13, y, &fg_text, fg_style);
+        if let Some(c) = self.fg {
+            // Show color sample
+            buf.set_string(value_x, y, "██", Style::default().fg(c));
+            buf.set_string(value_x + 3, y, &fg_text, Style::default().fg(Color::Cyan));
+        } else {
+            buf.set_string(value_x, y, &fg_text, Style::default().fg(Color::DarkGray));
+        }
+        if self.focus_field == ApplicationScopeField::Foreground {
+            buf.set_string(value_x + fg_text.len() as u16 + 4, y, "[F: pick, Del: clear]", Style::default().fg(Color::DarkGray));
+        }
         y += 1;
 
         // Background color
-        buf.set_string(start_x, y, "Background:", highlight(ApplicationScopeField::Background));
+        self.render_label(buf, start_x, y, "Background:", ApplicationScopeField::Background);
         let bg_text = self.bg.map(|c| color_to_hex_string(&c)).unwrap_or_else(|| "None".to_string());
-        let bg_style = self.bg.map(|c| Style::default().bg(c)).unwrap_or_else(|| Style::default().fg(Color::Gray));
-        buf.set_string(start_x + 13, y, &bg_text, bg_style);
+        if let Some(c) = self.bg {
+            // Show color sample
+            buf.set_string(value_x, y, "██", Style::default().bg(c));
+            buf.set_string(value_x + 3, y, &bg_text, Style::default().fg(Color::Cyan));
+        } else {
+            buf.set_string(value_x, y, &bg_text, Style::default().fg(Color::DarkGray));
+        }
+        if self.focus_field == ApplicationScopeField::Background {
+            buf.set_string(value_x + bg_text.len() as u16 + 4, y, "[B: pick, Del: clear]", Style::default().fg(Color::DarkGray));
+        }
         y += 2;
 
         // Modifiers
-        buf.set_string(start_x, y, "Modifiers:", highlight(ApplicationScopeField::Modifiers));
+        self.render_label(buf, start_x, y, "Modifiers:", ApplicationScopeField::Modifiers);
         y += 1;
         
         let mods_per_row = 3;
@@ -219,7 +274,6 @@ impl ApplicationScopeEditorDialog {
             let is_selected = self.focus_field == ApplicationScopeField::Modifiers && i == self.selected_modifier_index;
             
             let col = i % mods_per_row;
-            let _row = i / mods_per_row;
             let x = start_x + 2 + (col as u16 * 16);
             
             if col == 0 && i > 0 {
@@ -239,32 +293,35 @@ impl ApplicationScopeEditorDialog {
         }
         y += 2;
 
-        // Target Columns
-        buf.set_string(start_x, y, "Target Columns:", highlight(ApplicationScopeField::TargetColumns));
-        let cols_display = if self.target_columns.is_empty() { "(all matched)" } else { &self.target_columns };
-        buf.set_string(start_x + 17, y, cols_display, Style::default().fg(Color::Cyan));
+        // Target Columns (text input with cursor)
+        self.render_label(buf, start_x, y, "Target Columns:", ApplicationScopeField::TargetColumns);
+        self.render_text_field(
+            buf, value_x, y,
+            &self.target_columns, "(all matched)",
+            self.focus_field == ApplicationScopeField::TargetColumns
+        );
         y += 2;
 
         // Style Preview
         buf.set_string(start_x, y, "Preview:", Style::default().fg(Color::Gray));
         let preview_style = self.build_application_scope().style.to_ratatui_style();
-        buf.set_string(start_x + 10, y, "Sample Styled Text", preview_style);
+        buf.set_string(value_x, y, "Sample Styled Text", preview_style);
         y += 2;
 
         // Buttons
         let apply_style = if self.focus_field == ApplicationScopeField::Buttons && self.selected_button == 0 {
-            Style::default().fg(Color::Black).bg(Color::Green)
+            Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Green)
         };
         let cancel_style = if self.focus_field == ApplicationScopeField::Buttons && self.selected_button == 1 {
-            Style::default().fg(Color::Black).bg(Color::Red)
+            Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Red)
         };
         
-        buf.set_string(start_x, y, "[Apply]", apply_style);
-        buf.set_string(start_x + 10, y, "[Cancel]", cancel_style);
+        buf.set_string(start_x, y, " Apply ", apply_style);
+        buf.set_string(start_x + 10, y, " Cancel ", cancel_style);
 
         // Render instructions
         if self.show_instructions {
