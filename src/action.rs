@@ -401,7 +401,7 @@ pub enum Action {
     /// ApplicationScopeEditorDialog specific actions
     OpenApplicationScopeEditorDialog,
     CloseApplicationScopeEditorDialog,
-    ApplicationScopeEditorDialogApplied(crate::dialog::styling::ApplicationScope),
+    ApplicationScopeEditorDialogApplied(crate::dialog::styling::StyleApplication),
     ToggleScope,
     OpenForegroundColorPicker,
     OpenBackgroundColorPicker,

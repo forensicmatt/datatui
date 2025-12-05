@@ -4,6 +4,10 @@ use std::path::PathBuf;
 use ratatui::style::{Color, Modifier};
 use crate::dialog::filter_dialog::FilterExpr;
 
+// =============================================================================
+// Core Style Types
+// =============================================================================
+
 /// Style to apply when a rule matches
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatchedStyle {
@@ -15,19 +19,213 @@ pub struct MatchedStyle {
     pub modifiers: Option<Vec<Modifier>>,
 }
 
+impl Default for MatchedStyle {
+    fn default() -> Self {
+        Self {
+            fg: None,
+            bg: None,
+            modifiers: None,
+        }
+    }
+}
+
+impl MatchedStyle {
+    pub fn to_ratatui_style(&self) -> ratatui::style::Style {
+        let mut style = ratatui::style::Style::default();
+        if let Some(fg) = self.fg {
+            style = style.fg(fg);
+        }
+        if let Some(bg) = self.bg {
+            style = style.bg(bg);
+        }
+        if let Some(ref mods) = self.modifiers {
+            for m in mods {
+                style = style.add_modifier(*m);
+            }
+        }
+        style
+    }
+}
+
+// =============================================================================
+// Regex Capture for Partial Cell Styling
+// =============================================================================
+
+/// Identifies which part of a regex match to style
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GrepCapture {
+    /// Apply style to the section of text that matches this named capture group
+    Name(String),
+    /// Apply style to the section of text that matches this numbered capture group (0 = entire match)
+    Group(usize),
+}
+
+impl Default for GrepCapture {
+    fn default() -> Self {
+        Self::Group(0) // Entire match by default
+    }
+}
+
+// =============================================================================
+// Application Scope - Where to Apply Styles
+// =============================================================================
+
+/// Defines where a style should be applied
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ApplicationScope {
+    /// Apply style to the entire row
+    Row,
+    /// Apply style to the entire cell
+    Cell,
+    /// Apply style only to the matching regex capture group within a cell
+    RegexGroup(GrepCapture),
+}
+
+impl Default for ApplicationScope {
+    fn default() -> Self {
+        Self::Row
+    }
+}
+
+impl ApplicationScope {
+    /// Get the next scope in the cycle (for UI toggling)
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Row => Self::Cell,
+            Self::Cell => Self::RegexGroup(GrepCapture::default()),
+            Self::RegexGroup(_) => Self::Row,
+        }
+    }
+    
+    /// Display name for UI
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Row => "Row",
+            Self::Cell => "Cell",
+            Self::RegexGroup(_) => "Regex Group",
+        }
+    }
+}
+
+// =============================================================================
+// Style Application - What and How to Style
+// =============================================================================
+
+/// Combines a scope with a style
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StyleApplication {
+    /// Where to apply the style
+    #[serde(default)]
+    pub scope: ApplicationScope,
+    /// The style to apply
+    pub style: MatchedStyle,
+    /// Optional: specific columns to target (for Cell scope)
+    /// If None, applies to columns that matched the condition
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_columns: Option<Vec<String>>,
+}
+
+impl Default for StyleApplication {
+    fn default() -> Self {
+        Self {
+            scope: ApplicationScope::Row,
+            style: MatchedStyle::default(),
+            target_columns: None,
+        }
+    }
+}
+
+// =============================================================================
+// Conditions - When to Apply Styles
+// =============================================================================
+
+/// Defines when a style should be applied
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Condition {
+    /// Match based on a filter expression (complex conditions)
+    Filter {
+        /// The filter expression to evaluate
+        expr: FilterExpr,
+        /// Columns to evaluate the filter against (glob patterns)
+        /// If None or empty, evaluates against all columns
+        #[serde(skip_serializing_if = "Option::is_none")]
+        columns: Option<Vec<String>>,
+    },
+    /// Match based on a regex pattern
+    Regex {
+        /// The regex pattern to match
+        pattern: String,
+        /// Columns to match against (glob patterns)
+        /// If None or empty, matches against all columns
+        #[serde(skip_serializing_if = "Option::is_none")]
+        columns: Option<Vec<String>>,
+    },
+}
+
+impl Default for Condition {
+    fn default() -> Self {
+        Self::Filter {
+            expr: FilterExpr::And(vec![]),
+            columns: None,
+        }
+    }
+}
+
+// =============================================================================
+// Conditional Style - Links Conditions to Style Applications
+// =============================================================================
+
+/// A condition with one or more style applications
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConditionalStyle {
+    /// The condition that must match
+    pub condition: Condition,
+    /// Style applications to apply when the condition matches
+    /// Multiple applications allow styling different scopes from one condition
+    pub applications: Vec<StyleApplication>,
+}
+
+impl Default for ConditionalStyle {
+    fn default() -> Self {
+        Self {
+            condition: Condition::default(),
+            applications: vec![StyleApplication::default()],
+        }
+    }
+}
+
+// =============================================================================
+// Dynamic Styles - Gradient and Categorical
+// =============================================================================
+
 /// Scale type for gradient interpolation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum GradientScale {
-    /// Linear interpolation between min and max
     #[default]
     Linear,
-    /// Logarithmic scale (useful for wide value ranges)
     Logarithmic,
-    /// Percentile-based (requires knowing all values)
     Percentile,
 }
 
-/// Gradient style configuration for numeric data visualization
+impl GradientScale {
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Linear => Self::Logarithmic,
+            Self::Logarithmic => Self::Percentile,
+            Self::Percentile => Self::Linear,
+        }
+    }
+    
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Linear => "Linear",
+            Self::Logarithmic => "Logarithmic",
+            Self::Percentile => "Percentile",
+        }
+    }
+}
+
+/// Gradient style for numeric data visualization
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GradientStyle {
     /// Column to read numeric values from
@@ -42,6 +240,30 @@ pub struct GradientStyle {
     /// Optional fixed bounds (min, max). If None, auto-detect from data
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<(f64, f64)>,
+    /// Which columns to apply the gradient to (if None, applies to source_column)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_columns: Option<Vec<String>>,
+}
+
+impl Default for GradientStyle {
+    fn default() -> Self {
+        Self {
+            source_column: String::new(),
+            min_style: MatchedStyle {
+                fg: None,
+                bg: Some(Color::Rgb(50, 50, 150)),
+                modifiers: None,
+            },
+            max_style: MatchedStyle {
+                fg: None,
+                bg: Some(Color::Rgb(150, 50, 50)),
+                modifiers: None,
+            },
+            scale: GradientScale::Linear,
+            bounds: None,
+            target_columns: None,
+        }
+    }
 }
 
 impl GradientStyle {
@@ -49,7 +271,6 @@ impl GradientStyle {
     pub fn interpolate(&self, normalized: f64) -> MatchedStyle {
         let t = normalized.clamp(0.0, 1.0);
         
-        // Interpolate colors
         let fg = match (self.min_style.fg, self.max_style.fg) {
             (Some(min_c), Some(max_c)) => Some(interpolate_color(min_c, max_c, t)),
             (Some(c), None) | (None, Some(c)) => Some(c),
@@ -62,7 +283,6 @@ impl GradientStyle {
             (None, None) => None,
         };
         
-        // Use max_style modifiers if past midpoint, otherwise min_style
         let modifiers = if t >= 0.5 {
             self.max_style.modifiers.clone()
         } else {
@@ -75,23 +295,18 @@ impl GradientStyle {
     /// Calculate normalized value based on scale
     pub fn normalize(&self, value: f64, min: f64, max: f64) -> f64 {
         if (max - min).abs() < f64::EPSILON {
-            return 0.5; // Avoid division by zero
+            return 0.5;
         }
         
         match self.scale {
             GradientScale::Linear => (value - min) / (max - min),
             GradientScale::Logarithmic => {
-                // Handle negative values and zeros
                 let safe_value = value.max(0.0001);
                 let safe_min = min.max(0.0001);
                 let safe_max = max.max(0.0001);
                 (safe_value.ln() - safe_min.ln()) / (safe_max.ln() - safe_min.ln())
             }
-            GradientScale::Percentile => {
-                // For percentile, normalized value should be pre-computed
-                // This is a fallback using linear
-                (value - min) / (max - min)
-            }
+            GradientScale::Percentile => (value - min) / (max - min),
         }
     }
 }
@@ -105,10 +320,7 @@ fn interpolate_color(c1: Color, c2: Color, t: f64) -> Color {
             let b = ((1.0 - t) * b1 as f64 + t * b2 as f64) as u8;
             Color::Rgb(r, g, b)
         }
-        _ => {
-            // For non-RGB colors, use the closer one
-            if t < 0.5 { c1 } else { c2 }
-        }
+        _ => if t < 0.5 { c1 } else { c2 }
     }
 }
 
@@ -123,43 +335,13 @@ pub struct CategoricalStyle {
     /// Apply to foreground (true) or background (false)
     #[serde(default = "default_true")]
     pub apply_to_fg: bool,
+    /// Which columns to apply the categorical style to (if None, applies to source_column)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_columns: Option<Vec<String>>,
 }
 
-fn default_true() -> bool {
-    true
-}
+fn default_true() -> bool { true }
 
-impl CategoricalStyle {
-    /// Get the color for a category value based on its hash
-    pub fn get_color_for_value(&self, value: &str) -> Option<Color> {
-        if self.palette.is_empty() {
-            return None;
-        }
-        // Use a simple hash to deterministically assign colors
-        let hash: usize = value.bytes().fold(0, |acc, b| acc.wrapping_add(b as usize));
-        Some(self.palette[hash % self.palette.len()])
-    }
-    
-    /// Get style for a category value
-    pub fn get_style_for_value(&self, value: &str) -> MatchedStyle {
-        let color = self.get_color_for_value(value);
-        if self.apply_to_fg {
-            MatchedStyle {
-                fg: color,
-                bg: None,
-                modifiers: None,
-            }
-        } else {
-            MatchedStyle {
-                fg: None,
-                bg: color,
-                modifiers: None,
-            }
-        }
-    }
-}
-
-/// Default categorical color palettes
 impl Default for CategoricalStyle {
     fn default() -> Self {
         Self {
@@ -175,117 +357,69 @@ impl Default for CategoricalStyle {
                 Color::Rgb(0, 188, 212),    // Cyan
             ],
             apply_to_fg: true,
+            target_columns: None,
         }
     }
 }
 
-// Custom serialization for Vec<Color>
-mod color_vec_serde {
-    use serde::{Deserialize, Deserializer, Serializer};
-    use ratatui::style::Color;
-    
-    pub fn serialize<S>(colors: &Vec<Color>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        use serde::ser::SerializeSeq;
-        let strings: Vec<String> = colors.iter().map(|c| {
-            match c {
-                Color::Rgb(r, g, b) => format!("rgb({},{},{})", r, g, b),
-                Color::Black => "Black".to_string(),
-                Color::Red => "Red".to_string(),
-                Color::Green => "Green".to_string(),
-                Color::Yellow => "Yellow".to_string(),
-                Color::Blue => "Blue".to_string(),
-                Color::Magenta => "Magenta".to_string(),
-                Color::Cyan => "Cyan".to_string(),
-                Color::White => "White".to_string(),
-                _ => format!("{:?}", c),
-            }
-        }).collect();
-        let mut seq = serializer.serialize_seq(Some(strings.len()))?;
-        for s in &strings {
-            seq.serialize_element(s)?;
+impl CategoricalStyle {
+    pub fn get_color_for_value(&self, value: &str) -> Option<Color> {
+        if self.palette.is_empty() {
+            return None;
         }
-        seq.end()
+        let hash: usize = value.bytes().fold(0, |acc, b| acc.wrapping_add(b as usize));
+        Some(self.palette[hash % self.palette.len()])
     }
     
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Color>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        use serde::de::Error;
-        let strings: Vec<String> = Vec::deserialize(deserializer)?;
-        let mut colors = Vec::new();
-        for s in strings {
-            let color = match s.as_str() {
-                "Black" => Color::Black,
-                "Red" => Color::Red,
-                "Green" => Color::Green,
-                "Yellow" => Color::Yellow,
-                "Blue" => Color::Blue,
-                "Magenta" => Color::Magenta,
-                "Cyan" => Color::Cyan,
-                "White" => Color::White,
-                s if s.starts_with("rgb(") && s.ends_with(")") => {
-                    let inner = &s[4..s.len()-1];
-                    let parts: Vec<&str> = inner.split(',').collect();
-                    if parts.len() == 3 {
-                        if let (Ok(r), Ok(g), Ok(b)) = (
-                            parts[0].trim().parse::<u8>(),
-                            parts[1].trim().parse::<u8>(),
-                            parts[2].trim().parse::<u8>(),
-                        ) {
-                            Color::Rgb(r, g, b)
-                        } else {
-                            return Err(Error::custom(format!("Invalid RGB color: {}", s)));
-                        }
-                    } else {
-                        return Err(Error::custom(format!("Invalid RGB format: {}", s)));
-                    }
-                }
-                _ => return Err(Error::custom(format!("Unknown color: {}", s))),
-            };
-            colors.push(color);
+    pub fn get_style_for_value(&self, value: &str) -> MatchedStyle {
+        let color = self.get_color_for_value(value);
+        if self.apply_to_fg {
+            MatchedStyle { fg: color, bg: None, modifiers: None }
+        } else {
+            MatchedStyle { fg: None, bg: color, modifiers: None }
         }
-        Ok(colors)
     }
 }
 
-/// Dynamic style type that can be static, gradient, or categorical
+// =============================================================================
+// Style Logic - The Main Logic Types
+// =============================================================================
+
+/// The main logic type for a style rule
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum DynamicStyle {
-    /// Static style (current behavior)
-    Static(MatchedStyle),
+pub enum StyleLogic {
+    /// Condition-based styling with one or more style applications
+    Conditional(ConditionalStyle),
     /// Gradient based on numeric column value
     Gradient(GradientStyle),
     /// Categorical palette based on unique values
     Categorical(CategoricalStyle),
 }
 
-/// Scope where the style should be applied
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ScopeEnum {
-    Row,
-    Cell,
-    Header,  // Phase 1: Style column headers
+impl Default for StyleLogic {
+    fn default() -> Self {
+        Self::Conditional(ConditionalStyle::default())
+    }
 }
 
-impl ScopeEnum {
-    /// Get the next scope in the cycle
-    pub fn next(&self) -> Self {
+impl StyleLogic {
+    pub fn display_name(&self) -> &'static str {
         match self {
-            Self::Row => Self::Cell,
-            Self::Cell => Self::Header,
-            Self::Header => Self::Row,
+            Self::Conditional(_) => "Conditional",
+            Self::Gradient(_) => "Gradient",
+            Self::Categorical(_) => "Categorical",
         }
     }
 }
 
+// =============================================================================
+// Merge Mode - How to Combine Styles
+// =============================================================================
+
 /// How to combine styles when multiple rules match
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum MergeMode {
-    /// Replace previous style completely (default behavior)
+    /// Replace previous style completely (default)
     #[default]
     Override,
     /// Only override non-None properties from this rule
@@ -294,35 +428,19 @@ pub enum MergeMode {
     Additive,
 }
 
-/// Combines scope with style for application
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ApplicationScope {
-    pub scope: ScopeEnum,
-    /// When scope is Cell or Header, which columns to style
-    /// If None, uses condition_columns; if empty vec, applies to all matching
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_columns: Option<Vec<String>>,
-    /// Static style (for backward compatibility)
-    pub style: MatchedStyle,
-    /// Dynamic style (gradient, categorical) - takes precedence over static style when set
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dynamic_style: Option<DynamicStyle>,
-}
+// =============================================================================
+// Style Rule - The Top-Level Rule
+// =============================================================================
 
-/// A single styling rule that matches rows/cells and applies styles
+/// A single styling rule
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StyleRule {
-    /// Columns to evaluate conditions against (glob patterns like "col_*", "*_id")
-    /// If None or empty, conditions are evaluated against all columns
-    /// (Renamed from column_scope for clarity)
-    #[serde(alias = "column_scope", skip_serializing_if = "Option::is_none")]
-    pub condition_columns: Option<Vec<String>>,
-    /// Filter expression to evaluate against row/cell data
-    pub match_expr: FilterExpr,
-    /// Style to apply when the rule matches
-    pub style: ApplicationScope,
+    /// Optional name for the rule
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The logic that controls matching and styling
+    pub logic: StyleLogic,
     /// Rule priority: higher values are processed later and win conflicts
-    /// Default is 0
     #[serde(default)]
     pub priority: i32,
     /// How to combine with previously matched styles
@@ -330,43 +448,91 @@ pub struct StyleRule {
     pub merge_mode: MergeMode,
 }
 
-/// Expected data type for column matching
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ExpectedType {
-    /// Any type
-    Any,
-    /// Numeric (int, float)
-    Numeric,
-    /// String/text
-    String,
-    /// Date or datetime
-    DateTime,
-    /// Boolean
-    Boolean,
+impl Default for StyleRule {
+    fn default() -> Self {
+        Self {
+            name: None,
+            logic: StyleLogic::default(),
+            priority: 0,
+            merge_mode: MergeMode::Override,
+        }
+    }
 }
 
-impl Default for ExpectedType {
-    fn default() -> Self {
-        Self::Any
+impl StyleRule {
+    /// Create a new conditional style rule
+    pub fn conditional(condition: Condition, applications: Vec<StyleApplication>) -> Self {
+        Self {
+            name: None,
+            logic: StyleLogic::Conditional(ConditionalStyle { condition, applications }),
+            priority: 0,
+            merge_mode: MergeMode::Override,
+        }
     }
+    
+    /// Create a new gradient style rule
+    pub fn gradient(gradient: GradientStyle) -> Self {
+        Self {
+            name: None,
+            logic: StyleLogic::Gradient(gradient),
+            priority: 0,
+            merge_mode: MergeMode::Override,
+        }
+    }
+    
+    /// Create a new categorical style rule
+    pub fn categorical(categorical: CategoricalStyle) -> Self {
+        Self {
+            name: None,
+            logic: StyleLogic::Categorical(categorical),
+            priority: 0,
+            merge_mode: MergeMode::Override,
+        }
+    }
+    
+    /// Set the rule name
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+    
+    /// Set the priority
+    pub fn with_priority(mut self, priority: i32) -> Self {
+        self.priority = priority;
+        self
+    }
+    
+    /// Set the merge mode
+    pub fn with_merge_mode(mut self, merge_mode: MergeMode) -> Self {
+        self.merge_mode = merge_mode;
+        self
+    }
+}
+
+// =============================================================================
+// Schema Hints - For Auto-Detection
+// =============================================================================
+
+/// Expected data type for column matching
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ExpectedType {
+    #[default]
+    Any,
+    Numeric,
+    String,
+    DateTime,
+    Boolean,
 }
 
 /// Column matcher for schema hints
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ColumnMatcher {
-    /// Exact column name match
     ExactName(String),
-    /// Glob pattern match (e.g., "*_id", "status_*")
     Pattern(String),
-    /// Pattern match with expected data type
-    TypedPattern {
-        pattern: String,
-        expected_type: ExpectedType,
-    },
+    TypedPattern { pattern: String, expected_type: ExpectedType },
 }
 
 impl ColumnMatcher {
-    /// Check if this matcher matches a column name
     pub fn matches(&self, column_name: &str) -> bool {
         match self {
             Self::ExactName(name) => column_name == name,
@@ -375,7 +541,6 @@ impl ColumnMatcher {
         }
     }
     
-    /// Get the pattern string for display
     pub fn pattern_string(&self) -> &str {
         match self {
             Self::ExactName(name) => name,
@@ -388,20 +553,15 @@ impl ColumnMatcher {
 /// Schema hint for auto-detection of matching datasets
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SchemaHint {
-    /// Columns that must exist for this StyleSet to apply
     #[serde(default)]
     pub required_columns: Vec<ColumnMatcher>,
-    /// Columns that increase match confidence if present
     #[serde(default)]
     pub optional_columns: Vec<ColumnMatcher>,
-    /// Minimum confidence score (0.0-1.0) to suggest this StyleSet
     #[serde(default = "default_min_confidence")]
     pub min_confidence: f32,
 }
 
-fn default_min_confidence() -> f32 {
-    0.5
-}
+fn default_min_confidence() -> f32 { 0.5 }
 
 impl Default for SchemaHint {
     fn default() -> Self {
@@ -414,8 +574,6 @@ impl Default for SchemaHint {
 }
 
 impl SchemaHint {
-    /// Calculate confidence score for a set of column names
-    /// Returns (score, matched_required, total_required, matched_optional, total_optional)
     pub fn calculate_confidence(&self, columns: &[String]) -> (f32, usize, usize, usize, usize) {
         let mut matched_required = 0;
         let mut matched_optional = 0;
@@ -435,30 +593,22 @@ impl SchemaHint {
         let total_required = self.required_columns.len();
         let total_optional = self.optional_columns.len();
         
-        // If no hints are defined, return 0 confidence
         if total_required == 0 && total_optional == 0 {
             return (0.0, 0, 0, 0, 0);
         }
         
-        // If any required columns are missing, confidence is 0
         if total_required > 0 && matched_required < total_required {
             return (0.0, matched_required, total_required, matched_optional, total_optional);
         }
         
-        // Calculate score: required columns are weighted more heavily
         let required_score = if total_required > 0 {
             matched_required as f32 / total_required as f32
-        } else {
-            0.0
-        };
+        } else { 0.0 };
         
         let optional_score = if total_optional > 0 {
             matched_optional as f32 / total_optional as f32
-        } else {
-            0.0
-        };
+        } else { 0.0 };
         
-        // Weight: 70% required, 30% optional (if optional exists)
         let score = if total_optional > 0 {
             0.7 * required_score + 0.3 * optional_score
         } else {
@@ -468,37 +618,119 @@ impl SchemaHint {
         (score, matched_required, total_required, matched_optional, total_optional)
     }
     
-    /// Check if this schema hint matches the given columns
     pub fn matches(&self, columns: &[String]) -> bool {
         let (score, _, _, _, _) = self.calculate_confidence(columns);
         score >= self.min_confidence
     }
 }
 
+// =============================================================================
+// Style Set - Collection of Rules
+// =============================================================================
+
 /// A collection of style rules with metadata
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StyleSet {
     pub id: String,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub categories: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
     pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub yaml_path: Option<PathBuf>,
     pub rules: Vec<StyleRule>,
-    /// Schema hint for auto-detection
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema_hint: Option<SchemaHint>,
 }
 
-// Custom serialization for Color
+impl Default for StyleSet {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            categories: None,
+            tags: None,
+            description: String::new(),
+            yaml_path: None,
+            rules: vec![],
+            schema_hint: None,
+        }
+    }
+}
+
+impl StyleSet {
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    pub fn with_categories(mut self, categories: Option<Vec<String>>) -> Self {
+        self.categories = categories;
+        self
+    }
+
+    pub fn with_tags(mut self, tags: Option<Vec<String>>) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    pub fn with_yaml_path(mut self, yaml_path: Option<PathBuf>) -> Self {
+        self.yaml_path = yaml_path;
+        self
+    }
+
+    pub fn with_rules(mut self, rules: Vec<StyleRule>) -> Self {
+        self.rules = rules;
+        self
+    }
+    
+    pub fn with_schema_hint(mut self, schema_hint: Option<SchemaHint>) -> Self {
+        self.schema_hint = schema_hint;
+        self
+    }
+}
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+/// Check if a column name matches any of the given glob patterns
+pub fn matches_column(column: &str, patterns: &[String]) -> bool {
+    use globset::Glob;
+    
+    for pattern in patterns {
+        if let Ok(glob) = Glob::new(pattern) {
+            let matcher = glob.compile_matcher();
+            if matcher.is_match(column) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// =============================================================================
+// Serde Modules for Color and Modifier
+// =============================================================================
+
 mod color_serde {
     use serde::{Deserialize, Deserializer, Serializer};
     use ratatui::style::Color;
 
     pub fn serialize<S>(color: &Option<Color>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
+    where S: Serializer {
         match color {
             None => serializer.serialize_none(),
             Some(c) => {
@@ -529,9 +761,7 @@ mod color_serde {
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Color>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
+    where D: Deserializer<'de> {
         use serde::de::Error;
         let s: Option<String> = Option::deserialize(deserializer)?;
         match s {
@@ -588,15 +818,12 @@ mod color_serde {
     }
 }
 
-// Custom serialization for Modifier
 mod modifier_serde {
     use serde::{Deserialize, Deserializer, Serializer};
     use ratatui::style::Modifier;
 
     pub fn serialize<S>(modifiers: &Option<Vec<Modifier>>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
+    where S: Serializer {
         match modifiers {
             None => serializer.serialize_none(),
             Some(mods) => {
@@ -625,9 +852,7 @@ mod modifier_serde {
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<Modifier>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
+    where D: Deserializer<'de> {
         use serde::de::Error;
         let strings: Option<Vec<String>> = Option::deserialize(deserializer)?;
         match strings {
@@ -654,98 +879,70 @@ mod modifier_serde {
     }
 }
 
-// MatchedStyle implementation
-impl MatchedStyle {
-    pub fn to_ratatui_style(&self) -> ratatui::style::Style {
-        let mut style = ratatui::style::Style::default();
-        if let Some(fg) = self.fg {
-            style = style.fg(fg);
-        }
-        if let Some(bg) = self.bg {
-            style = style.bg(bg);
-        }
-        if let Some(ref mods) = self.modifiers {
-            for m in mods {
-                style = style.add_modifier(*m);
-            }
-        }
-        style
-    }
-}
-
-/// Check if a column name matches any of the given glob patterns
-pub fn matches_column(column: &str, patterns: &[String]) -> bool {
-    use globset::Glob;
+mod color_vec_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use ratatui::style::Color;
     
-    for pattern in patterns {
-        // Try to create a glob matcher
-        if let Ok(glob) = Glob::new(pattern) {
-            let matcher = glob.compile_matcher();
-            if matcher.is_match(column) {
-                return true;
+    pub fn serialize<S>(colors: &Vec<Color>, serializer: S) -> Result<S::Ok, S::Error>
+    where S: Serializer {
+        use serde::ser::SerializeSeq;
+        let strings: Vec<String> = colors.iter().map(|c| {
+            match c {
+                Color::Rgb(r, g, b) => format!("rgb({},{},{})", r, g, b),
+                Color::Black => "Black".to_string(),
+                Color::Red => "Red".to_string(),
+                Color::Green => "Green".to_string(),
+                Color::Yellow => "Yellow".to_string(),
+                Color::Blue => "Blue".to_string(),
+                Color::Magenta => "Magenta".to_string(),
+                Color::Cyan => "Cyan".to_string(),
+                Color::White => "White".to_string(),
+                _ => format!("{:?}", c),
             }
+        }).collect();
+        let mut seq = serializer.serialize_seq(Some(strings.len()))?;
+        for s in &strings {
+            seq.serialize_element(s)?;
         }
+        seq.end()
     }
-    false
-}
-
-impl Default for StyleSet {
-    fn default() -> Self {
-        StyleSet {
-            id: String::new(),
-            name: String::new(),
-            categories: None,
-            tags: None,
-            description: String::new(),
-            yaml_path: None,
-            rules: vec![],
-            schema_hint: None,
+    
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Color>, D::Error>
+    where D: Deserializer<'de> {
+        use serde::de::Error;
+        let strings: Vec<String> = Vec::deserialize(deserializer)?;
+        let mut colors = Vec::new();
+        for s in strings {
+            let color = match s.as_str() {
+                "Black" => Color::Black,
+                "Red" => Color::Red,
+                "Green" => Color::Green,
+                "Yellow" => Color::Yellow,
+                "Blue" => Color::Blue,
+                "Magenta" => Color::Magenta,
+                "Cyan" => Color::Cyan,
+                "White" => Color::White,
+                s if s.starts_with("rgb(") && s.ends_with(")") => {
+                    let inner = &s[4..s.len()-1];
+                    let parts: Vec<&str> = inner.split(',').collect();
+                    if parts.len() == 3 {
+                        if let (Ok(r), Ok(g), Ok(b)) = (
+                            parts[0].trim().parse::<u8>(),
+                            parts[1].trim().parse::<u8>(),
+                            parts[2].trim().parse::<u8>(),
+                        ) {
+                            Color::Rgb(r, g, b)
+                        } else {
+                            return Err(Error::custom(format!("Invalid RGB color: {}", s)));
+                        }
+                    } else {
+                        return Err(Error::custom(format!("Invalid RGB format: {}", s)));
+                    }
+                }
+                _ => return Err(Error::custom(format!("Unknown color: {}", s))),
+            };
+            colors.push(color);
         }
+        Ok(colors)
     }
 }
-
-impl StyleSet {
-    /// Set the ID and return self for method chaining
-    pub fn with_id(mut self, id: impl Into<String>) -> Self {
-        self.id = id.into();
-        self
-    }
-
-    /// Set the name and return self for method chaining
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
-        self
-    }
-
-    /// Set the description and return self for method chaining
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = description.into();
-        self
-    }
-
-    /// Set the categories and return self for method chaining
-    pub fn with_categories(mut self, categories: Option<Vec<String>>) -> Self {
-        self.categories = categories;
-        self
-    }
-
-    /// Set the tags and return self for method chaining
-    pub fn with_tags(mut self, tags: Option<Vec<String>>) -> Self {
-        self.tags = tags;
-        self
-    }
-
-    /// Set the YAML path and return self for method chaining
-    pub fn with_yaml_path(mut self, yaml_path: Option<PathBuf>) -> Self {
-        self.yaml_path = yaml_path;
-        self
-    }
-
-    /// Set the rules and return self for method chaining
-    pub fn with_rules(mut self, rules: Vec<StyleRule>) -> Self {
-        self.rules = rules;
-        self
-    }
-}
-
-

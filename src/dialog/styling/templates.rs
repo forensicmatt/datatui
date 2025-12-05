@@ -1,8 +1,8 @@
 //! Built-in style templates for common data patterns
 use crate::dialog::styling::style_set::{
-    StyleSet, StyleRule, ApplicationScope, MatchedStyle, ScopeEnum, MergeMode,
-    SchemaHint, ColumnMatcher, DynamicStyle, GradientStyle, GradientScale,
-    CategoricalStyle,
+    StyleSet, StyleRule, MatchedStyle, MergeMode,
+    ApplicationScope, StyleApplication, Condition, ConditionalStyle, StyleLogic,
+    SchemaHint, ColumnMatcher, GradientStyle, GradientScale, CategoricalStyle,
 };
 use crate::dialog::filter_dialog::{FilterExpr, FilterCondition, ColumnFilter, CompareOp};
 use ratatui::style::{Color, Modifier};
@@ -71,36 +71,57 @@ pub fn create_template_styleset(category: TemplateCategory) -> StyleSet {
     }
 }
 
+/// Helper to create a conditional style rule
+fn conditional_rule(
+    name: &str,
+    condition: Condition,
+    scope: ApplicationScope,
+    style: MatchedStyle,
+    priority: i32,
+) -> StyleRule {
+    StyleRule {
+        name: Some(name.to_string()),
+        logic: StyleLogic::Conditional(ConditionalStyle {
+            condition,
+            applications: vec![StyleApplication {
+                scope,
+                style,
+                target_columns: None,
+            }],
+        }),
+        priority,
+        merge_mode: MergeMode::Override,
+    }
+}
+
 /// Create the Error Highlighting template
 fn create_error_template() -> StyleSet {
-    let error_conditions = vec![
+    let error_keywords = vec![
         "error", "fail", "failed", "failure", "exception", "critical",
         "fatal", "crash", "panic", "denied", "rejected", "invalid",
     ];
     
-    let rules: Vec<StyleRule> = error_conditions.iter().map(|keyword| {
-        StyleRule {
-            condition_columns: None, // Check all columns
-            match_expr: FilterExpr::Condition(ColumnFilter {
-                column: "*".to_string(), // Will be evaluated against all columns
-                condition: FilterCondition::Contains {
-                    value: keyword.to_string(),
-                    case_sensitive: false,
-                },
-            }),
-            style: ApplicationScope {
-                scope: ScopeEnum::Row,
-                target_columns: None,
-                style: MatchedStyle {
-                    fg: Some(Color::White),
-                    bg: Some(Color::Rgb(139, 0, 0)), // Dark red
-                    modifiers: Some(vec![Modifier::BOLD]),
-                },
-                dynamic_style: None,
+    let rules: Vec<StyleRule> = error_keywords.iter().map(|keyword| {
+        conditional_rule(
+            &format!("Highlight '{}'", keyword),
+            Condition::Filter {
+                expr: FilterExpr::Condition(ColumnFilter {
+                    column: "*".to_string(),
+                    condition: FilterCondition::Contains {
+                        value: keyword.to_string(),
+                        case_sensitive: false,
+                    },
+                }),
+                columns: None, // Check all columns
             },
-            priority: 10,
-            merge_mode: MergeMode::Override,
-        }
+            ApplicationScope::Row,
+            MatchedStyle {
+                fg: Some(Color::White),
+                bg: Some(Color::Rgb(139, 0, 0)),
+                modifiers: Some(vec![Modifier::BOLD]),
+            },
+            10,
+        )
     }).collect();
     
     StyleSet {
@@ -111,107 +132,103 @@ fn create_error_template() -> StyleSet {
         description: "Highlights rows containing error-related keywords with red background".to_string(),
         yaml_path: None,
         rules,
-        schema_hint: None, // Applies to any dataset
+        schema_hint: None,
     }
 }
 
 /// Create the Status Colors template
 fn create_status_template() -> StyleSet {
+    let status_columns = Some(vec!["*status*".to_string(), "*state*".to_string()]);
+    
     let rules = vec![
         // Success states - green
-        StyleRule {
-            condition_columns: Some(vec!["*status*".to_string(), "*state*".to_string()]),
-            match_expr: FilterExpr::Or(vec![
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Contains { value: "success".to_string(), case_sensitive: false },
-                }),
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Contains { value: "complete".to_string(), case_sensitive: false },
-                }),
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Contains { value: "passed".to_string(), case_sensitive: false },
-                }),
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Contains { value: "active".to_string(), case_sensitive: false },
-                }),
-            ]),
-            style: ApplicationScope {
-                scope: ScopeEnum::Cell,
-                target_columns: None,
-                style: MatchedStyle {
-                    fg: Some(Color::Rgb(0, 200, 0)),
-                    bg: None,
-                    modifiers: Some(vec![Modifier::BOLD]),
-                },
-                dynamic_style: None,
+        conditional_rule(
+            "Success states",
+            Condition::Filter {
+                expr: FilterExpr::Or(vec![
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Contains { value: "success".to_string(), case_sensitive: false },
+                    }),
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Contains { value: "complete".to_string(), case_sensitive: false },
+                    }),
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Contains { value: "passed".to_string(), case_sensitive: false },
+                    }),
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Contains { value: "active".to_string(), case_sensitive: false },
+                    }),
+                ]),
+                columns: status_columns.clone(),
             },
-            priority: 5,
-            merge_mode: MergeMode::Override,
-        },
+            ApplicationScope::Cell,
+            MatchedStyle {
+                fg: Some(Color::Rgb(0, 200, 0)),
+                bg: None,
+                modifiers: Some(vec![Modifier::BOLD]),
+            },
+            5,
+        ),
         // Warning states - yellow
-        StyleRule {
-            condition_columns: Some(vec!["*status*".to_string(), "*state*".to_string()]),
-            match_expr: FilterExpr::Or(vec![
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Contains { value: "warning".to_string(), case_sensitive: false },
-                }),
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Contains { value: "pending".to_string(), case_sensitive: false },
-                }),
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Contains { value: "waiting".to_string(), case_sensitive: false },
-                }),
-            ]),
-            style: ApplicationScope {
-                scope: ScopeEnum::Cell,
-                target_columns: None,
-                style: MatchedStyle {
-                    fg: Some(Color::Rgb(255, 200, 0)),
-                    bg: None,
-                    modifiers: Some(vec![Modifier::BOLD]),
-                },
-                dynamic_style: None,
+        conditional_rule(
+            "Warning states",
+            Condition::Filter {
+                expr: FilterExpr::Or(vec![
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Contains { value: "warning".to_string(), case_sensitive: false },
+                    }),
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Contains { value: "pending".to_string(), case_sensitive: false },
+                    }),
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Contains { value: "waiting".to_string(), case_sensitive: false },
+                    }),
+                ]),
+                columns: status_columns.clone(),
             },
-            priority: 5,
-            merge_mode: MergeMode::Override,
-        },
+            ApplicationScope::Cell,
+            MatchedStyle {
+                fg: Some(Color::Rgb(255, 200, 0)),
+                bg: None,
+                modifiers: Some(vec![Modifier::BOLD]),
+            },
+            5,
+        ),
         // Error states - red
-        StyleRule {
-            condition_columns: Some(vec!["*status*".to_string(), "*state*".to_string()]),
-            match_expr: FilterExpr::Or(vec![
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Contains { value: "error".to_string(), case_sensitive: false },
-                }),
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Contains { value: "failed".to_string(), case_sensitive: false },
-                }),
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Contains { value: "inactive".to_string(), case_sensitive: false },
-                }),
-            ]),
-            style: ApplicationScope {
-                scope: ScopeEnum::Cell,
-                target_columns: None,
-                style: MatchedStyle {
-                    fg: Some(Color::Rgb(255, 80, 80)),
-                    bg: None,
-                    modifiers: Some(vec![Modifier::BOLD]),
-                },
-                dynamic_style: None,
+        conditional_rule(
+            "Error states",
+            Condition::Filter {
+                expr: FilterExpr::Or(vec![
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Contains { value: "error".to_string(), case_sensitive: false },
+                    }),
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Contains { value: "failed".to_string(), case_sensitive: false },
+                    }),
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Contains { value: "inactive".to_string(), case_sensitive: false },
+                    }),
+                ]),
+                columns: status_columns,
             },
-            priority: 5,
-            merge_mode: MergeMode::Override,
-        },
+            ApplicationScope::Cell,
+            MatchedStyle {
+                fg: Some(Color::Rgb(255, 80, 80)),
+                bg: None,
+                modifiers: Some(vec![Modifier::BOLD]),
+            },
+            5,
+        ),
     ];
     
     StyleSet {
@@ -236,43 +253,41 @@ fn create_status_template() -> StyleSet {
 /// Create the Null/Empty Highlighting template
 fn create_null_template() -> StyleSet {
     let rules = vec![
-        StyleRule {
-            condition_columns: None,
-            match_expr: FilterExpr::Or(vec![
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::IsNull,
-                }),
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::IsEmpty,
-                }),
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Equals { value: "null".to_string(), case_sensitive: false },
-                }),
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Equals { value: "none".to_string(), case_sensitive: false },
-                }),
-                FilterExpr::Condition(ColumnFilter {
-                    column: "*".to_string(),
-                    condition: FilterCondition::Equals { value: "n/a".to_string(), case_sensitive: false },
-                }),
-            ]),
-            style: ApplicationScope {
-                scope: ScopeEnum::Cell,
-                target_columns: None,
-                style: MatchedStyle {
-                    fg: Some(Color::DarkGray),
-                    bg: Some(Color::Rgb(40, 40, 40)),
-                    modifiers: Some(vec![Modifier::ITALIC]),
-                },
-                dynamic_style: None,
+        conditional_rule(
+            "Null and empty values",
+            Condition::Filter {
+                expr: FilterExpr::Or(vec![
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::IsNull,
+                    }),
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::IsEmpty,
+                    }),
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Equals { value: "null".to_string(), case_sensitive: false },
+                    }),
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Equals { value: "none".to_string(), case_sensitive: false },
+                    }),
+                    FilterExpr::Condition(ColumnFilter {
+                        column: "*".to_string(),
+                        condition: FilterCondition::Equals { value: "n/a".to_string(), case_sensitive: false },
+                    }),
+                ]),
+                columns: None,
             },
-            priority: 0,
-            merge_mode: MergeMode::Override,
-        },
+            ApplicationScope::Cell,
+            MatchedStyle {
+                fg: Some(Color::DarkGray),
+                bg: Some(Color::Rgb(40, 40, 40)),
+                modifiers: Some(vec![Modifier::ITALIC]),
+            },
+            0,
+        ),
     ];
     
     StyleSet {
@@ -283,81 +298,77 @@ fn create_null_template() -> StyleSet {
         description: "Highlights null, empty, and missing values with gray italic styling".to_string(),
         yaml_path: None,
         rules,
-        schema_hint: None, // Applies to any dataset
+        schema_hint: None,
     }
 }
 
 /// Create the Numeric Visualization template
 fn create_numeric_template() -> StyleSet {
+    let numeric_columns = Some(vec![
+        "*amount*".to_string(), "*price*".to_string(), "*value*".to_string(),
+        "*total*".to_string(), "*sum*".to_string(), "*balance*".to_string(),
+    ]);
+    
     let rules = vec![
         // Negative numbers - red
-        StyleRule {
-            condition_columns: Some(vec![
-                "*amount*".to_string(), "*price*".to_string(), "*value*".to_string(),
-                "*total*".to_string(), "*sum*".to_string(), "*balance*".to_string(),
-            ]),
-            match_expr: FilterExpr::Condition(ColumnFilter {
-                column: "*".to_string(),
-                condition: FilterCondition::LessThan { value: "0".to_string() },
-            }),
-            style: ApplicationScope {
-                scope: ScopeEnum::Cell,
-                target_columns: None,
-                style: MatchedStyle {
-                    fg: Some(Color::Rgb(255, 100, 100)),
-                    bg: None,
-                    modifiers: None,
-                },
-                dynamic_style: None,
+        conditional_rule(
+            "Negative numbers",
+            Condition::Filter {
+                expr: FilterExpr::Condition(ColumnFilter {
+                    column: "*".to_string(),
+                    condition: FilterCondition::LessThan { value: "0".to_string() },
+                }),
+                columns: numeric_columns.clone(),
             },
-            priority: 5,
-            merge_mode: MergeMode::Override,
-        },
+            ApplicationScope::Cell,
+            MatchedStyle {
+                fg: Some(Color::Rgb(255, 100, 100)),
+                bg: None,
+                modifiers: None,
+            },
+            5,
+        ),
         // Zero values - gray
-        StyleRule {
-            condition_columns: Some(vec![
-                "*amount*".to_string(), "*price*".to_string(), "*value*".to_string(),
-                "*total*".to_string(), "*sum*".to_string(), "*count*".to_string(),
-            ]),
-            match_expr: FilterExpr::Condition(ColumnFilter {
-                column: "*".to_string(),
-                condition: FilterCondition::Equals { value: "0".to_string(), case_sensitive: true },
-            }),
-            style: ApplicationScope {
-                scope: ScopeEnum::Cell,
-                target_columns: None,
-                style: MatchedStyle {
-                    fg: Some(Color::DarkGray),
-                    bg: None,
-                    modifiers: None,
-                },
-                dynamic_style: None,
+        conditional_rule(
+            "Zero values",
+            Condition::Filter {
+                expr: FilterExpr::Condition(ColumnFilter {
+                    column: "*".to_string(),
+                    condition: FilterCondition::Equals { value: "0".to_string(), case_sensitive: true },
+                }),
+                columns: Some(vec![
+                    "*amount*".to_string(), "*price*".to_string(), "*value*".to_string(),
+                    "*total*".to_string(), "*sum*".to_string(), "*count*".to_string(),
+                ]),
             },
-            priority: 5,
-            merge_mode: MergeMode::Override,
-        },
+            ApplicationScope::Cell,
+            MatchedStyle {
+                fg: Some(Color::DarkGray),
+                bg: None,
+                modifiers: None,
+            },
+            5,
+        ),
         // Large positive numbers - bold green
-        StyleRule {
-            condition_columns: Some(vec![
-                "*amount*".to_string(), "*price*".to_string(), "*value*".to_string(),
-            ]),
-            match_expr: FilterExpr::Condition(ColumnFilter {
-                column: "*".to_string(),
-                condition: FilterCondition::GreaterThan { value: "1000".to_string() },
-            }),
-            style: ApplicationScope {
-                scope: ScopeEnum::Cell,
-                target_columns: None,
-                style: MatchedStyle {
-                    fg: Some(Color::Rgb(100, 255, 100)),
-                    bg: None,
-                    modifiers: Some(vec![Modifier::BOLD]),
-                },
-                dynamic_style: None,
+        conditional_rule(
+            "Large values (>1000)",
+            Condition::Filter {
+                expr: FilterExpr::Condition(ColumnFilter {
+                    column: "*".to_string(),
+                    condition: FilterCondition::GreaterThan { value: "1000".to_string() },
+                }),
+                columns: Some(vec![
+                    "*amount*".to_string(), "*price*".to_string(), "*value*".to_string(),
+                ]),
             },
-            priority: 6,
-            merge_mode: MergeMode::Override,
-        },
+            ApplicationScope::Cell,
+            MatchedStyle {
+                fg: Some(Color::Rgb(100, 255, 100)),
+                bg: None,
+                modifiers: Some(vec![Modifier::BOLD]),
+            },
+            6,
+        ),
     ];
     
     StyleSet {
@@ -386,70 +397,64 @@ fn create_numeric_template() -> StyleSet {
 fn create_validation_template() -> StyleSet {
     let rules = vec![
         // Email validation - highlight potentially invalid emails
-        StyleRule {
-            condition_columns: Some(vec!["*email*".to_string()]),
-            match_expr: FilterExpr::Condition(ColumnFilter {
-                column: "*".to_string(),
-                condition: FilterCondition::Not(Box::new(
-                    FilterCondition::Regex { 
-                        pattern: r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$".to_string(), 
-                        case_sensitive: false 
-                    }
-                )),
-            }),
-            style: ApplicationScope {
-                scope: ScopeEnum::Cell,
-                target_columns: None,
-                style: MatchedStyle {
-                    fg: Some(Color::Rgb(255, 150, 0)),
-                    bg: None,
-                    modifiers: Some(vec![Modifier::UNDERLINED]),
-                },
-                dynamic_style: None,
+        conditional_rule(
+            "Invalid emails",
+            Condition::Filter {
+                expr: FilterExpr::Condition(ColumnFilter {
+                    column: "*".to_string(),
+                    condition: FilterCondition::Not(Box::new(
+                        FilterCondition::Regex { 
+                            pattern: r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$".to_string(), 
+                            case_sensitive: false 
+                        }
+                    )),
+                }),
+                columns: Some(vec!["*email*".to_string()]),
             },
-            priority: 5,
-            merge_mode: MergeMode::Override,
-        },
+            ApplicationScope::Cell,
+            MatchedStyle {
+                fg: Some(Color::Rgb(255, 150, 0)),
+                bg: None,
+                modifiers: Some(vec![Modifier::UNDERLINED]),
+            },
+            5,
+        ),
         // Short strings that might be truncated or invalid
-        StyleRule {
-            condition_columns: Some(vec!["*name*".to_string(), "*description*".to_string()]),
-            match_expr: FilterExpr::Condition(ColumnFilter {
-                column: "*".to_string(),
-                condition: FilterCondition::StringLength { operator: CompareOp::Lt, length: 3 },
-            }),
-            style: ApplicationScope {
-                scope: ScopeEnum::Cell,
-                target_columns: None,
-                style: MatchedStyle {
-                    fg: Some(Color::Yellow),
-                    bg: None,
-                    modifiers: None,
-                },
-                dynamic_style: None,
+        conditional_rule(
+            "Short strings (<3 chars)",
+            Condition::Filter {
+                expr: FilterExpr::Condition(ColumnFilter {
+                    column: "*".to_string(),
+                    condition: FilterCondition::StringLength { operator: CompareOp::Lt, length: 3 },
+                }),
+                columns: Some(vec!["*name*".to_string(), "*description*".to_string()]),
             },
-            priority: 3,
-            merge_mode: MergeMode::Override,
-        },
+            ApplicationScope::Cell,
+            MatchedStyle {
+                fg: Some(Color::Yellow),
+                bg: None,
+                modifiers: None,
+            },
+            3,
+        ),
         // Very long strings that might indicate data issues
-        StyleRule {
-            condition_columns: None,
-            match_expr: FilterExpr::Condition(ColumnFilter {
-                column: "*".to_string(),
-                condition: FilterCondition::StringLength { operator: CompareOp::Gt, length: 200 },
-            }),
-            style: ApplicationScope {
-                scope: ScopeEnum::Cell,
-                target_columns: None,
-                style: MatchedStyle {
-                    fg: Some(Color::Cyan),
-                    bg: None,
-                    modifiers: Some(vec![Modifier::DIM]),
-                },
-                dynamic_style: None,
+        conditional_rule(
+            "Long strings (>200 chars)",
+            Condition::Filter {
+                expr: FilterExpr::Condition(ColumnFilter {
+                    column: "*".to_string(),
+                    condition: FilterCondition::StringLength { operator: CompareOp::Gt, length: 200 },
+                }),
+                columns: None,
             },
-            priority: 2,
-            merge_mode: MergeMode::Override,
-        },
+            ApplicationScope::Cell,
+            MatchedStyle {
+                fg: Some(Color::Cyan),
+                bg: None,
+                modifiers: Some(vec![Modifier::DIM]),
+            },
+            2,
+        ),
     ];
     
     StyleSet {
@@ -474,38 +479,28 @@ fn create_validation_template() -> StyleSet {
 /// Create the Gradient Heatmap template
 fn create_gradient_template() -> StyleSet {
     let rules = vec![
-        // Gradient style for numeric columns
         StyleRule {
-            condition_columns: Some(vec![
-                "*amount*".to_string(), "*price*".to_string(), "*value*".to_string(),
-                "*total*".to_string(), "*count*".to_string(), "*score*".to_string(),
-                "*percent*".to_string(), "*rate*".to_string(),
-            ]),
-            match_expr: FilterExpr::And(vec![]), // Always matches - gradient applies to all
-            style: ApplicationScope {
-                scope: ScopeEnum::Cell,
-                target_columns: None,
-                style: MatchedStyle {
+            name: Some("Numeric gradient".to_string()),
+            logic: StyleLogic::Gradient(GradientStyle {
+                source_column: "*".to_string(), // Auto-detect numeric columns
+                min_style: MatchedStyle {
                     fg: None,
-                    bg: None,
+                    bg: Some(Color::Rgb(50, 100, 200)), // Blue for low
                     modifiers: None,
                 },
-                dynamic_style: Some(DynamicStyle::Gradient(GradientStyle {
-                    source_column: "*".to_string(), // Use the matched column
-                    min_style: MatchedStyle {
-                        fg: None,
-                        bg: Some(Color::Rgb(50, 100, 200)), // Blue for low values
-                        modifiers: None,
-                    },
-                    max_style: MatchedStyle {
-                        fg: Some(Color::White),
-                        bg: Some(Color::Rgb(200, 50, 50)), // Red for high values
-                        modifiers: Some(vec![Modifier::BOLD]),
-                    },
-                    scale: GradientScale::Linear,
-                    bounds: None, // Auto-detect from data
-                })),
-            },
+                max_style: MatchedStyle {
+                    fg: Some(Color::White),
+                    bg: Some(Color::Rgb(200, 50, 50)), // Red for high
+                    modifiers: Some(vec![Modifier::BOLD]),
+                },
+                scale: GradientScale::Linear,
+                bounds: None, // Auto-detect
+                target_columns: Some(vec![
+                    "*amount*".to_string(), "*price*".to_string(), "*value*".to_string(),
+                    "*total*".to_string(), "*count*".to_string(), "*score*".to_string(),
+                    "*percent*".to_string(), "*rate*".to_string(),
+                ]),
+            }),
             priority: 5,
             merge_mode: MergeMode::Override,
         },
@@ -535,36 +530,26 @@ fn create_gradient_template() -> StyleSet {
 /// Create the Categorical Colors template
 fn create_categorical_template() -> StyleSet {
     let rules = vec![
-        // Categorical style for category columns
         StyleRule {
-            condition_columns: Some(vec![
-                "*category*".to_string(), "*type*".to_string(), "*status*".to_string(),
-                "*group*".to_string(), "*class*".to_string(), "*kind*".to_string(),
-            ]),
-            match_expr: FilterExpr::And(vec![]), // Always matches
-            style: ApplicationScope {
-                scope: ScopeEnum::Cell,
-                target_columns: None,
-                style: MatchedStyle {
-                    fg: None,
-                    bg: None,
-                    modifiers: None,
-                },
-                dynamic_style: Some(DynamicStyle::Categorical(CategoricalStyle {
-                    source_column: "*".to_string(), // Use the matched column
-                    palette: vec![
-                        Color::Rgb(66, 133, 244),   // Blue
-                        Color::Rgb(234, 67, 53),    // Red
-                        Color::Rgb(251, 188, 5),    // Yellow
-                        Color::Rgb(52, 168, 83),    // Green
-                        Color::Rgb(154, 160, 166),  // Gray
-                        Color::Rgb(255, 112, 67),   // Deep Orange
-                        Color::Rgb(156, 39, 176),   // Purple
-                        Color::Rgb(0, 188, 212),    // Cyan
-                    ],
-                    apply_to_fg: true,
-                })),
-            },
+            name: Some("Category colors".to_string()),
+            logic: StyleLogic::Categorical(CategoricalStyle {
+                source_column: "*".to_string(), // Auto-detect category columns
+                palette: vec![
+                    Color::Rgb(66, 133, 244),   // Blue
+                    Color::Rgb(234, 67, 53),    // Red
+                    Color::Rgb(251, 188, 5),    // Yellow
+                    Color::Rgb(52, 168, 83),    // Green
+                    Color::Rgb(154, 160, 166),  // Gray
+                    Color::Rgb(255, 112, 67),   // Deep Orange
+                    Color::Rgb(156, 39, 176),   // Purple
+                    Color::Rgb(0, 188, 212),    // Cyan
+                ],
+                apply_to_fg: true,
+                target_columns: Some(vec![
+                    "*category*".to_string(), "*type*".to_string(), "*status*".to_string(),
+                    "*group*".to_string(), "*class*".to_string(), "*kind*".to_string(),
+                ]),
+            }),
             priority: 5,
             merge_mode: MergeMode::Override,
         },
@@ -597,4 +582,3 @@ pub fn get_all_templates() -> Vec<StyleSet> {
         .map(create_template_styleset)
         .collect()
 }
-

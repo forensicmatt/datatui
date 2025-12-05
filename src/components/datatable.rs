@@ -21,7 +21,7 @@ use ratatui::style::{Modifier, Style};
 use polars::prelude::DataFrame;
 use crate::dialog::find_dialog::{FindOptions, SearchMode};
 use crate::dialog::column_width_dialog::ColumnWidthConfig;
-use crate::dialog::styling::{StyleSet, matches_column, MergeMode, DynamicStyle};
+use crate::dialog::styling::{StyleSet, matches_column, MergeMode, StyleLogic, Condition, ApplicationScope};
 use polars::prelude::{AnyValue};
 use regex::Regex;
 use serde_json::{Value, Number};
@@ -428,7 +428,8 @@ impl DataTable {
         // Collect all gradient source columns that don't have explicit bounds
         for style_set in &self.style_sets {
             for rule in &style_set.rules {
-                if let Some(DynamicStyle::Gradient(gradient)) = &rule.style.dynamic_style {
+                // Check if this is a gradient rule
+                if let StyleLogic::Gradient(gradient) = &rule.logic {
                     // Skip if bounds are already specified
                     if gradient.bounds.is_some() {
                         continue;
@@ -1250,90 +1251,146 @@ impl Component for DataTable {
             all_rules.sort_by_key(|r| r.priority);
             
             for rule in all_rules {
-                // Filter row_data by condition_columns if specified
-                let eval_data: BTreeMap<String, String> = if let Some(ref condition_columns) = rule.condition_columns {
-                    if condition_columns.is_empty() {
-                        row_data.clone()
-                    } else {
-                        row_data.iter()
-                            .filter(|(col_name, _)| matches_column(col_name, condition_columns))
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect()
-                    }
-                } else {
-                    row_data.clone()
-                };
-                
-                // Evaluate the rule
-                if let Ok(matches) = rule.match_expr.evaluate_row(&eval_data) {
-                    if matches {
-                        // Compute style based on dynamic_style or fall back to static style
-                        let compute_style = |_col_name: &str, cell_value: &str| -> ratatui::style::Style {
-                            if let Some(ref dynamic) = rule.style.dynamic_style {
-                                match dynamic {
-                                    DynamicStyle::Static(matched) => matched.to_ratatui_style(),
-                                    DynamicStyle::Gradient(gradient) => {
-                                        // Get the value from the source column
-                                        let value_str = row_data.get(&gradient.source_column)
-                                            .map(|s| s.as_str())
-                                            .unwrap_or(cell_value);
-                                        if let Ok(value) = value_str.parse::<f64>() {
-                                            let (min, max) = gradient.bounds.unwrap_or_else(|| {
-                                                *gradient_bounds.get(&gradient.source_column)
-                                                    .unwrap_or(&(0.0, 1.0))
-                                            });
-                                            let normalized = gradient.normalize(value, min, max);
-                                            gradient.interpolate(normalized).to_ratatui_style()
+                match &rule.logic {
+                    StyleLogic::Conditional(cond) => {
+                        // Extract condition columns and filter expression
+                        let (condition_columns, filter_expr) = match &cond.condition {
+                            Condition::Filter { expr, columns } => (columns.clone(), Some(expr)),
+                            Condition::Regex { pattern, columns } => {
+                                // For regex conditions, we evaluate separately
+                                let re = match Regex::new(pattern) {
+                                    Ok(r) => r,
+                                    Err(_) => continue,
+                                };
+                                // Check if any cell matches the regex
+                                let cols_to_check = columns.as_ref()
+                                    .map(|c| c.iter().filter_map(|cn| {
+                                        if matches_column(cn, &[cn.clone()]) {
+                                            Some(cn.clone())
                                         } else {
-                                            rule.style.style.to_ratatui_style()
+                                            None
+                                        }
+                                    }).collect::<Vec<_>>())
+                                    .unwrap_or_else(|| row_data.keys().cloned().collect());
+                                
+                                let mut regex_matched = false;
+                                for col in &cols_to_check {
+                                    if let Some(val) = row_data.get(col) {
+                                        if re.is_match(val) {
+                                            regex_matched = true;
+                                            break;
                                         }
                                     }
-                                    DynamicStyle::Categorical(categorical) => {
-                                        // Get the value from the source column
-                                        let value_str = row_data.get(&categorical.source_column)
-                                            .map(|s| s.as_str())
-                                            .unwrap_or(cell_value);
-                                        categorical.get_style_for_value(value_str).to_ratatui_style()
-                                    }
                                 }
-                            } else {
-                                rule.style.style.to_ratatui_style()
+                                if !regex_matched {
+                                    continue;
+                                }
+                                (columns.clone(), None)
                             }
                         };
                         
-                        // Determine target columns: use target_columns if set, else condition_columns
-                        let target_cols = rule.style.target_columns.as_ref()
-                            .or(rule.condition_columns.as_ref());
-                        
-                        match rule.style.scope {
-                            crate::dialog::styling::ScopeEnum::Row => {
-                                // For row scope with dynamic styles, compute based on first matching column
-                                let first_col = visible_columns_slice.first().map(|s| s.as_str()).unwrap_or("");
-                                let first_val = row_data.get(first_col).map(|s| s.as_str()).unwrap_or("");
-                                let matched_style = compute_style(first_col, first_val);
-                                row_style = merge_styles(row_style, matched_style, rule.merge_mode);
+                        // If we have a filter expression, evaluate it
+                        if let Some(expr) = filter_expr {
+                            let eval_data: BTreeMap<String, String> = if let Some(ref cols) = condition_columns {
+                                if cols.is_empty() {
+                                    row_data.clone()
+                                } else {
+                                    row_data.iter()
+                                        .filter(|(col_name, _)| matches_column(col_name, cols))
+                                        .map(|(k, v)| (k.clone(), v.clone()))
+                                        .collect()
+                                }
+                            } else {
+                                row_data.clone()
+                            };
+                            
+                            if let Ok(matches) = expr.evaluate_row(&eval_data) {
+                                if !matches {
+                                    continue;
+                                }
+                            } else {
+                                continue;
                             }
-                            crate::dialog::styling::ScopeEnum::Cell => {
-                                // Apply to matching cells (those in target_columns)
-                                if let Some(ref target) = target_cols {
-                                    for (j, col_name) in visible_columns_slice.iter().enumerate() {
-                                        if target.is_empty() || matches_column(col_name, target) {
-                                            let cell_val = row_data.get(col_name).map(|s| s.as_str()).unwrap_or("");
-                                            let matched_style = compute_style(col_name, cell_val);
+                        }
+                        
+                        // Apply all style applications
+                        for app in &cond.applications {
+                            let matched_style = app.style.to_ratatui_style();
+                            let target_cols = app.target_columns.as_ref().or(condition_columns.as_ref());
+                            
+                            match &app.scope {
+                                ApplicationScope::Row => {
+                                    row_style = merge_styles(row_style, matched_style, rule.merge_mode);
+                                }
+                                ApplicationScope::Cell => {
+                                    if let Some(ref target) = target_cols {
+                                        for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                                            if target.is_empty() || matches_column(col_name, target) {
+                                                cell_styles[j] = merge_styles(cell_styles[j], matched_style, rule.merge_mode);
+                                            }
+                                        }
+                                    } else {
+                                        for j in 0..visible_columns_slice.len() {
                                             cell_styles[j] = merge_styles(cell_styles[j], matched_style, rule.merge_mode);
                                         }
                                     }
-                                } else {
-                                    // Apply to all cells if no target_columns
-                                    for (j, col_name) in visible_columns_slice.iter().enumerate() {
-                                        let cell_val = row_data.get(col_name).map(|s| s.as_str()).unwrap_or("");
-                                        let matched_style = compute_style(col_name, cell_val);
+                                }
+                                ApplicationScope::RegexGroup(_) => {
+                                    // RegexGroup styling requires more complex cell rendering
+                                    // For now, treat like Cell scope
+                                    for j in 0..visible_columns_slice.len() {
                                         cell_styles[j] = merge_styles(cell_styles[j], matched_style, rule.merge_mode);
                                     }
                                 }
                             }
-                            crate::dialog::styling::ScopeEnum::Header => {
-                                // Header styling is handled separately during header rendering
+                        }
+                    }
+                    StyleLogic::Gradient(gradient) => {
+                        // Apply gradient to target columns
+                        let target_cols = gradient.target_columns.as_ref();
+                        
+                        for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                            // Check if this column should get gradient styling
+                            let should_apply = match target_cols {
+                                Some(targets) if !targets.is_empty() => matches_column(col_name, targets),
+                                _ => col_name == &gradient.source_column,
+                            };
+                            
+                            if should_apply {
+                                // Get the value from the source column
+                                let value_str = row_data.get(&gradient.source_column)
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("");
+                                if let Ok(value) = value_str.parse::<f64>() {
+                                    let (min, max) = gradient.bounds.unwrap_or_else(|| {
+                                        *gradient_bounds.get(&gradient.source_column)
+                                            .unwrap_or(&(0.0, 1.0))
+                                    });
+                                    let normalized = gradient.normalize(value, min, max);
+                                    let matched_style = gradient.interpolate(normalized).to_ratatui_style();
+                                    cell_styles[j] = merge_styles(cell_styles[j], matched_style, rule.merge_mode);
+                                }
+                            }
+                        }
+                    }
+                    StyleLogic::Categorical(categorical) => {
+                        // Apply categorical styling to target columns
+                        let target_cols = categorical.target_columns.as_ref();
+                        
+                        for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                            // Check if this column should get categorical styling
+                            let should_apply = match target_cols {
+                                Some(targets) if !targets.is_empty() => matches_column(col_name, targets),
+                                _ => col_name == &categorical.source_column,
+                            };
+                            
+                            if should_apply {
+                                // Get the value from the source column
+                                let value_str = row_data.get(&categorical.source_column)
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("");
+                                let matched_style = categorical.get_style_for_value(value_str).to_ratatui_style();
+                                cell_styles[j] = merge_styles(cell_styles[j], matched_style, rule.merge_mode);
                             }
                         }
                     }

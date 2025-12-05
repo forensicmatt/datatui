@@ -7,10 +7,8 @@ use crate::action::Action;
 use crate::config::{Config, Mode};
 use crate::components::Component;
 use crate::components::dialog_layout::split_dialog_area;
-use crate::dialog::styling::style_set::{StyleSet, StyleRule, ScopeEnum};
+use crate::dialog::styling::style_set::{StyleSet, StyleRule, StyleLogic, Condition};
 use crate::dialog::styling::style_rule_editor_dialog::StyleRuleEditorDialog;
-use crate::dialog::styling::color_picker_dialog::color_to_hex_string;
-use crate::dialog::filter_dialog::FilterExpr;
 use ratatui::style::Color;
 use arboard::Clipboard;
 use uuid::Uuid;
@@ -289,37 +287,30 @@ impl StyleSetEditorDialog {
 
     /// Get a summary of a rule for display
     fn get_rule_summary(rule: &StyleRule) -> String {
-        let col_scope = rule.condition_columns.as_ref()
-            .map(|v| v.join(", "))
-            .unwrap_or_else(|| "all".to_string());
+        let name = rule.name.as_ref().map(|n| n.as_str()).unwrap_or("(unnamed)");
         
-        let expr_summary = match &rule.match_expr {
-            FilterExpr::And(children) if children.is_empty() => "match all".to_string(),
-            FilterExpr::And(children) => format!("AND({})", children.len()),
-            FilterExpr::Or(children) => format!("OR({})", children.len()),
-            FilterExpr::Condition(cf) => cf.summary(),
+        let logic_summary = match &rule.logic {
+            StyleLogic::Conditional(cond) => {
+                let cond_str = match &cond.condition {
+                    Condition::Filter { columns, .. } => {
+                        let cols = columns.as_ref().map(|v| v.join(", ")).unwrap_or_else(|| "all".to_string());
+                        format!("Filter[{}]", cols)
+                    }
+                    Condition::Regex { pattern, .. } => format!("Regex({})", pattern),
+                };
+                let app_count = cond.applications.len();
+                let scope_str = if app_count > 0 {
+                    cond.applications[0].scope.display_name()
+                } else {
+                    "?"
+                };
+                format!("{} → {} ({}app)", cond_str, scope_str, app_count)
+            }
+            StyleLogic::Gradient(g) => format!("Gradient({})", g.source_column),
+            StyleLogic::Categorical(c) => format!("Categorical({})", c.source_column),
         };
 
-        let scope = match rule.style.scope {
-            ScopeEnum::Row => "Row",
-            ScopeEnum::Cell => "Cell",
-            ScopeEnum::Header => "Header",
-        };
-
-        let mut style_parts = vec![];
-        if let Some(fg) = rule.style.style.fg {
-            style_parts.push(format!("FG:{}", color_to_hex_string(&fg)));
-        }
-        if let Some(bg) = rule.style.style.bg {
-            style_parts.push(format!("BG:{}", color_to_hex_string(&bg)));
-        }
-        let style_str = if style_parts.is_empty() {
-            "default".to_string()
-        } else {
-            style_parts.join(" ")
-        };
-
-        format!("[{}] {} | {} | {}", col_scope, expr_summary, scope, style_str)
+        format!("{}: {} [p:{}]", name, logic_summary, rule.priority)
     }
 
     /// Build instructions string from configured keybindings
