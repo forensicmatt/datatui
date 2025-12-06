@@ -21,7 +21,8 @@ use ratatui::style::{Modifier, Style};
 use polars::prelude::DataFrame;
 use crate::dialog::find_dialog::{FindOptions, SearchMode};
 use crate::dialog::column_width_dialog::ColumnWidthConfig;
-use crate::dialog::styling::{StyleSet, matches_column, MergeMode, StyleLogic, Condition, ApplicationScope};
+use crate::dialog::styling::{StyleSet, matches_column, MergeMode, StyleLogic, Condition, ApplicationScope, GrepCapture};
+use ratatui::text::{Line, Span};
 use polars::prelude::{AnyValue};
 use regex::Regex;
 use serde_json::{Value, Number};
@@ -80,6 +81,111 @@ fn merge_styles(existing: Option<Style>, new_style: Style, mode: MergeMode) -> O
             }
         }
     }
+}
+
+/// Information about a RegexGroup style to apply to a cell
+#[derive(Debug, Clone)]
+struct RegexGroupStyle {
+    /// The regex pattern to match
+    pattern: String,
+    /// Which capture group to style
+    capture: GrepCapture,
+    /// The style to apply to the matched group
+    style: Style,
+}
+
+/// Apply RegexGroup styles to a cell string, returning a Line with styled spans
+fn apply_regex_group_styles(
+    cell_str: &str, 
+    regex_styles: &[RegexGroupStyle],
+    base_style: Option<Style>,
+) -> Line<'static> {
+    if regex_styles.is_empty() {
+        // No regex group styles, return plain text with base style
+        let span = if let Some(style) = base_style {
+            Span::styled(cell_str.to_string(), style)
+        } else {
+            Span::raw(cell_str.to_string())
+        };
+        return Line::from(span);
+    }
+    
+    // Collect all match ranges and their styles
+    let mut styled_ranges: Vec<(usize, usize, Style)> = Vec::new();
+    
+    for regex_style in regex_styles {
+        let re = match Regex::new(&regex_style.pattern) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        
+        for caps in re.captures_iter(cell_str) {
+            // Get the capture group based on the GrepCapture specification
+            let capture_match = match &regex_style.capture {
+                GrepCapture::Group(n) => caps.get(*n),
+                GrepCapture::Name(name) => caps.name(name),
+            };
+            
+            if let Some(m) = capture_match {
+                styled_ranges.push((m.start(), m.end(), regex_style.style));
+            }
+        }
+    }
+    
+    if styled_ranges.is_empty() {
+        // No matches, return plain text
+        let span = if let Some(style) = base_style {
+            Span::styled(cell_str.to_string(), style)
+        } else {
+            Span::raw(cell_str.to_string())
+        };
+        return Line::from(span);
+    }
+    
+    // Sort ranges by start position
+    styled_ranges.sort_by_key(|(start, _, _)| *start);
+    
+    // Remove overlapping ranges (keep first one for overlaps)
+    let mut non_overlapping: Vec<(usize, usize, Style)> = Vec::new();
+    for (start, end, style) in styled_ranges {
+        if non_overlapping.is_empty() || start >= non_overlapping.last().unwrap().1 {
+            non_overlapping.push((start, end, style));
+        }
+    }
+    
+    // Build spans
+    let mut spans = Vec::new();
+    let mut last_end = 0;
+    
+    for (start, end, style) in non_overlapping {
+        // Add unstyled text before this match
+        if start > last_end {
+            let before = &cell_str[last_end..start];
+            let span = if let Some(base) = base_style {
+                Span::styled(before.to_string(), base)
+            } else {
+                Span::raw(before.to_string())
+            };
+            spans.push(span);
+        }
+        
+        // Add styled match
+        spans.push(Span::styled(cell_str[start..end].to_string(), style));
+        last_end = end;
+    }
+    
+    // Add remaining text after last match
+    if last_end < cell_str.len() {
+        let after = &cell_str[last_end..];
+        let span = if let Some(base) = base_style {
+            Span::styled(after.to_string(), base)
+        } else {
+            Span::raw(after.to_string())
+        };
+        spans.push(span);
+    }
+    
+    Line::from(spans)
 }
 
 
@@ -1243,6 +1349,8 @@ impl Component for DataTable {
             // Evaluate all style rules and collect matched styles
             let mut row_style: Option<ratatui::style::Style> = None;
             let mut cell_styles: Vec<Option<ratatui::style::Style>> = vec![None; visible_columns_slice.len()];
+            // Track RegexGroup styles per column (pattern, capture, style)
+            let mut cell_regex_styles: Vec<Vec<RegexGroupStyle>> = vec![Vec::new(); visible_columns_slice.len()];
             
             // Collect and sort rules by priority
             let mut all_rules: Vec<_> = self.style_sets.iter()
@@ -1335,11 +1443,24 @@ impl Component for DataTable {
                                         }
                                     }
                                 }
-                                ApplicationScope::RegexGroup(_) => {
-                                    // RegexGroup styling requires more complex cell rendering
-                                    // For now, treat like Cell scope
-                                    for j in 0..visible_columns_slice.len() {
-                                        cell_styles[j] = merge_styles(cell_styles[j], matched_style, rule.merge_mode);
+                                ApplicationScope::RegexGroup(capture) => {
+                                    // RegexGroup styling - collect info for per-character styling
+                                    // Only applies to Regex conditions
+                                    if let Condition::Regex { pattern, columns } = &cond.condition {
+                                        let target_cols = target_cols.or(columns.as_ref());
+                                        for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                                            let should_apply = match target_cols {
+                                                Some(ref targets) if !targets.is_empty() => matches_column(col_name, targets),
+                                                _ => true,
+                                            };
+                                            if should_apply {
+                                                cell_regex_styles[j].push(RegexGroupStyle {
+                                                    pattern: pattern.clone(),
+                                                    capture: capture.clone(),
+                                                    style: matched_style,
+                                                });
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1402,23 +1523,44 @@ impl Component for DataTable {
                 let col_idx = col_start + j;
                 let value = &row[j];
                 let cell_str = anyvalue_to_display_string(value);
-                let mut cell = Cell::from(cell_str);
                 
-                // Apply cell-specific style if set
-                if let Some(ref cell_style) = cell_styles[j] {
-                    cell = cell.style(*cell_style);
-                } else if row_style.is_none() {
-                    // Only apply default cell style when no row style is set
-                    // This allows matched row styles to show through without being
-                    // overridden by the default table_cell style
-                    cell = cell.style(self.style.table_cell);
-                }
+                // Check if this cell has RegexGroup styles to apply
+                let cell = if !cell_regex_styles[j].is_empty() {
+                    // Apply RegexGroup styling with spans
+                    let base_style = cell_styles[j].or_else(|| {
+                        if row_style.is_none() {
+                            Some(self.style.table_cell)
+                        } else {
+                            None
+                        }
+                    });
+                    let styled_line = apply_regex_group_styles(&cell_str, &cell_regex_styles[j], base_style);
+                    Cell::from(styled_line)
+                } else {
+                    // Normal cell styling
+                    let mut cell = Cell::from(cell_str);
+                    
+                    // Apply cell-specific style if set
+                    if let Some(ref cell_style) = cell_styles[j] {
+                        cell = cell.style(*cell_style);
+                    } else if row_style.is_none() {
+                        // Only apply default cell style when no row style is set
+                        // This allows matched row styles to show through without being
+                        // overridden by the default table_cell style
+                        cell = cell.style(self.style.table_cell);
+                    }
+                    cell
+                };
                 
-                // Selected cell style overrides
+                // Selected cell style overrides - for RegexGroup cells we need special handling
                 if global_row == self.selection.row && col_idx == self.selection.col {
-                    cell = cell.style(selected_cell_style);
+                    // For the selected cell, override with selected style
+                    let value = &row[j];
+                    let cell_str = anyvalue_to_display_string(value);
+                    Cell::from(cell_str).style(selected_cell_style)
+                } else {
+                    cell
                 }
-                cell
             }).collect();
             
             // Create row with applied styles

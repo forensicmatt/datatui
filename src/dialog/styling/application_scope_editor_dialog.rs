@@ -8,7 +8,7 @@ use crate::config::{Config, Mode};
 use crate::components::Component;
 use crate::components::dialog_layout::split_dialog_area;
 use crate::dialog::styling::style_set::{
-    ApplicationScope, StyleApplication, MatchedStyle,
+    ApplicationScope, StyleApplication, MatchedStyle, GrepCapture,
 };
 use crate::dialog::styling::color_picker_dialog::{ColorPickerDialog, color_to_hex_string};
 use ratatui::style::{Color, Modifier};
@@ -30,11 +30,22 @@ pub const AVAILABLE_MODIFIERS: &[(Modifier, &str)] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplicationScopeField {
     Scope,
+    CaptureGroupType,
+    CaptureGroupValue,
     Foreground,
     Background,
     Modifiers,
     TargetColumns,
     Buttons,
+}
+
+/// Type of capture group specification
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureGroupType {
+    /// Use a numbered group (0 = entire match)
+    Number,
+    /// Use a named group
+    Name,
 }
 
 /// Dialog mode
@@ -59,6 +70,14 @@ pub struct ApplicationScopeEditorDialog {
     /// Target columns (comma-separated)
     pub target_columns: String,
     
+    // Capture group settings (for RegexGroup scope)
+    /// Type of capture group (number or name)
+    pub capture_group_type: CaptureGroupType,
+    /// Capture group value (number as string or name)
+    pub capture_group_value: String,
+    /// Cursor position within capture_group_value field
+    pub capture_group_cursor: usize,
+    
     // UI state
     pub focus_field: ApplicationScopeField,
     pub selected_modifier_index: usize,
@@ -76,12 +95,24 @@ impl ApplicationScopeEditorDialog {
             .map(|v| v.join(", "))
             .unwrap_or_default();
         
+        // Extract capture group settings from RegexGroup scope
+        let (capture_group_type, capture_group_value) = match &app.scope {
+            ApplicationScope::RegexGroup(capture) => match capture {
+                GrepCapture::Group(n) => (CaptureGroupType::Number, n.to_string()),
+                GrepCapture::Name(name) => (CaptureGroupType::Name, name.clone()),
+            },
+            _ => (CaptureGroupType::Number, "0".to_string()),
+        };
+        
         Self {
             scope: app.scope,
             fg: app.style.fg,
             bg: app.style.bg,
             modifiers: app.style.modifiers.unwrap_or_default(),
             target_columns,
+            capture_group_type,
+            capture_group_value,
+            capture_group_cursor: 0,
             focus_field: ApplicationScopeField::Scope,
             selected_modifier_index: 0,
             selected_button: 0,
@@ -105,8 +136,25 @@ impl ApplicationScopeEditorDialog {
             Some(self.target_columns.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
         };
         
+        // Build the scope with capture group settings for RegexGroup
+        let scope = match &self.scope {
+            ApplicationScope::RegexGroup(_) => {
+                let capture = match self.capture_group_type {
+                    CaptureGroupType::Number => {
+                        let group_num = self.capture_group_value.parse::<usize>().unwrap_or(0);
+                        GrepCapture::Group(group_num)
+                    }
+                    CaptureGroupType::Name => {
+                        GrepCapture::Name(self.capture_group_value.clone())
+                    }
+                };
+                ApplicationScope::RegexGroup(capture)
+            }
+            other => other.clone(),
+        };
+        
         StyleApplication {
-            scope: self.scope.clone(),
+            scope,
             style: MatchedStyle {
                 fg: self.fg,
                 bg: self.bg,
@@ -129,6 +177,13 @@ impl ApplicationScopeEditorDialog {
     fn build_instructions_from_config(&self) -> String {
         let field_hint = match self.focus_field {
             ApplicationScopeField::Scope => "Space: Toggle scope (Row/Cell/RegexGroup)",
+            ApplicationScopeField::CaptureGroupType => "Space: Toggle (Number/Name)",
+            ApplicationScopeField::CaptureGroupValue => {
+                match self.capture_group_type {
+                    CaptureGroupType::Number => "Type group number (0 = entire match)",
+                    CaptureGroupType::Name => "Type capture group name",
+                }
+            }
             ApplicationScopeField::Foreground => "Enter/F: Pick color, Del: Clear",
             ApplicationScopeField::Background => "Enter/B: Pick color, Del: Clear",
             ApplicationScopeField::Modifiers => "Space: Toggle modifier, ←/→: Select",
@@ -155,6 +210,31 @@ impl ApplicationScopeEditorDialog {
         if is_focused && !text.is_empty() {
             let cursor_x = x + self.cursor_position as u16;
             let char_at_cursor = text.chars().nth(self.cursor_position).unwrap_or(' ');
+            let cursor_style = self.config.style_config.cursor.block();
+            buf.set_string(cursor_x, y, char_at_cursor.to_string(), cursor_style);
+        } else if is_focused && text.is_empty() {
+            // Show cursor at start for empty field
+            let cursor_style = self.config.style_config.cursor.block();
+            buf.set_string(x, y, " ", cursor_style);
+        }
+    }
+    
+    /// Helper to render the capture group value field with its own cursor
+    fn render_capture_group_field(&self, buf: &mut Buffer, x: u16, y: u16, text: &str, placeholder: &str, is_focused: bool) {
+        let display_text = if text.is_empty() { placeholder } else { text };
+        let text_style = if is_focused {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+        
+        // Draw the text
+        buf.set_string(x, y, display_text, text_style);
+        
+        // If focused and not showing placeholder, draw block cursor
+        if is_focused && !text.is_empty() {
+            let cursor_x = x + self.capture_group_cursor as u16;
+            let char_at_cursor = text.chars().nth(self.capture_group_cursor).unwrap_or(' ');
             let cursor_style = self.config.style_config.cursor.block();
             buf.set_string(cursor_x, y, char_at_cursor.to_string(), cursor_style);
         } else if is_focused && text.is_empty() {
@@ -232,7 +312,46 @@ impl ApplicationScopeEditorDialog {
         if self.focus_field == ApplicationScopeField::Scope {
             buf.set_string(value_x + scope_display.len() as u16, y, " ▶", Style::default().fg(Color::Yellow));
         }
-        y += 2;
+        y += 1;
+
+        // Capture Group fields (only visible when scope is RegexGroup)
+        if matches!(self.scope, ApplicationScope::RegexGroup(_)) {
+            // Capture Group Type (toggle)
+            self.render_label(buf, start_x + 2, y, "Group Type:", ApplicationScopeField::CaptureGroupType);
+            let type_indicator = if self.focus_field == ApplicationScopeField::CaptureGroupType { "◀ " } else { "  " };
+            let type_display = match self.capture_group_type {
+                CaptureGroupType::Number => format!("{}Number", type_indicator),
+                CaptureGroupType::Name => format!("{}Name", type_indicator),
+            };
+            let type_style = if self.focus_field == ApplicationScopeField::CaptureGroupType {
+                Style::default().fg(Color::White)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+            buf.set_string(value_x, y, &type_display, type_style);
+            if self.focus_field == ApplicationScopeField::CaptureGroupType {
+                buf.set_string(value_x + type_display.len() as u16, y, " ▶", Style::default().fg(Color::Yellow));
+            }
+            y += 1;
+
+            // Capture Group Value (text input)
+            let value_label = match self.capture_group_type {
+                CaptureGroupType::Number => "Group #:",
+                CaptureGroupType::Name => "Group Name:",
+            };
+            self.render_label(buf, start_x + 2, y, value_label, ApplicationScopeField::CaptureGroupValue);
+            let placeholder = match self.capture_group_type {
+                CaptureGroupType::Number => "0",
+                CaptureGroupType::Name => "(group name)",
+            };
+            self.render_capture_group_field(
+                buf, value_x, y,
+                &self.capture_group_value, placeholder,
+                self.focus_field == ApplicationScopeField::CaptureGroupValue
+            );
+            y += 1;
+        }
+        y += 1;
 
         // Foreground color
         self.render_label(buf, start_x, y, "Foreground:", ApplicationScopeField::Foreground);
@@ -410,6 +529,20 @@ impl ApplicationScopeEditorDialog {
                     self.scope = self.scope.next();
                     return None;
                 }
+                ApplicationScopeField::CaptureGroupType => {
+                    // Toggle between Number and Name
+                    self.capture_group_type = match self.capture_group_type {
+                        CaptureGroupType::Number => CaptureGroupType::Name,
+                        CaptureGroupType::Name => CaptureGroupType::Number,
+                    };
+                    // Reset value when switching types
+                    self.capture_group_value = match self.capture_group_type {
+                        CaptureGroupType::Number => "0".to_string(),
+                        CaptureGroupType::Name => String::new(),
+                    };
+                    self.capture_group_cursor = self.capture_group_value.chars().count();
+                    return None;
+                }
                 ApplicationScopeField::Modifiers => {
                     if let Some((modifier, _)) = AVAILABLE_MODIFIERS.get(self.selected_modifier_index) {
                         self.toggle_modifier(*modifier);
@@ -451,9 +584,18 @@ impl ApplicationScopeEditorDialog {
                     return None;
                 }
                 Action::Up => {
+                    let is_regex_group = matches!(self.scope, ApplicationScope::RegexGroup(_));
                     self.focus_field = match self.focus_field {
                         ApplicationScopeField::Scope => ApplicationScopeField::Buttons,
-                        ApplicationScopeField::Foreground => ApplicationScopeField::Scope,
+                        ApplicationScopeField::CaptureGroupType => ApplicationScopeField::Scope,
+                        ApplicationScopeField::CaptureGroupValue => ApplicationScopeField::CaptureGroupType,
+                        ApplicationScopeField::Foreground => {
+                            if is_regex_group {
+                                ApplicationScopeField::CaptureGroupValue
+                            } else {
+                                ApplicationScopeField::Scope
+                            }
+                        }
                         ApplicationScopeField::Background => ApplicationScopeField::Foreground,
                         ApplicationScopeField::Modifiers => ApplicationScopeField::Background,
                         ApplicationScopeField::TargetColumns => ApplicationScopeField::Modifiers,
@@ -462,8 +604,17 @@ impl ApplicationScopeEditorDialog {
                     return None;
                 }
                 Action::Down => {
+                    let is_regex_group = matches!(self.scope, ApplicationScope::RegexGroup(_));
                     self.focus_field = match self.focus_field {
-                        ApplicationScopeField::Scope => ApplicationScopeField::Foreground,
+                        ApplicationScopeField::Scope => {
+                            if is_regex_group {
+                                ApplicationScopeField::CaptureGroupType
+                            } else {
+                                ApplicationScopeField::Foreground
+                            }
+                        }
+                        ApplicationScopeField::CaptureGroupType => ApplicationScopeField::CaptureGroupValue,
+                        ApplicationScopeField::CaptureGroupValue => ApplicationScopeField::Foreground,
                         ApplicationScopeField::Foreground => ApplicationScopeField::Background,
                         ApplicationScopeField::Background => ApplicationScopeField::Modifiers,
                         ApplicationScopeField::Modifiers => ApplicationScopeField::TargetColumns,
@@ -487,6 +638,11 @@ impl ApplicationScopeEditorDialog {
                                 self.cursor_position -= 1;
                             }
                         }
+                        ApplicationScopeField::CaptureGroupValue => {
+                            if self.capture_group_cursor > 0 {
+                                self.capture_group_cursor -= 1;
+                            }
+                        }
                         _ => {}
                     }
                     return None;
@@ -506,6 +662,11 @@ impl ApplicationScopeEditorDialog {
                                 self.cursor_position += 1;
                             }
                         }
+                        ApplicationScopeField::CaptureGroupValue => {
+                            if self.capture_group_cursor < self.capture_group_value.chars().count() {
+                                self.capture_group_cursor += 1;
+                            }
+                        }
                         _ => {}
                     }
                     return None;
@@ -517,6 +678,12 @@ impl ApplicationScopeEditorDialog {
                             .chain(chars[self.cursor_position..].iter())
                             .collect();
                         self.cursor_position -= 1;
+                    } else if self.focus_field == ApplicationScopeField::CaptureGroupValue && self.capture_group_cursor > 0 {
+                        let chars: Vec<char> = self.capture_group_value.chars().collect();
+                        self.capture_group_value = chars[..self.capture_group_cursor - 1].iter()
+                            .chain(chars[self.capture_group_cursor..].iter())
+                            .collect();
+                        self.capture_group_cursor -= 1;
                     }
                     return None;
                 }
@@ -548,6 +715,15 @@ impl ApplicationScopeEditorDialog {
                     }
                     return None;
                 }
+                ApplicationScopeField::CaptureGroupValue => {
+                    let chars: Vec<char> = self.capture_group_value.chars().collect();
+                    if self.capture_group_cursor < chars.len() {
+                        self.capture_group_value = chars[..self.capture_group_cursor].iter()
+                            .chain(chars[self.capture_group_cursor + 1..].iter())
+                            .collect();
+                    }
+                    return None;
+                }
                 _ => {}
             }
         }
@@ -560,6 +736,22 @@ impl ApplicationScopeEditorDialog {
                 let after: String = chars[self.cursor_position..].iter().collect();
                 self.target_columns = format!("{}{}{}", before, c, after);
                 self.cursor_position += 1;
+                return None;
+            }
+        }
+        
+        // Text input for capture group value
+        if self.focus_field == ApplicationScopeField::CaptureGroupValue {
+            if let KeyCode::Char(c) = key.code {
+                // For number type, only allow digits
+                if self.capture_group_type == CaptureGroupType::Number && !c.is_ascii_digit() {
+                    return None;
+                }
+                let chars: Vec<char> = self.capture_group_value.chars().collect();
+                let before: String = chars[..self.capture_group_cursor].iter().collect();
+                let after: String = chars[self.capture_group_cursor..].iter().collect();
+                self.capture_group_value = format!("{}{}{}", before, c, after);
+                self.capture_group_cursor += 1;
                 return None;
             }
         }

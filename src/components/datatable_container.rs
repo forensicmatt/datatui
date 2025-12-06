@@ -93,6 +93,7 @@ use serde_json::Value;
 use polars::prelude::{NamedFrom, IntoColumn};
 use crate::dialog::OperationOptions;
 use crate::dialog::{ClusterAlgorithm, KmeansOptions, DbscanOptions};
+use crate::dialog::styling::{StyleLogic, Condition, ApplicationScope, GrepCapture, matches_column};
 // use crate::dialog::DataExportDialog; // moved to DataTabManagerDialog
 use linfa::prelude::{Fit, Predict};
 use linfa_reduction::Pca as LinfaPca;
@@ -984,12 +985,79 @@ impl DataTableContainer {
     /// Get the value of the currently selected cell with highlighted search matches.
     ///
     /// Returns a Line with spans, highlighting any matches of the current search pattern.
+    /// Also applies RegexGroup styles from style rules.
     pub fn selected_cell_value_with_highlighting(&self) -> Result<Line<'static>> {
         let cell_value = self.selected_cell_json_value()?;
         let cell_value = match cell_value {
             Value::String(s) => s,
             v => v.to_string(),
         };
+        
+        // Collect styled ranges (start, end, style) for regex group styling
+        let mut styled_ranges: Vec<(usize, usize, ratatui::style::Style)> = Vec::new();
+        
+        // Get current column name for column matching
+        let current_col_name = self.selected_column_name().unwrap_or_default();
+        
+        // Collect RegexGroup styles from style rules
+        for style_set in &self.datatable.style_sets {
+            for rule in &style_set.rules {
+                if let StyleLogic::Conditional(cond) = &rule.logic {
+                    // Only process Regex conditions
+                    if let Condition::Regex { pattern, columns } = &cond.condition {
+                        // Check if current column matches condition columns
+                        let column_matches = columns.as_ref()
+                            .map(|cols| cols.is_empty() || matches_column(&current_col_name, cols))
+                            .unwrap_or(true);
+                        
+                        if !column_matches {
+                            continue;
+                        }
+                        
+                        // Check if the regex matches the cell value
+                        let re = match Regex::new(pattern) {
+                            Ok(r) => r,
+                            Err(_) => continue,
+                        };
+                        
+                        if !re.is_match(&cell_value) {
+                            continue;
+                        }
+                        
+                        // Apply RegexGroup style applications
+                        for app in &cond.applications {
+                            if let ApplicationScope::RegexGroup(capture) = &app.scope {
+                                // Check if target columns include current column
+                                let target_matches = app.target_columns.as_ref()
+                                    .or(columns.as_ref())
+                                    .map(|cols| cols.is_empty() || matches_column(&current_col_name, cols))
+                                    .unwrap_or(true);
+                                
+                                if !target_matches {
+                                    continue;
+                                }
+                                
+                                let style = app.style.to_ratatui_style();
+                                
+                                // Find all capture group matches and collect their ranges
+                                for caps in re.captures_iter(&cell_value) {
+                                    let capture_match = match capture {
+                                        GrepCapture::Group(n) => caps.get(*n),
+                                        GrepCapture::Name(name) => caps.name(name),
+                                    };
+                                    
+                                    if let Some(m) = capture_match {
+                                        styled_ranges.push((m.start(), m.end(), style));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // If we have search highlighting, that takes precedence
         if let (Some(pattern), Some(search_mode), Some(options)) = 
             (&self.current_search_pattern, &self.current_search_mode, &self.current_search_options)
             && !pattern.is_empty() {
@@ -1088,6 +1156,43 @@ impl DataTableContainer {
                     }
                 }
             }
+        
+        // Apply RegexGroup styles if present
+        if !styled_ranges.is_empty() {
+            // Sort ranges by start position
+            styled_ranges.sort_by_key(|(start, _, _)| *start);
+            
+            // Remove overlapping ranges (keep first one for overlaps)
+            let mut non_overlapping: Vec<(usize, usize, ratatui::style::Style)> = Vec::new();
+            for (start, end, style) in styled_ranges {
+                if non_overlapping.is_empty() || start >= non_overlapping.last().unwrap().1 {
+                    non_overlapping.push((start, end, style));
+                }
+            }
+            
+            // Build spans
+            let mut spans = Vec::new();
+            let mut last_end = 0;
+            
+            for (start, end, style) in non_overlapping {
+                // Add unstyled text before this match
+                if start > last_end {
+                    spans.push(Span::raw(cell_value[last_end..start].to_string()));
+                }
+                
+                // Add styled match
+                spans.push(Span::styled(cell_value[start..end].to_string(), style));
+                last_end = end;
+            }
+            
+            // Add remaining text after last match
+            if last_end < cell_value.len() {
+                spans.push(Span::raw(cell_value[last_end..].to_string()));
+            }
+            
+            return Ok(Line::from(spans));
+        }
+        
         // No highlighting needed
         Ok(Line::from(cell_value))
     }
