@@ -45,6 +45,83 @@ pub enum FilterCondition {
     StringLength { operator: CompareOp, length: usize },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ConditionKind {
+    Contains,
+    Regex,
+    Equals,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThan,
+    LessThanOrEqual,
+    IsEmpty,
+    IsNull,
+    IsNotEmpty,
+    NotNull,
+    Between,
+    InList,
+    CompareColumns,
+    StringLength,
+}
+
+const CONDITION_CYCLE: [ConditionKind; 15] = [
+    ConditionKind::Contains,
+    ConditionKind::StringLength,
+    ConditionKind::CompareColumns,
+    ConditionKind::InList,
+    ConditionKind::Between,
+    ConditionKind::Regex,
+    ConditionKind::Equals,
+    ConditionKind::GreaterThan,
+    ConditionKind::GreaterThanOrEqual,
+    ConditionKind::LessThan,
+    ConditionKind::LessThanOrEqual,
+    ConditionKind::IsEmpty,
+    ConditionKind::IsNull,
+    ConditionKind::IsNotEmpty,
+    ConditionKind::NotNull,
+];
+
+fn condition_cycle() -> &'static [ConditionKind] {
+    &CONDITION_CYCLE
+}
+
+fn condition_kind(condition: Option<&FilterCondition>) -> ConditionKind {
+    match condition {
+        Some(FilterCondition::Contains { .. }) | Some(FilterCondition::Not(_)) | None => ConditionKind::Contains,
+        Some(FilterCondition::Regex { .. }) => ConditionKind::Regex,
+        Some(FilterCondition::Equals { .. }) => ConditionKind::Equals,
+        Some(FilterCondition::GreaterThan { .. }) => ConditionKind::GreaterThan,
+        Some(FilterCondition::LessThan { .. }) => ConditionKind::LessThan,
+        Some(FilterCondition::GreaterThanOrEqual { .. }) => ConditionKind::GreaterThanOrEqual,
+        Some(FilterCondition::LessThanOrEqual { .. }) => ConditionKind::LessThanOrEqual,
+        Some(FilterCondition::IsEmpty) => ConditionKind::IsEmpty,
+        Some(FilterCondition::IsNotEmpty) => ConditionKind::IsNotEmpty,
+        Some(FilterCondition::NotNull) => ConditionKind::NotNull,
+        Some(FilterCondition::IsNull) => ConditionKind::IsNull,
+        Some(FilterCondition::Between { .. }) => ConditionKind::Between,
+        Some(FilterCondition::InList { .. }) => ConditionKind::InList,
+        Some(FilterCondition::CompareColumns { .. }) => ConditionKind::CompareColumns,
+        Some(FilterCondition::StringLength { .. }) => ConditionKind::StringLength,
+    }
+}
+
+fn next_kind(kind: ConditionKind) -> ConditionKind {
+    let cycle = condition_cycle();
+    let idx = cycle.iter().position(|k| *k == kind).unwrap_or(0);
+    cycle[(idx + 1) % cycle.len()]
+}
+
+fn prev_kind(kind: ConditionKind) -> ConditionKind {
+    let cycle = condition_cycle();
+    let idx = cycle.iter().position(|k| *k == kind).unwrap_or(0);
+    if idx == 0 {
+        cycle[cycle.len() - 1]
+    } else {
+        cycle[idx - 1]
+    }
+}
+
 /// Comparison operator for advanced conditions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompareOp {
@@ -150,6 +227,26 @@ impl FilterDialog {
     /// Set free column mode, allowing the user to type a JMESPath query for the column
     pub fn set_free_column(&mut self, enabled: bool) {
         self.enabled_free_column = enabled;
+    }
+
+    fn condition_from_kind(&self, kind: ConditionKind) -> FilterCondition {
+        match kind {
+            ConditionKind::Contains => FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive },
+            ConditionKind::Regex => FilterCondition::Regex { pattern: self.add_value.clone(), case_sensitive: self.add_case_sensitive },
+            ConditionKind::Equals => FilterCondition::Equals { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive },
+            ConditionKind::GreaterThan => FilterCondition::GreaterThan { value: self.add_value.clone() },
+            ConditionKind::GreaterThanOrEqual => FilterCondition::GreaterThanOrEqual { value: self.add_value.clone() },
+            ConditionKind::LessThan => FilterCondition::LessThan { value: self.add_value.clone() },
+            ConditionKind::LessThanOrEqual => FilterCondition::LessThanOrEqual { value: self.add_value.clone() },
+            ConditionKind::IsEmpty => FilterCondition::IsEmpty,
+            ConditionKind::IsNull => FilterCondition::IsNull,
+            ConditionKind::IsNotEmpty => FilterCondition::IsNotEmpty,
+            ConditionKind::NotNull => FilterCondition::NotNull,
+            ConditionKind::Between => FilterCondition::Between { min: String::new(), max: String::new(), inclusive: true },
+            ConditionKind::InList => FilterCondition::InList { values: vec![], case_sensitive: self.add_case_sensitive },
+            ConditionKind::CompareColumns => FilterCondition::CompareColumns { other_column: String::new(), operator: CompareOp::Eq },
+            ConditionKind::StringLength => FilterCondition::StringLength { operator: CompareOp::Eq, length: 0 },
+        }
     }
 
     /// Get a reference to the root filter expression
@@ -593,24 +690,9 @@ impl FilterDialog {
                                     }
                                 }
                                 FilterDialogField::Type => {
-                                    self.add_condition = match self.add_condition {
-                                        Some(FilterCondition::Contains { .. }) | None => Some(FilterCondition::NotNull),
-                                        Some(FilterCondition::NotNull) => Some(FilterCondition::IsNotEmpty),
-                                        Some(FilterCondition::IsNotEmpty) => Some(FilterCondition::IsNull),
-                                        Some(FilterCondition::IsNull) => Some(FilterCondition::IsEmpty),
-                                        Some(FilterCondition::IsEmpty) => Some(FilterCondition::LessThanOrEqual { value: self.add_value.clone() }),
-                                        Some(FilterCondition::LessThanOrEqual { .. }) => Some(FilterCondition::LessThan { value: self.add_value.clone() }),
-                                        Some(FilterCondition::LessThan { .. }) => Some(FilterCondition::GreaterThanOrEqual { value: self.add_value.clone() }),
-                                        Some(FilterCondition::GreaterThanOrEqual { .. }) => Some(FilterCondition::GreaterThan { value: self.add_value.clone() }),
-                                        Some(FilterCondition::GreaterThan { .. }) => Some(FilterCondition::Equals { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::Equals { .. }) => Some(FilterCondition::Regex { pattern: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::Regex { .. }) => Some(FilterCondition::Between { min: String::new(), max: String::new(), inclusive: true }),
-                                        Some(FilterCondition::Between { .. }) => Some(FilterCondition::InList { values: vec![], case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::InList { .. }) => Some(FilterCondition::CompareColumns { other_column: String::new(), operator: CompareOp::Eq }),
-                                        Some(FilterCondition::CompareColumns { .. }) => Some(FilterCondition::StringLength { operator: CompareOp::Eq, length: 0 }),
-                                        Some(FilterCondition::StringLength { .. }) => Some(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::Not(_)) => Some(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                    };
+                                    let current = condition_kind(self.add_condition.as_ref());
+                                    let previous = prev_kind(current);
+                                    self.add_condition = Some(self.condition_from_kind(previous));
                                 }
                                 FilterDialogField::CaseSensitive => {
                                     self.add_case_sensitive = !self.add_case_sensitive;
@@ -647,24 +729,9 @@ impl FilterDialog {
                                     }
                                 }
                                 FilterDialogField::Type => {
-                                    self.add_condition = match self.add_condition {
-                                        Some(FilterCondition::Contains { .. }) => Some(FilterCondition::Regex { pattern: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::Regex { .. }) => Some(FilterCondition::Equals { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::Equals { .. }) => Some(FilterCondition::GreaterThan { value: self.add_value.clone() }),
-                                        Some(FilterCondition::GreaterThan { .. }) => Some(FilterCondition::GreaterThanOrEqual { value: self.add_value.clone() }),
-                                        Some(FilterCondition::GreaterThanOrEqual { .. }) => Some(FilterCondition::LessThan { value: self.add_value.clone() }),
-                                        Some(FilterCondition::LessThan { .. }) => Some(FilterCondition::LessThanOrEqual { value: self.add_value.clone() }),
-                                        Some(FilterCondition::LessThanOrEqual { .. }) => Some(FilterCondition::IsEmpty),
-                                        Some(FilterCondition::IsEmpty) => Some(FilterCondition::IsNull),
-                                        Some(FilterCondition::IsNull) => Some(FilterCondition::IsNotEmpty),
-                                        Some(FilterCondition::IsNotEmpty) => Some(FilterCondition::NotNull),
-                                        Some(FilterCondition::NotNull) => Some(FilterCondition::Between { min: String::new(), max: String::new(), inclusive: true }),
-                                        Some(FilterCondition::Between { .. }) => Some(FilterCondition::InList { values: vec![], case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::InList { .. }) => Some(FilterCondition::CompareColumns { other_column: String::new(), operator: CompareOp::Eq }),
-                                        Some(FilterCondition::CompareColumns { .. }) => Some(FilterCondition::StringLength { operator: CompareOp::Eq, length: 0 }),
-                                        Some(FilterCondition::StringLength { .. }) | None => Some(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                        Some(FilterCondition::Not(_)) => Some(FilterCondition::Contains { value: self.add_value.clone(), case_sensitive: self.add_case_sensitive }),
-                                    };
+                                    let current = condition_kind(self.add_condition.as_ref());
+                                    let next = next_kind(current);
+                                    self.add_condition = Some(self.condition_from_kind(next));
                                 }
                                 FilterDialogField::CaseSensitive => {
                                     self.add_case_sensitive = !self.add_case_sensitive;
@@ -1586,6 +1653,39 @@ impl ColumnFilter {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn forward_and_backward_are_inverses() {
+        for kind in condition_cycle() {
+            let next = next_kind(*kind);
+            let back = prev_kind(next);
+            assert_eq!(*kind, back);
+
+            let prev = prev_kind(*kind);
+            let forward = next_kind(prev);
+            assert_eq!(*kind, forward);
+        }
+    }
+
+    #[test]
+    fn full_cycle_visits_each_kind_once() {
+        let mut seen = HashSet::new();
+        let mut current = condition_cycle()[0];
+
+        for _ in 0..condition_cycle().len() {
+            assert!(seen.insert(current));
+            current = next_kind(current);
+        }
+
+        assert_eq!(current, condition_cycle()[0]);
+        assert_eq!(seen.len(), condition_cycle().len());
     }
 }
 
