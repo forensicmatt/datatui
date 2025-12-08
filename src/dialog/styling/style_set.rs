@@ -11,11 +11,13 @@ use crate::dialog::filter_dialog::FilterExpr;
 /// Style to apply when a rule matches
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatchedStyle {
-    #[serde(with = "color_serde", skip_serializing_if = "Option::is_none")]
+    // `default` ensures missing fields deserialize to None when using the custom
+    // serde helpers, avoiding “missing field” errors for sparse style mappings.
+    #[serde(default, with = "color_serde", skip_serializing_if = "Option::is_none")]
     pub fg: Option<Color>,
-    #[serde(with = "color_serde", skip_serializing_if = "Option::is_none")]
+    #[serde(default, with = "color_serde", skip_serializing_if = "Option::is_none")]
     pub bg: Option<Color>,
-    #[serde(with = "modifier_serde", skip_serializing_if = "Option::is_none")]
+    #[serde(default, with = "modifier_serde", skip_serializing_if = "Option::is_none")]
     pub modifiers: Option<Vec<Modifier>>,
 }
 
@@ -94,6 +96,15 @@ impl ApplicationScope {
             Self::Row => Self::Cell,
             Self::Cell => Self::RegexGroup(GrepCapture::default()),
             Self::RegexGroup(_) => Self::Row,
+        }
+    }
+    
+    /// Get the previous scope in the cycle (for UI toggling)
+    pub fn prev(&self) -> Self {
+        match self {
+            Self::Row => Self::RegexGroup(GrepCapture::default()),
+            Self::Cell => Self::Row,
+            Self::RegexGroup(_) => Self::Cell,
         }
     }
     

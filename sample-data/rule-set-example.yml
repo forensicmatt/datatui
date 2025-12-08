@@ -1,0 +1,42 @@
+id: 72fcd924-38df-4965-8014-1cdc0e4f13c3
+name: Style Set Name
+categories:
+- Rockstar
+tags:
+- Test
+description: A test template
+rules:
+- name: Rule1
+  logic: !Conditional
+    condition: !Filter
+      expr: !And
+      - !Condition
+        column: boardgame
+        condition: !Contains
+          value: oo
+          case_sensitive: false
+    applications:
+    - scope: Row
+      style:
+        fg: Yellow
+  priority: 0
+  merge_mode: Override
+- name: oo Rule
+  logic: !Conditional
+    condition: !Filter
+      expr: !And
+      - !Condition
+        column: boardgame
+        condition: !Contains
+          value: oo
+          case_sensitive: false
+      columns:
+      - boardgame
+    applications:
+    - scope: Cell
+      style:
+        bg: Red
+        modifiers:
+        - Bold
+  priority: 0
+  merge_mode: Additive

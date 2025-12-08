@@ -1304,6 +1304,22 @@ impl Component for DataTable {
             visible_rows.push(row);
         }
 
+        // Determine if any rules need full row (all columns) data for evaluation
+        let has_row_scope_rules = self.style_sets.iter().any(|ss| {
+            ss.rules.iter().any(|r| match &r.logic {
+                StyleLogic::Conditional(cond) => cond
+                    .applications
+                    .iter()
+                    .any(|a| matches!(a.scope, ApplicationScope::Row)),
+                _ => false,
+            })
+        });
+        let all_columns: Vec<String> = if has_row_scope_rules {
+            df.get_column_names().iter().map(|s| s.to_string()).collect()
+        } else {
+            Vec::new()
+        };
+
         // Header with sort indicators
         let header = Row::new(
             visible_columns_slice
@@ -1345,6 +1361,28 @@ impl Component for DataTable {
                 let cell_str = anyvalue_to_display_string(value);
                 row_data.insert(col_name.clone(), cell_str);
             }
+
+            // When row-scoped rules exist, build a full row map including non-visible columns
+            let full_row_data = if has_row_scope_rules {
+                let mut data = BTreeMap::new();
+                for col_name in &all_columns {
+                    if let Some(val) = row_data.get(col_name) {
+                        data.insert(col_name.clone(), val.clone());
+                    } else {
+                        let any_val = df
+                            .column(col_name)
+                            .ok()
+                            .and_then(|s| s.get(global_row).ok())
+                            .unwrap_or(AnyValue::Null);
+                        data.insert(col_name.clone(), anyvalue_to_display_string(&any_val));
+                    }
+                }
+                Some(data)
+            } else {
+                None
+            };
+
+            let row_data_for_eval = full_row_data.as_ref().unwrap_or(&row_data);
             
             // Evaluate all style rules and collect matched styles
             let mut row_style: Option<ratatui::style::Style> = None;
@@ -1379,11 +1417,11 @@ impl Component for DataTable {
                                             None
                                         }
                                     }).collect::<Vec<_>>())
-                                    .unwrap_or_else(|| row_data.keys().cloned().collect());
+                                    .unwrap_or_else(|| row_data_for_eval.keys().cloned().collect());
                                 
                                 let mut regex_matched = false;
                                 for col in &cols_to_check {
-                                    if let Some(val) = row_data.get(col) {
+                                    if let Some(val) = row_data_for_eval.get(col) {
                                         if re.is_match(val) {
                                             regex_matched = true;
                                             break;
@@ -1401,15 +1439,15 @@ impl Component for DataTable {
                         if let Some(expr) = filter_expr {
                             let eval_data: BTreeMap<String, String> = if let Some(ref cols) = condition_columns {
                                 if cols.is_empty() {
-                                    row_data.clone()
+                                    row_data_for_eval.clone()
                                 } else {
-                                    row_data.iter()
+                                    row_data_for_eval.iter()
                                         .filter(|(col_name, _)| matches_column(col_name, cols))
                                         .map(|(k, v)| (k.clone(), v.clone()))
                                         .collect()
                                 }
                             } else {
-                                row_data.clone()
+                                row_data_for_eval.clone()
                             };
                             
                             if let Ok(matches) = expr.evaluate_row(&eval_data) {
@@ -1479,7 +1517,7 @@ impl Component for DataTable {
                             
                             if should_apply {
                                 // Get the value from the source column
-                                let value_str = row_data.get(&gradient.source_column)
+                                let value_str = row_data_for_eval.get(&gradient.source_column)
                                     .map(|s| s.as_str())
                                     .unwrap_or("");
                                 if let Ok(value) = value_str.parse::<f64>() {
@@ -1507,7 +1545,7 @@ impl Component for DataTable {
                             
                             if should_apply {
                                 // Get the value from the source column
-                                let value_str = row_data.get(&categorical.source_column)
+                                let value_str = row_data_for_eval.get(&categorical.source_column)
                                     .map(|s| s.as_str())
                                     .unwrap_or("");
                                 let matched_style = categorical.get_style_for_value(value_str).to_ratatui_style();

@@ -648,10 +648,12 @@ impl StyleRuleEditorDialog {
                 }
                 Action::Up => {
                     self.focus_field = self.prev_field();
+                    self.cursor_position = 0;
                     return None;
                 }
                 Action::Down => {
                     self.focus_field = self.next_field();
+                    self.cursor_position = 0;
                     return None;
                 }
                 Action::Left => {

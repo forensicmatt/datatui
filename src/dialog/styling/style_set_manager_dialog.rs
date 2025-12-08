@@ -620,17 +620,37 @@ impl StyleSetManagerDialog {
                                 self.mode = StyleSetManagerDialogMode::List;
                             }
                             FileBrowserMode::Load => {
-                                // Import style set from file/folder
+                                // Import style set from file/folder, enable, and focus it in the table
+                                let mut imported_ids: Vec<String> = Vec::new();
+
                                 if path.is_file() {
-                                    if let Err(e) = self.style_set_manager.load_from_file(&path) {
-                                        error!("Failed to import style set: {}", e);
+                                    match self.style_set_manager.load_from_file(&path) {
+                                        Ok(id) => imported_ids.push(id),
+                                        Err(e) => error!("Failed to import style set: {}", e),
                                     }
                                 } else if path.is_dir() {
-                                    if let Err(e) = self.style_set_manager.load_from_folder(&path) {
-                                        error!("Failed to load style sets from folder: {}", e);
+                                    match self.style_set_manager.load_from_folder(&path) {
+                                        Ok(ids) => imported_ids = ids,
+                                        Err(e) => error!("Failed to load style sets from folder: {}", e),
                                     }
                                 }
+
+                                for id in &imported_ids {
+                                    self.style_set_manager.enable_style_set(id);
+                                }
+
                                 self.rebuild_category_tree();
+
+                                if let Some(first_id) = imported_ids.first() {
+                                    if let Some(idx) = self
+                                        .get_filtered_sets()
+                                        .iter()
+                                        .position(|(id, _, _)| id == first_id)
+                                    {
+                                        self.selected_table_index = idx;
+                                    }
+                                }
+
                                 self.mode = StyleSetManagerDialogMode::List;
                             }
                         }

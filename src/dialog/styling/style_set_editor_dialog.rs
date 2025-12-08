@@ -654,6 +654,14 @@ impl StyleSetEditorDialog {
                     if self.is_text_field() && self.cursor_position > 0 {
                         self.cursor_position -= 1;
                         self.clear_selection();
+                    } else if self.focus_field == StyleSetEditorField::Rules && !self.style_set.rules.is_empty() {
+                        // Rotate scope backwards for the selected rule
+                        let rule = &mut self.style_set.rules[self.selected_rule_index];
+                        if let StyleLogic::Conditional(cond) = &mut rule.logic {
+                            if let Some(app) = cond.applications.first_mut() {
+                                app.scope = app.scope.prev();
+                            }
+                        }
                     }
                     return None;
                 }
@@ -663,6 +671,14 @@ impl StyleSetEditorDialog {
                         if self.cursor_position < len {
                             self.cursor_position += 1;
                             self.clear_selection();
+                        }
+                    } else if self.focus_field == StyleSetEditorField::Rules && !self.style_set.rules.is_empty() {
+                        // Rotate scope forwards for the selected rule
+                        let rule = &mut self.style_set.rules[self.selected_rule_index];
+                        if let StyleLogic::Conditional(cond) = &mut rule.logic {
+                            if let Some(app) = cond.applications.first_mut() {
+                                app.scope = app.scope.next();
+                            }
                         }
                     }
                     return None;

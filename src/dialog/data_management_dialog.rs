@@ -1964,21 +1964,28 @@ impl Component for DataManagementDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use crate::dialog::csv_options_dialog::CsvImportOptions;
+
+    fn make_text_import_config_with_temp_file() -> DataImportConfig {
+        let temp_dir = std::env::temp_dir().join(format!("datatui_tests_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).expect("should create temp test dir");
+
+        let csv_path = temp_dir.join("pokemon_data.csv");
+        let csv_content = "Name,Type,HP\nBulbasaur,Grass,45\nCharmander,Fire,39\n";
+        std::fs::write(&csv_path, csv_content).expect("should write temp csv");
+
+        DataImportConfig::Text(crate::data_import_types::TextImportConfig {
+            file_path: csv_path,
+            options: CsvImportOptions::default(),
+            additional_paths: Vec::new(),
+            merge: false,
+        })
+    }
 
     #[test]
     fn test_load_dataframes_text_config() {
-        // Create a test DataSource with Text import config
-        let csv_options = CsvImportOptions::default();
-        let text_config = crate::data_import_types::TextImportConfig {
-            file_path: PathBuf::from("examples/pokemon_data.csv"),
-            options: csv_options,
-            additional_paths: Vec::new(),
-            merge: false,
-        };
-        
-        let data_source = DataSource::from_import_config(0, &DataImportConfig::Text(text_config));
+        let text_config = make_text_import_config_with_temp_file();
+        let data_source = DataSource::from_import_config(0, &text_config);
         
         // Test that load_dataframes returns a Result
         let result = data_source.load_dataframes();
@@ -1998,17 +2005,8 @@ mod tests {
     fn test_load_all_pending_datasets() {
         let mut dialog = DataManagementDialog::new();
         
-        // Create a test DataSource with Text import config
-        let csv_options = CsvImportOptions::default();
-        let text_config = crate::data_import_types::TextImportConfig {
-            file_path: PathBuf::from("examples/pokemon_data.csv"),
-            options: csv_options,
-            additional_paths: Vec::new(),
-            merge: false,
-        };
-        
         // Add the data source
-        dialog.add_data_source(DataImportConfig::Text(text_config));
+        dialog.add_data_source(make_text_import_config_with_temp_file());
         
         // Load all pending datasets
         let result = dialog.load_all_pending_datasets();
@@ -2028,17 +2026,8 @@ mod tests {
     fn test_dataset_alias_functionality() {
         let mut dialog = DataManagementDialog::new();
         
-        // Create a test DataSource with Text import config
-        let csv_options = CsvImportOptions::default();
-        let text_config = crate::data_import_types::TextImportConfig {
-            file_path: PathBuf::from("examples/pokemon_data.csv"),
-            options: csv_options,
-            additional_paths: Vec::new(),
-            merge: false,
-        };
-        
         // Add the data source
-        dialog.add_data_source(DataImportConfig::Text(text_config));
+        dialog.add_data_source(make_text_import_config_with_temp_file());
         
         // Get the dataset ID first to avoid borrowing conflicts
         let dataset_id = dialog.data_sources[0].datasets[0].id.clone();

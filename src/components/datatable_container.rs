@@ -25,10 +25,10 @@
 //! Typically used as the main data viewing component in a TUI application. Instantiate with a `DataTable` and a `StyleConfig`, then integrate into your application's component tree.
 //!
 //! ```rust
-//! use tdv::components::datatable::DataTable;
-//! use tdv::components::datatable_container::DataTableContainer;
-//! use tdv::style::StyleConfig;
-//! use tdv::dataframe::manager::ManagedDataFrame;
+//! use datatui::components::datatable::DataTable;
+//! use datatui::components::datatable_container::DataTableContainer;
+//! use datatui::style::StyleConfig;
+//! use datatui::dataframe::manager::ManagedDataFrame;
 //! use polars::prelude::*;
 //! 
 //! // Create a sample DataFrame
