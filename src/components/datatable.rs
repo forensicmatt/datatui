@@ -17,7 +17,7 @@ use ratatui::widgets::{Table, Row, Cell, Block, Borders};
 use ratatui::prelude::{Frame, Rect, Size};
 use ratatui::layout::Constraint;
 use tokio::sync::mpsc::UnboundedSender;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Modifier, Style, Color};
 use polars::prelude::DataFrame;
 use crate::dialog::find_dialog::{FindOptions, SearchMode};
 use crate::dialog::column_width_dialog::ColumnWidthConfig;
@@ -81,6 +81,35 @@ fn merge_styles(existing: Option<Style>, new_style: Style, mode: MergeMode) -> O
             }
         }
     }
+}
+
+fn color_to_rgb(color: Color) -> (u8, u8, u8) {
+    match color {
+        Color::Black => (0, 0, 0),
+        Color::Red => (255, 0, 0),
+        Color::Green => (0, 255, 0),
+        Color::Yellow => (255, 255, 0),
+        Color::Blue => (0, 0, 255),
+        Color::Magenta => (255, 0, 255),
+        Color::Cyan => (0, 255, 255),
+        Color::Gray => (128, 128, 128),
+        Color::DarkGray => (64, 64, 64),
+        Color::LightRed => (255, 102, 102),
+        Color::LightGreen => (102, 255, 102),
+        Color::LightYellow => (255, 255, 102),
+        Color::LightBlue => (102, 102, 255),
+        Color::LightMagenta => (255, 102, 255),
+        Color::LightCyan => (102, 255, 255),
+        Color::White => (255, 255, 255),
+        Color::Rgb(r, g, b) => (r, g, b),
+        Color::Indexed(i) => (i, i, i),
+        Color::Reset => (0, 0, 0),
+    }
+}
+
+fn invert_color(color: Color) -> Color {
+    let (r, g, b) = color_to_rgb(color);
+    Color::Rgb(255 - r, 255 - g, 255 - b)
 }
 
 /// Information about a RegexGroup style to apply to a cell
@@ -1342,10 +1371,11 @@ impl Component for DataTable {
                     Cell::from(label).style(self.style.table_header)
                 })
         );
-        let selected_cell_style = Style::default()
-            .fg(ratatui::style::Color::Black)
-            .bg(ratatui::style::Color::Yellow)
-            .add_modifier(Modifier::BOLD | Modifier::REVERSED | Modifier::UNDERLINED);
+
+        // let selected_cell_style = Style::default()
+        //     .fg(ratatui::style::Color::Black)
+        //     .bg(ratatui::style::Color::Yellow)
+        //     .add_modifier(Modifier::BOLD | Modifier::REVERSED | Modifier::UNDERLINED);
     
         // Pre-compute gradient bounds for columns that need it
         let gradient_bounds: BTreeMap<String, (f64, f64)> = self.compute_gradient_bounds(df, &visible_columns_slice);
@@ -1385,7 +1415,8 @@ impl Component for DataTable {
             let row_data_for_eval = full_row_data.as_ref().unwrap_or(&row_data);
             
             // Evaluate all style rules and collect matched styles
-            let mut row_style: Option<ratatui::style::Style> = None;
+            let default_row_selection_style = self.style.selected_row.clone();
+            let mut row_style: Option<Style> = None;
             let mut cell_styles: Vec<Option<ratatui::style::Style>> = vec![None; visible_columns_slice.len()];
             // Track RegexGroup styles per column (pattern, capture, style)
             let mut cell_regex_styles: Vec<Vec<RegexGroupStyle>> = vec![Vec::new(); visible_columns_slice.len()];
@@ -1572,7 +1603,11 @@ impl Component for DataTable {
                             None
                         }
                     });
-                    let styled_line = apply_regex_group_styles(&cell_str, &cell_regex_styles[j], base_style);
+                    let styled_line = apply_regex_group_styles(
+                        &cell_str,
+                        &cell_regex_styles[j],
+                        base_style
+                    );
                     Cell::from(styled_line)
                 } else {
                     // Normal cell styling
@@ -1595,6 +1630,21 @@ impl Component for DataTable {
                     // For the selected cell, override with selected style
                     let value = &row[j];
                     let cell_str = anyvalue_to_display_string(value);
+                    let mut selected_cell_style = default_row_selection_style.clone();
+
+                    if !selected_cell_style.add_modifier.contains(Modifier::UNDERLINED) {
+                        selected_cell_style = selected_cell_style.add_modifier(Modifier::UNDERLINED);
+                    }
+                    if let Some(fg) = selected_cell_style.fg {
+                        if Some(fg) != default_row_selection_style.fg {
+                            selected_cell_style.fg = Some(invert_color(fg));
+                        }
+                    }
+                    if let Some(bg) = selected_cell_style.bg {
+                        if Some(bg) != default_row_selection_style.bg {
+                            selected_cell_style.bg = Some(invert_color(bg));
+                        }
+                    }
                     Cell::from(cell_str).style(selected_cell_style)
                 } else {
                     cell
@@ -1619,6 +1669,7 @@ impl Component for DataTable {
             }
             r
         }).collect();
+
         let widths = col_widths
             .iter()
             .enumerate()
