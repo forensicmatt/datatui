@@ -20,6 +20,7 @@ use tracing::error;
 
 /// Filter condition for a column
 #[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(schemars::JsonSchema))]
 pub enum FilterCondition {
     Contains { value: String, case_sensitive: bool },
     Regex { pattern: String, case_sensitive: bool },
@@ -124,6 +125,7 @@ fn prev_kind(kind: ConditionKind) -> ConditionKind {
 
 /// Comparison operator for advanced conditions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(schemars::JsonSchema))]
 pub enum CompareOp {
     Eq,
     Ne,
@@ -135,6 +137,7 @@ pub enum CompareOp {
 
 /// Filter applied to a column
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(schemars::JsonSchema))]
 pub struct ColumnFilter {
     pub column: String,
     pub condition: FilterCondition,
@@ -142,6 +145,7 @@ pub struct ColumnFilter {
 
 /// Recursive filter expression: single condition or AND/OR group
 #[derive(Debug, Clone, PartialEq, Eq, Display, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(schemars::JsonSchema))]
 pub enum FilterExpr {
     Condition(ColumnFilter),
     And(Vec<FilterExpr>),

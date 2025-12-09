@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use ratatui::style::{Color, Modifier};
 use crate::dialog::filter_dialog::FilterExpr;
+#[cfg(feature = "json_schema")]
+use schemars::JsonSchema;
 
 // =============================================================================
 // Core Style Types
@@ -10,14 +12,18 @@ use crate::dialog::filter_dialog::FilterExpr;
 
 /// Style to apply when a rule matches
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub struct MatchedStyle {
     // `default` ensures missing fields deserialize to None when using the custom
     // serde helpers, avoiding “missing field” errors for sparse style mappings.
     #[serde(default, with = "color_serde", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json_schema", schemars(with = "Option<schema_types::ColorString>"))]
     pub fg: Option<Color>,
     #[serde(default, with = "color_serde", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json_schema", schemars(with = "Option<schema_types::ColorString>"))]
     pub bg: Option<Color>,
     #[serde(default, with = "modifier_serde", skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json_schema", schemars(with = "Option<Vec<schema_types::ModifierString>>"))]
     pub modifiers: Option<Vec<Modifier>>,
 }
 
@@ -55,6 +61,7 @@ impl MatchedStyle {
 
 /// Identifies which part of a regex match to style
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub enum GrepCapture {
     /// Apply style to the section of text that matches this named capture group
     Name(String),
@@ -74,6 +81,7 @@ impl Default for GrepCapture {
 
 /// Defines where a style should be applied
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub enum ApplicationScope {
     /// Apply style to the entire row
     Row,
@@ -124,6 +132,7 @@ impl ApplicationScope {
 
 /// Combines a scope with a style
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub struct StyleApplication {
     /// Where to apply the style
     #[serde(default)]
@@ -152,6 +161,7 @@ impl Default for StyleApplication {
 
 /// Defines when a style should be applied
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub enum Condition {
     /// Match based on a filter expression (complex conditions)
     Filter {
@@ -188,6 +198,7 @@ impl Default for Condition {
 
 /// A condition with one or more style applications
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub struct ConditionalStyle {
     /// The condition that must match
     pub condition: Condition,
@@ -211,6 +222,7 @@ impl Default for ConditionalStyle {
 
 /// Scale type for gradient interpolation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub enum GradientScale {
     #[default]
     Linear,
@@ -238,6 +250,7 @@ impl GradientScale {
 
 /// Gradient style for numeric data visualization
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub struct GradientStyle {
     /// Column to read numeric values from
     pub source_column: String,
@@ -337,11 +350,13 @@ fn interpolate_color(c1: Color, c2: Color, t: f64) -> Color {
 
 /// Categorical style for auto-assigning colors to unique values
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub struct CategoricalStyle {
     /// Column to read category values from
     pub source_column: String,
     /// Color palette to cycle through
     #[serde(with = "color_vec_serde")]
+    #[cfg_attr(feature = "json_schema", schemars(with = "Vec<schema_types::ColorString>"))]
     pub palette: Vec<Color>,
     /// Apply to foreground (true) or background (false)
     #[serde(default = "default_true")]
@@ -398,6 +413,7 @@ impl CategoricalStyle {
 
 /// The main logic type for a style rule
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub enum StyleLogic {
     /// Condition-based styling with one or more style applications
     Conditional(ConditionalStyle),
@@ -429,6 +445,7 @@ impl StyleLogic {
 
 /// How to combine styles when multiple rules match
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub enum MergeMode {
     /// Replace previous style completely (default)
     #[default]
@@ -445,6 +462,7 @@ pub enum MergeMode {
 
 /// A single styling rule
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub struct StyleRule {
     /// Optional name for the rule
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -526,6 +544,7 @@ impl StyleRule {
 
 /// Expected data type for column matching
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub enum ExpectedType {
     #[default]
     Any,
@@ -537,6 +556,7 @@ pub enum ExpectedType {
 
 /// Column matcher for schema hints
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub enum ColumnMatcher {
     ExactName(String),
     Pattern(String),
@@ -563,6 +583,7 @@ impl ColumnMatcher {
 
 /// Schema hint for auto-detection of matching datasets
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub struct SchemaHint {
     #[serde(default)]
     pub required_columns: Vec<ColumnMatcher>,
@@ -641,6 +662,7 @@ impl SchemaHint {
 
 /// A collection of style rules with metadata
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json_schema", derive(JsonSchema))]
 pub struct StyleSet {
     pub id: String,
     pub name: String,
@@ -735,6 +757,32 @@ pub fn matches_column(column: &str, patterns: &[String]) -> bool {
 // =============================================================================
 // Serde Modules for Color and Modifier
 // =============================================================================
+
+// =============================================================================
+// JSON Schema helper types for Color/Modifier string forms
+// =============================================================================
+#[cfg(feature = "json_schema")]
+mod schema_types {
+    use schemars::JsonSchema;
+
+    // Regex patterns accepted by our serde converters
+    pub const COLOR_PATTERN: &str = r"^(Reset|Black|Red|Green|Yellow|Blue|Magenta|Cyan|White|Gray|DarkGray|LightRed|LightGreen|LightYellow|LightBlue|LightMagenta|LightCyan|rgb\(\d{1,3},\d{1,3},\d{1,3}\)|indexed\(\d+\))$";
+    pub const MODIFIER_PATTERN: &str = r"^(Bold|Dim|Italic|Underlined|SlowBlink|RapidBlink|Reversed|Hidden|CrossedOut)$";
+
+    #[derive(JsonSchema)]
+    #[schemars(transparent)]
+    pub struct ColorString(
+        #[schemars(regex = "COLOR_PATTERN", description = "Color string (named, rgb(r,g,b), or indexed(n)")]
+        pub String,
+    );
+
+    #[derive(JsonSchema)]
+    #[schemars(transparent)]
+    pub struct ModifierString(
+        #[schemars(regex = "MODIFIER_PATTERN", description = "Text style modifier")]
+        pub String,
+    );
+}
 
 mod color_serde {
     use serde::{Deserialize, Deserializer, Serializer};
