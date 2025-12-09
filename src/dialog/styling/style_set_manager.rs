@@ -69,8 +69,21 @@ impl StyleSetManager {
     /// Load a single style set from a YAML file
     pub fn load_from_file(&mut self, file_path: &Path) -> Result<String> {
         let content = fs::read_to_string(file_path)?;
-        let style_set: StyleSet = serde_yaml::from_str(&content)
-            .map_err(|e| color_eyre::eyre::eyre!("Failed to parse YAML: {}", e))?;
+        // First try direct YAML deserialization (supports legacy `!Variant` tags).
+        // If that fails, fall back to YAML Value -> JSON Value -> StyleSet to accept
+        // tag-free, externally tagged maps (e.g., `logic: { Conditional: {...} }`).
+        let style_set: StyleSet = match serde_yaml::from_str(&content) {
+            Ok(s) => s,
+            Err(e) => {
+                // Fallback path
+                let yaml_val: serde_yaml::Value = serde_yaml::from_str(&content)
+                    .map_err(|e2| color_eyre::eyre::eyre!("Failed to parse YAML: {}", e2))?;
+                let json_val = serde_json::to_value(yaml_val)
+                    .map_err(|e2| color_eyre::eyre::eyre!("Failed to convert YAML to JSON value: {}", e2))?;
+                serde_json::from_value(json_val)
+                    .map_err(|e2| color_eyre::eyre::eyre!("Failed to parse StyleSet from JSON value (original YAML parse error: {e}): {e2}"))?
+            }
+        };
         
         // Use name as identifier, or file name if name is empty
         let identifier = if style_set.name.is_empty() {
@@ -93,8 +106,11 @@ impl StyleSetManager {
             fs::create_dir_all(parent)?;
         }
 
-        let yaml = serde_yaml::to_string(style_set)
-            .map_err(|e| color_eyre::eyre::eyre!("Failed to serialize to YAML: {}", e))?;
+        // Serialize without YAML enum tags by round-tripping through JSON value
+        let json_value = serde_json::to_value(style_set)
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to serialize StyleSet to JSON value: {}", e))?;
+        let yaml = serde_yaml::to_string(&json_value)
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to serialize JSON value to YAML: {}", e))?;
         
         fs::write(file_path, yaml)?;
         Ok(())
