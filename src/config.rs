@@ -44,6 +44,12 @@ pub enum Mode {
     TableExport,
     KeybindingsDialog,
     LlmClientDialog,
+    StyleSetManagerDialog,
+    StyleRuleEditorDialog,
+    StyleSetBrowserDialog,
+    StyleSetEditorDialog,
+    ApplicationScopeEditorDialog,
+    ColorPickerDialog,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");
@@ -322,6 +328,7 @@ impl Config {
             Action::PrevTab => "Prev Tab",
             Action::NextTab => "Next Tab",
             Action::SyncTabs => "Sync Tabs",
+            Action::OpenStyleSetManagerDialog => "Manage Style Sets",
             
             // Dialog actions
             Action::DeleteSelectedSource => "Delete Source",
@@ -453,6 +460,45 @@ impl Config {
             Action::Suspend => "Suspend",
             Action::Help => "Help",
             Action::DialogClose => "Close",
+
+            // StyleSetManagerDialog actions
+            Action::OpenStyleSetBrowserDialog => "Open Style Set Browser",
+            Action::AddStyleSet => "Add Style Set",
+            Action::RemoveStyleSet => "Remove Style Set",
+            Action::ImportStyleSet => "Import Style Set",
+            Action::ExportStyleSet => "Export Style Set",
+            Action::DisableStyleSet => "Toggle Style Set",
+            Action::OpenStyleRuleEditorDialog => "Open Style Rule Editor",
+            Action::ToggleCategoryPanel => "Toggle Categories",
+            Action::FocusCategoryTree => "Focus Categories",
+            Action::FocusStyleSetTable => "Focus Table",
+            Action::EditStyleSet => "Edit Style Set",
+            
+            // StyleSetEditorDialog actions
+            Action::OpenStyleSetEditorDialog => "Open Style Set Editor",
+            Action::CloseStyleSetEditorDialog => "Close Editor",
+            Action::AddStyleRule => "Add Rule",
+            Action::EditStyleRule => "Edit Rule",
+            Action::DeleteStyleRule => "Delete Rule",
+            Action::MoveRuleUp => "Move Rule Up",
+            Action::MoveRuleDown => "Move Rule Down",
+            Action::SaveStyleSet => "Save Style Set",
+            
+            // ApplicationScopeEditorDialog actions
+            Action::OpenApplicationScopeEditorDialog => "Open Scope Editor",
+            Action::CloseApplicationScopeEditorDialog => "Close Scope Editor",
+            Action::ToggleScope => "Toggle Scope",
+            Action::OpenForegroundColorPicker => "Set Foreground",
+            Action::OpenBackgroundColorPicker => "Set Background",
+            Action::ClearForeground => "Clear Foreground",
+            Action::ClearBackground => "Clear Background",
+            Action::ToggleModifier => "Toggle Modifier",
+            
+            // ColorPickerDialog actions
+            Action::OpenColorPickerDialog => "Open Color Picker",
+            Action::CloseColorPickerDialog => "Close Color Picker",
+            Action::SelectNextColor => "Next Color",
+            Action::SelectPrevColor => "Prev Color",
             
             // Default to the debug representation for unknown actions
             _ => "Unknown",

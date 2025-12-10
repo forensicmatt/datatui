@@ -1,11 +1,15 @@
 [package]
 name = "datatui"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "DataTUI: A fast, keyboard-first terminal data viewer."
 authors = ["Matthew Seyer <matthew.seyer@gmail.com>"]
 license = "Apache-2.0"
 readme = "README.md"
+
+[features]
+default = []
+json_schema = ["schemars", "jsonschema"]
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -68,6 +72,16 @@ csv = "1.3.0"
 encoding_rs = "0.8.35"
 glob = "0.3.1"
 toml = "0.8.12"
+serde_yaml = "0.9"
+globset = "0.4"
+rayon = "1.8"
+schemars = { version = "0.8.21", optional = true, features = ["preserve_order"] }
+jsonschema = { version = "0.17.1", optional = true }
+
+[[bin]]
+name = "style-schema"
+path = "src/bin/style_schema.rs"
+required-features = ["json_schema"]
 
 [build-dependencies]
 anyhow = "1.0.90"

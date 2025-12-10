@@ -76,6 +76,8 @@ pub struct ColumnWidthDialog {
     /// Currently editing column index
     pub editing_column: Option<usize>,
     pub show_instructions: bool, // new: show instructions area (default true)
+    /// Current calculated widths for each column (used to lock widths when auto_expand is disabled)
+    pub current_calculated_widths: HashMap<String, u16>,
     #[serde(skip)]
     pub key_config: Config,
 }
@@ -93,6 +95,7 @@ impl ColumnWidthDialog {
             input_mode: InputMode::Number,
             editing_column: None,
             show_instructions: true,
+            current_calculated_widths: HashMap::new(),
             key_config: Config::default(),
         }
     }
@@ -119,6 +122,22 @@ impl ColumnWidthDialog {
     /// Set the current column width configuration
     pub fn set_config(&mut self, config: ColumnWidthConfig) {
         self.config = config;
+    }
+
+    /// Set the current calculated widths for each column (used to lock widths when auto_expand is disabled)
+    pub fn set_current_calculated_widths(&mut self, widths: HashMap<String, u16>) {
+        self.current_calculated_widths = widths;
+    }
+
+    /// Lock all columns to their current calculated widths (sets manual widths for columns without one)
+    fn lock_all_columns(&mut self) {
+        for col in &self.columns {
+            if !self.config.manual_widths.contains_key(col) {
+                // Use the current calculated width, or a default of 10 if not available
+                let width = self.current_calculated_widths.get(col).copied().unwrap_or(10);
+                self.config.manual_widths.insert(col.clone(), width);
+            }
+        }
     }
 
     /// Get the current width for a column
@@ -412,7 +431,12 @@ impl ColumnWidthDialog {
                     Action::ToggleAutoExpand => {
                         if self.active_index == 0 {
                             // Toggle auto-expand
+                            let was_auto_expand = self.config.auto_expand;
                             self.config.auto_expand = !self.config.auto_expand;
+                            // When turning OFF auto-expand, lock all columns to their current widths
+                            if was_auto_expand && !self.config.auto_expand {
+                                self.lock_all_columns();
+                            }
                         } else {
                             // Toggle between number and auto for the selected column, or start editing
                             let col_idx = self.active_index - 1; // -1 because index 0 is auto-expand

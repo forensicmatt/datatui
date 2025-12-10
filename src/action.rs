@@ -360,6 +360,60 @@ pub enum Action {
     CloseLlmClientCreateDialog,
     /// User applied LLM client create dialog with selection
     LlmClientCreateDialogApplied(crate::dialog::llm_client_create_dialog::LlmClientSelection),
+    /// Open the Style Set Manager dialog
+    OpenStyleSetManagerDialog,
+    /// Close the Style Set Manager dialog
+    CloseStyleSetManagerDialog,
+    /// Open the Style Rule Editor dialog
+    OpenStyleRuleEditorDialog,
+    /// Close the Style Rule Editor dialog
+    CloseStyleRuleEditorDialog,
+    /// Open the Style Set Browser dialog
+    OpenStyleSetBrowserDialog,
+    /// Close the Style Set Browser dialog
+    CloseStyleSetBrowserDialog,
+    /// User applied Style Set Manager dialog with enabled sets
+    StyleSetManagerDialogApplied(Vec<String>), // enabled style set identifiers
+    /// User applied Style Rule Editor dialog with a rule
+    StyleRuleEditorDialogApplied(crate::dialog::styling::StyleRule),
+    /// User applied Style Set Browser dialog with imported sets
+    StyleSetBrowserDialogApplied(Vec<String>), // imported style set identifiers
+    /// StyleSetManagerDialog specific actions
+    AddStyleSet,
+    RemoveStyleSet,
+    ImportStyleSet,
+    ExportStyleSet,
+    DisableStyleSet,
+    ToggleCategoryPanel,
+    FocusCategoryTree,
+    FocusStyleSetTable,
+    EditStyleSet,
+    /// StyleSetEditorDialog specific actions
+    OpenStyleSetEditorDialog,
+    CloseStyleSetEditorDialog,
+    StyleSetEditorDialogApplied(crate::dialog::styling::StyleSet),
+    AddStyleRule,
+    EditStyleRule,
+    DeleteStyleRule,
+    MoveRuleUp,
+    MoveRuleDown,
+    SaveStyleSet,
+    /// ApplicationScopeEditorDialog specific actions
+    OpenApplicationScopeEditorDialog,
+    CloseApplicationScopeEditorDialog,
+    ApplicationScopeEditorDialogApplied(crate::dialog::styling::StyleApplication),
+    ToggleScope,
+    OpenForegroundColorPicker,
+    OpenBackgroundColorPicker,
+    ClearForeground,
+    ClearBackground,
+    ToggleModifier,
+    /// ColorPickerDialog specific actions
+    OpenColorPickerDialog,
+    CloseColorPickerDialog,
+    ColorPickerDialogApplied(Option<ratatui::style::Color>),
+    SelectNextColor,
+    SelectPrevColor,
 }
 
 #[cfg(test)]

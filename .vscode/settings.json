@@ -1,0 +1,45 @@
+{
+  "yaml.schemas": {
+    "./sample-data/style-set-schema.json": [
+      "*.rs.yml",
+      "**/*.rs.yml"
+    ]
+  },
+  "json.schemas": [
+    {
+      "fileMatch": [
+        "*.rs.yml",
+        "**/*.rs.yml"
+      ],
+      "url": "./sample-data/style-set-schema.json"
+    }
+  ],
+  "yaml.customTags": [
+    "!Conditional mapping",
+    "!Gradient mapping",
+    "!Categorical mapping",
+    "!Filter mapping",
+    "!Regex mapping",
+    "!Condition mapping",
+    "!And sequence",
+    "!Or sequence",
+    "!Contains mapping",
+    "!Equals mapping",
+    "!GreaterThan mapping",
+    "!LessThan mapping",
+    "!GreaterThanOrEqual mapping",
+    "!LessThanOrEqual mapping",
+    "!Between mapping",
+    "!InList mapping",
+    "!Not mapping",
+    "!CompareColumns mapping",
+    "!StringLength mapping",
+    "!IsEmpty scalar",
+    "!IsNotEmpty scalar",
+    "!NotNull scalar",
+    "!IsNull scalar",
+    "!RegexGroup mapping",
+    "!Name scalar",
+    "!Group scalar"
+  ]
+}

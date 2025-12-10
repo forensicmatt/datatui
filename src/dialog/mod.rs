@@ -29,6 +29,7 @@ pub mod llm_client_dialog;
 pub mod llm_client_create_dialog;
 pub mod llm;
 pub mod embeddings_prompt_dialog;
+pub mod styling;
 pub use filter_dialog::{FilterCondition, ColumnFilter};
 pub use column_width_dialog::ColumnWidthConfig;
 pub use find_dialog::{FindOptions, SearchMode};
@@ -65,3 +66,10 @@ pub use llm_client_dialog::{LlmClientDialog, LlmProvider, LlmConfig};
 pub use llm_client_create_dialog::{LlmClientCreateDialog, LlmClientCreateMode, LlmClientSelection};
 pub use llm::{AzureOpenAiConfig, OpenAIConfig, OllamaConfig};
 pub use embeddings_prompt_dialog::EmbeddingsPromptDialog;
+pub use styling::{
+    StyleSet, StyleRule, MatchedStyle, 
+    ApplicationScope, StyleApplication, StyleLogic, Condition, ConditionalStyle,
+    GradientStyle, CategoricalStyle, GrepCapture,
+    StyleSetManager, StyleSetManagerDialog, StyleRuleEditorDialog, 
+    StyleSetBrowserDialog, StyleSetEditorDialog, ApplicationScopeEditorDialog, ColorPickerDialog
+};

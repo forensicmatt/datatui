@@ -17,13 +17,16 @@ use ratatui::widgets::{Table, Row, Cell, Block, Borders};
 use ratatui::prelude::{Frame, Rect, Size};
 use ratatui::layout::Constraint;
 use tokio::sync::mpsc::UnboundedSender;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Modifier, Style, Color};
 use polars::prelude::DataFrame;
 use crate::dialog::find_dialog::{FindOptions, SearchMode};
 use crate::dialog::column_width_dialog::ColumnWidthConfig;
+use crate::dialog::styling::{StyleSet, matches_column, MergeMode, StyleLogic, Condition, ApplicationScope, GrepCapture};
+use ratatui::text::{Line, Span};
 use polars::prelude::{AnyValue};
 use regex::Regex;
 use serde_json::{Value, Number};
+use std::collections::BTreeMap;
 
 
 
@@ -34,6 +37,184 @@ fn anyvalue_to_display_string(value: &AnyValue) -> String {
         AnyValue::String(s) => s.to_string(),
         other => format!("{other}"),
     }
+}
+
+/// Merge two styles according to the merge mode
+fn merge_styles(existing: Option<Style>, new_style: Style, mode: MergeMode) -> Option<Style> {
+    match mode {
+        MergeMode::Override => Some(new_style),
+        MergeMode::Merge => {
+            if let Some(existing) = existing {
+                // Merge: only override non-default properties from new style
+                let mut merged = existing;
+                if new_style.fg.is_some() {
+                    merged.fg = new_style.fg;
+                }
+                if new_style.bg.is_some() {
+                    merged.bg = new_style.bg;
+                }
+                if !new_style.add_modifier.is_empty() {
+                    merged = merged.add_modifier(new_style.add_modifier);
+                }
+                if !new_style.sub_modifier.is_empty() {
+                    merged = merged.remove_modifier(new_style.sub_modifier);
+                }
+                Some(merged)
+            } else {
+                Some(new_style)
+            }
+        }
+        MergeMode::Additive => {
+            if let Some(existing) = existing {
+                // Additive: add modifiers, prefer existing colors
+                let mut merged = existing;
+                if merged.fg.is_none() {
+                    merged.fg = new_style.fg;
+                }
+                if merged.bg.is_none() {
+                    merged.bg = new_style.bg;
+                }
+                merged = merged.add_modifier(new_style.add_modifier);
+                Some(merged)
+            } else {
+                Some(new_style)
+            }
+        }
+    }
+}
+
+fn color_to_rgb(color: Color) -> (u8, u8, u8) {
+    match color {
+        Color::Black => (0, 0, 0),
+        Color::Red => (255, 0, 0),
+        Color::Green => (0, 255, 0),
+        Color::Yellow => (255, 255, 0),
+        Color::Blue => (0, 0, 255),
+        Color::Magenta => (255, 0, 255),
+        Color::Cyan => (0, 255, 255),
+        Color::Gray => (128, 128, 128),
+        Color::DarkGray => (64, 64, 64),
+        Color::LightRed => (255, 102, 102),
+        Color::LightGreen => (102, 255, 102),
+        Color::LightYellow => (255, 255, 102),
+        Color::LightBlue => (102, 102, 255),
+        Color::LightMagenta => (255, 102, 255),
+        Color::LightCyan => (102, 255, 255),
+        Color::White => (255, 255, 255),
+        Color::Rgb(r, g, b) => (r, g, b),
+        Color::Indexed(i) => (i, i, i),
+        Color::Reset => (0, 0, 0),
+    }
+}
+
+fn invert_color(color: Color) -> Color {
+    let (r, g, b) = color_to_rgb(color);
+    Color::Rgb(255 - r, 255 - g, 255 - b)
+}
+
+/// Information about a RegexGroup style to apply to a cell
+#[derive(Debug, Clone)]
+struct RegexGroupStyle {
+    /// The regex pattern to match
+    pattern: String,
+    /// Which capture group to style
+    capture: GrepCapture,
+    /// The style to apply to the matched group
+    style: Style,
+}
+
+/// Apply RegexGroup styles to a cell string, returning a Line with styled spans
+fn apply_regex_group_styles(
+    cell_str: &str, 
+    regex_styles: &[RegexGroupStyle],
+    base_style: Option<Style>,
+) -> Line<'static> {
+    if regex_styles.is_empty() {
+        // No regex group styles, return plain text with base style
+        let span = if let Some(style) = base_style {
+            Span::styled(cell_str.to_string(), style)
+        } else {
+            Span::raw(cell_str.to_string())
+        };
+        return Line::from(span);
+    }
+    
+    // Collect all match ranges and their styles
+    let mut styled_ranges: Vec<(usize, usize, Style)> = Vec::new();
+    
+    for regex_style in regex_styles {
+        let re = match Regex::new(&regex_style.pattern) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        
+        for caps in re.captures_iter(cell_str) {
+            // Get the capture group based on the GrepCapture specification
+            let capture_match = match &regex_style.capture {
+                GrepCapture::Group(n) => caps.get(*n),
+                GrepCapture::Name(name) => caps.name(name),
+            };
+            
+            if let Some(m) = capture_match {
+                styled_ranges.push((m.start(), m.end(), regex_style.style));
+            }
+        }
+    }
+    
+    if styled_ranges.is_empty() {
+        // No matches, return plain text
+        let span = if let Some(style) = base_style {
+            Span::styled(cell_str.to_string(), style)
+        } else {
+            Span::raw(cell_str.to_string())
+        };
+        return Line::from(span);
+    }
+    
+    // Sort ranges by start position
+    styled_ranges.sort_by_key(|(start, _, _)| *start);
+    
+    // Remove overlapping ranges (keep first one for overlaps)
+    let mut non_overlapping: Vec<(usize, usize, Style)> = Vec::new();
+    for (start, end, style) in styled_ranges {
+        if non_overlapping.is_empty() || start >= non_overlapping.last().unwrap().1 {
+            non_overlapping.push((start, end, style));
+        }
+    }
+    
+    // Build spans
+    let mut spans = Vec::new();
+    let mut last_end = 0;
+    
+    for (start, end, style) in non_overlapping {
+        // Add unstyled text before this match
+        if start > last_end {
+            let before = &cell_str[last_end..start];
+            let span = if let Some(base) = base_style {
+                Span::styled(before.to_string(), base)
+            } else {
+                Span::raw(before.to_string())
+            };
+            spans.push(span);
+        }
+        
+        // Add styled match
+        spans.push(Span::styled(cell_str[start..end].to_string(), style));
+        last_end = end;
+    }
+    
+    // Add remaining text after last match
+    if last_end < cell_str.len() {
+        let after = &cell_str[last_end..];
+        let span = if let Some(base) = base_style {
+            Span::styled(after.to_string(), base)
+        } else {
+            Span::raw(after.to_string())
+        };
+        spans.push(span);
+    }
+    
+    Line::from(spans)
 }
 
 
@@ -117,6 +298,8 @@ pub struct DataTable {
     pub last_area_height: u16,
     /// Last rendered area width (for horizontal scroll logic)
     pub last_area_width: u16,
+    /// Enabled style sets for conditional styling
+    pub style_sets: Vec<StyleSet>,
 }
 
 impl DataTable {
@@ -134,7 +317,13 @@ impl DataTable {
             style,
             last_area_height: 0,
             last_area_width: 0,
+            style_sets: Vec::new(),
         }
+    }
+
+    /// Set the style sets to apply
+    pub fn set_style_sets(&mut self, style_sets: Vec<StyleSet>) {
+        self.style_sets = style_sets;
     }
     
     /// Set the column width configuration
@@ -327,6 +516,28 @@ impl DataTable {
             .clamp(Self::MIN_COL_WIDTH as usize, Self::MAX_COL_WIDTH as usize) as u16
     }
 
+    /// Get the calculated widths for all columns (for use when locking column widths)
+    pub fn get_all_column_widths(&self) -> Result<std::collections::HashMap<String, u16>> {
+        let df = self.get_dataframe()?;
+        let columns: Vec<String> = df.get_column_names_owned()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        
+        let row_count = df.height();
+        // Sample rows for width calculation (similar to visible_col_range)
+        let row_start = 0;
+        let row_end = row_count.min(100); // Sample first 100 rows for performance
+        
+        let mut widths = std::collections::HashMap::new();
+        for (col_idx, col_name) in columns.iter().enumerate() {
+            let width = self.desired_column_width(&df, &columns, col_idx, row_start, row_end);
+            widths.insert(col_name.clone(), width);
+        }
+        
+        Ok(widths)
+    }
+
     /// Get visible columns (excluding hidden ones)
     pub fn get_visible_columns(&self) -> Result<Vec<String>> {
         let df = self.get_dataframe()?;
@@ -343,6 +554,111 @@ impl DataTable {
                     .unwrap_or(&false)
             })
             .collect())
+    }
+    
+    /// Compute min/max bounds for gradient columns in active style rules
+    fn compute_gradient_bounds(&self, df: &DataFrame, visible_columns: &[String]) -> BTreeMap<String, (f64, f64)> {
+        let mut bounds: BTreeMap<String, (f64, f64)> = BTreeMap::new();
+        
+        // Collect all gradient source columns that don't have explicit bounds
+        for style_set in &self.style_sets {
+            for rule in &style_set.rules {
+                // Check if this is a gradient rule
+                if let StyleLogic::Gradient(gradient) = &rule.logic {
+                    // Skip if bounds are already specified
+                    if gradient.bounds.is_some() {
+                        continue;
+                    }
+                    // Skip if already computed
+                    if bounds.contains_key(&gradient.source_column) {
+                        continue;
+                    }
+                    // Compute bounds from data
+                    if let Ok(col) = df.column(&gradient.source_column) {
+                        let mut min = f64::MAX;
+                        let mut max = f64::MIN;
+                        for i in 0..col.len() {
+                            if let Ok(val) = col.get(i) {
+                                let num_val = match val {
+                                    AnyValue::Int8(v) => Some(v as f64),
+                                    AnyValue::Int16(v) => Some(v as f64),
+                                    AnyValue::Int32(v) => Some(v as f64),
+                                    AnyValue::Int64(v) => Some(v as f64),
+                                    AnyValue::UInt8(v) => Some(v as f64),
+                                    AnyValue::UInt16(v) => Some(v as f64),
+                                    AnyValue::UInt32(v) => Some(v as f64),
+                                    AnyValue::UInt64(v) => Some(v as f64),
+                                    AnyValue::Float32(v) => Some(v as f64),
+                                    AnyValue::Float64(v) => Some(v),
+                                    AnyValue::String(s) => s.parse::<f64>().ok(),
+                                    _ => None,
+                                };
+                                if let Some(v) = num_val {
+                                    if v < min { min = v; }
+                                    if v > max { max = v; }
+                                }
+                            }
+                        }
+                        if min != f64::MAX && max != f64::MIN {
+                            bounds.insert(gradient.source_column.clone(), (min, max));
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Also compute bounds for visible numeric columns that might be used
+        for col_name in visible_columns {
+            if bounds.contains_key(col_name) {
+                continue;
+            }
+            if let Ok(col) = df.column(col_name) {
+                // Only compute if it's a numeric type
+                let dtype = col.dtype();
+                let is_numeric = matches!(dtype,
+                    polars::datatypes::DataType::Int8 |
+                    polars::datatypes::DataType::Int16 |
+                    polars::datatypes::DataType::Int32 |
+                    polars::datatypes::DataType::Int64 |
+                    polars::datatypes::DataType::UInt8 |
+                    polars::datatypes::DataType::UInt16 |
+                    polars::datatypes::DataType::UInt32 |
+                    polars::datatypes::DataType::UInt64 |
+                    polars::datatypes::DataType::Float32 |
+                    polars::datatypes::DataType::Float64
+                );
+                if is_numeric {
+                    let mut min = f64::MAX;
+                    let mut max = f64::MIN;
+                    for i in 0..col.len() {
+                        if let Ok(val) = col.get(i) {
+                            let num_val = match val {
+                                AnyValue::Int8(v) => Some(v as f64),
+                                AnyValue::Int16(v) => Some(v as f64),
+                                AnyValue::Int32(v) => Some(v as f64),
+                                AnyValue::Int64(v) => Some(v as f64),
+                                AnyValue::UInt8(v) => Some(v as f64),
+                                AnyValue::UInt16(v) => Some(v as f64),
+                                AnyValue::UInt32(v) => Some(v as f64),
+                                AnyValue::UInt64(v) => Some(v as f64),
+                                AnyValue::Float32(v) => Some(v as f64),
+                                AnyValue::Float64(v) => Some(v),
+                                _ => None,
+                            };
+                            if let Some(v) = num_val {
+                                if v < min { min = v; }
+                                if v > max { max = v; }
+                            }
+                        }
+                    }
+                    if min != f64::MAX && max != f64::MIN {
+                        bounds.insert(col_name.clone(), (min, max));
+                    }
+                }
+            }
+        }
+        
+        bounds
     }
 
     /// Get the dataframe
@@ -1017,6 +1333,22 @@ impl Component for DataTable {
             visible_rows.push(row);
         }
 
+        // Determine if any rules need full row (all columns) data for evaluation
+        let has_row_scope_rules = self.style_sets.iter().any(|ss| {
+            ss.rules.iter().any(|r| match &r.logic {
+                StyleLogic::Conditional(cond) => cond
+                    .applications
+                    .iter()
+                    .any(|a| matches!(a.scope, ApplicationScope::Row)),
+                _ => false,
+            })
+        });
+        let all_columns: Vec<String> = if has_row_scope_rules {
+            df.get_column_names().iter().map(|s| s.to_string()).collect()
+        } else {
+            Vec::new()
+        };
+
         // Header with sort indicators
         let header = Row::new(
             visible_columns_slice
@@ -1039,34 +1371,305 @@ impl Component for DataTable {
                     Cell::from(label).style(self.style.table_header)
                 })
         );
-        let selected_cell_style = Style::default()
-            .fg(ratatui::style::Color::Black)
-            .bg(ratatui::style::Color::Yellow)
-            .add_modifier(Modifier::BOLD | Modifier::REVERSED | Modifier::UNDERLINED);
+
+        // let selected_cell_style = Style::default()
+        //     .fg(ratatui::style::Color::Black)
+        //     .bg(ratatui::style::Color::Yellow)
+        //     .add_modifier(Modifier::BOLD | Modifier::REVERSED | Modifier::UNDERLINED);
     
+        // Pre-compute gradient bounds for columns that need it
+        let gradient_bounds: BTreeMap<String, (f64, f64)> = self.compute_gradient_bounds(df, &visible_columns_slice);
+        
+        // Build row data for style rule evaluation
         let row_widgets: Vec<Row> = visible_rows.iter().enumerate().map(|(i, row)| {
             let global_row = row_start + i;
-            let cells = (0..visible_columns_slice.len()).map(|j| {
+            
+            // Build row data map for style rule evaluation
+            let mut row_data = BTreeMap::new();
+            for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                let value = &row[j];
+                let cell_str = anyvalue_to_display_string(value);
+                row_data.insert(col_name.clone(), cell_str);
+            }
+
+            // When row-scoped rules exist, build a full row map including non-visible columns
+            let full_row_data = if has_row_scope_rules {
+                let mut data = BTreeMap::new();
+                for col_name in &all_columns {
+                    if let Some(val) = row_data.get(col_name) {
+                        data.insert(col_name.clone(), val.clone());
+                    } else {
+                        let any_val = df
+                            .column(col_name)
+                            .ok()
+                            .and_then(|s| s.get(global_row).ok())
+                            .unwrap_or(AnyValue::Null);
+                        data.insert(col_name.clone(), anyvalue_to_display_string(&any_val));
+                    }
+                }
+                Some(data)
+            } else {
+                None
+            };
+
+            let row_data_for_eval = full_row_data.as_ref().unwrap_or(&row_data);
+            
+            // Evaluate all style rules and collect matched styles
+            let default_row_selection_style = self.style.selected_row.clone();
+            let mut row_style: Option<Style> = None;
+            let mut cell_styles: Vec<Option<ratatui::style::Style>> = vec![None; visible_columns_slice.len()];
+            // Track RegexGroup styles per column (pattern, capture, style)
+            let mut cell_regex_styles: Vec<Vec<RegexGroupStyle>> = vec![Vec::new(); visible_columns_slice.len()];
+            
+            // Collect and sort rules by priority
+            let mut all_rules: Vec<_> = self.style_sets.iter()
+                .flat_map(|ss| ss.rules.iter())
+                .collect();
+            all_rules.sort_by_key(|r| r.priority);
+            
+            for rule in all_rules {
+                match &rule.logic {
+                    StyleLogic::Conditional(cond) => {
+                        // Extract condition columns and filter expression
+                        let (condition_columns, filter_expr) = match &cond.condition {
+                            Condition::Filter { expr, columns } => (columns.clone(), Some(expr)),
+                            Condition::Regex { pattern, columns } => {
+                                // For regex conditions, we evaluate separately
+                                let re = match Regex::new(pattern) {
+                                    Ok(r) => r,
+                                    Err(_) => continue,
+                                };
+                                // Check if any cell matches the regex
+                                let cols_to_check = columns.as_ref()
+                                    .map(|c| c.iter().filter_map(|cn| {
+                                        if matches_column(cn, &[cn.clone()]) {
+                                            Some(cn.clone())
+                                        } else {
+                                            None
+                                        }
+                                    }).collect::<Vec<_>>())
+                                    .unwrap_or_else(|| row_data_for_eval.keys().cloned().collect());
+                                
+                                let mut regex_matched = false;
+                                for col in &cols_to_check {
+                                    if let Some(val) = row_data_for_eval.get(col) {
+                                        if re.is_match(val) {
+                                            regex_matched = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if !regex_matched {
+                                    continue;
+                                }
+                                (columns.clone(), None)
+                            }
+                        };
+                        
+                        // If we have a filter expression, evaluate it
+                        if let Some(expr) = filter_expr {
+                            let eval_data: BTreeMap<String, String> = if let Some(ref cols) = condition_columns {
+                                if cols.is_empty() {
+                                    row_data_for_eval.clone()
+                                } else {
+                                    row_data_for_eval.iter()
+                                        .filter(|(col_name, _)| matches_column(col_name, cols))
+                                        .map(|(k, v)| (k.clone(), v.clone()))
+                                        .collect()
+                                }
+                            } else {
+                                row_data_for_eval.clone()
+                            };
+                            
+                            if let Ok(matches) = expr.evaluate_row(&eval_data) {
+                                if !matches {
+                                    continue;
+                                }
+                            } else {
+                                continue;
+                            }
+                        }
+                        
+                        // Apply all style applications
+                        for app in &cond.applications {
+                            let matched_style = app.style.to_ratatui_style();
+                            let target_cols = app.target_columns.as_ref().or(condition_columns.as_ref());
+                            
+                            match &app.scope {
+                                ApplicationScope::Row => {
+                                    row_style = merge_styles(row_style, matched_style, rule.merge_mode);
+                                }
+                                ApplicationScope::Cell => {
+                                    if let Some(ref target) = target_cols {
+                                        for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                                            if target.is_empty() || matches_column(col_name, target) {
+                                                cell_styles[j] = merge_styles(cell_styles[j], matched_style, rule.merge_mode);
+                                            }
+                                        }
+                                    } else {
+                                        for j in 0..visible_columns_slice.len() {
+                                            cell_styles[j] = merge_styles(cell_styles[j], matched_style, rule.merge_mode);
+                                        }
+                                    }
+                                }
+                                ApplicationScope::RegexGroup(capture) => {
+                                    // RegexGroup styling - collect info for per-character styling
+                                    // Only applies to Regex conditions
+                                    if let Condition::Regex { pattern, columns } = &cond.condition {
+                                        let target_cols = target_cols.or(columns.as_ref());
+                                        for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                                            let should_apply = match target_cols {
+                                                Some(ref targets) if !targets.is_empty() => matches_column(col_name, targets),
+                                                _ => true,
+                                            };
+                                            if should_apply {
+                                                cell_regex_styles[j].push(RegexGroupStyle {
+                                                    pattern: pattern.clone(),
+                                                    capture: capture.clone(),
+                                                    style: matched_style,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    StyleLogic::Gradient(gradient) => {
+                        // Apply gradient to target columns
+                        let target_cols = gradient.target_columns.as_ref();
+                        
+                        for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                            // Check if this column should get gradient styling
+                            let should_apply = match target_cols {
+                                Some(targets) if !targets.is_empty() => matches_column(col_name, targets),
+                                _ => col_name == &gradient.source_column,
+                            };
+                            
+                            if should_apply {
+                                // Get the value from the source column
+                                let value_str = row_data_for_eval.get(&gradient.source_column)
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("");
+                                if let Ok(value) = value_str.parse::<f64>() {
+                                    let (min, max) = gradient.bounds.unwrap_or_else(|| {
+                                        *gradient_bounds.get(&gradient.source_column)
+                                            .unwrap_or(&(0.0, 1.0))
+                                    });
+                                    let normalized = gradient.normalize(value, min, max);
+                                    let matched_style = gradient.interpolate(normalized).to_ratatui_style();
+                                    cell_styles[j] = merge_styles(cell_styles[j], matched_style, rule.merge_mode);
+                                }
+                            }
+                        }
+                    }
+                    StyleLogic::Categorical(categorical) => {
+                        // Apply categorical styling to target columns
+                        let target_cols = categorical.target_columns.as_ref();
+                        
+                        for (j, col_name) in visible_columns_slice.iter().enumerate() {
+                            // Check if this column should get categorical styling
+                            let should_apply = match target_cols {
+                                Some(targets) if !targets.is_empty() => matches_column(col_name, targets),
+                                _ => col_name == &categorical.source_column,
+                            };
+                            
+                            if should_apply {
+                                // Get the value from the source column
+                                let value_str = row_data_for_eval.get(&categorical.source_column)
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("");
+                                let matched_style = categorical.get_style_for_value(value_str).to_ratatui_style();
+                                cell_styles[j] = merge_styles(cell_styles[j], matched_style, rule.merge_mode);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Create cells with applied styles
+            let cells: Vec<Cell> = (0..visible_columns_slice.len()).map(|j| {
                 let col_idx = col_start + j;
                 let value = &row[j];
                 let cell_str = anyvalue_to_display_string(value);
-                let mut cell = Cell::from(cell_str)
-                    .style(self.style.table_cell);
+                
+                // Check if this cell has RegexGroup styles to apply
+                let cell = if !cell_regex_styles[j].is_empty() {
+                    // Apply RegexGroup styling with spans
+                    let base_style = cell_styles[j].or_else(|| {
+                        if row_style.is_none() {
+                            Some(self.style.table_cell)
+                        } else {
+                            None
+                        }
+                    });
+                    let styled_line = apply_regex_group_styles(
+                        &cell_str,
+                        &cell_regex_styles[j],
+                        base_style
+                    );
+                    Cell::from(styled_line)
+                } else {
+                    // Normal cell styling
+                    let mut cell = Cell::from(cell_str);
+                    
+                    // Apply cell-specific style if set
+                    if let Some(ref cell_style) = cell_styles[j] {
+                        cell = cell.style(*cell_style);
+                    } else if row_style.is_none() {
+                        // Only apply default cell style when no row style is set
+                        // This allows matched row styles to show through without being
+                        // overridden by the default table_cell style
+                        cell = cell.style(self.style.table_cell);
+                    }
+                    cell
+                };
+                
+                // Selected cell style overrides - for RegexGroup cells we need special handling
                 if global_row == self.selection.row && col_idx == self.selection.col {
-                    cell = cell.style(selected_cell_style);
+                    // For the selected cell, override with selected style
+                    let value = &row[j];
+                    let cell_str = anyvalue_to_display_string(value);
+                    let mut selected_cell_style = default_row_selection_style.clone();
+
+                    if !selected_cell_style.add_modifier.contains(Modifier::UNDERLINED) {
+                        selected_cell_style = selected_cell_style.add_modifier(Modifier::UNDERLINED);
+                    }
+                    if let Some(fg) = selected_cell_style.fg {
+                        if Some(fg) != default_row_selection_style.fg {
+                            selected_cell_style.fg = Some(invert_color(fg));
+                        }
+                    }
+                    if let Some(bg) = selected_cell_style.bg {
+                        if Some(bg) != default_row_selection_style.bg {
+                            selected_cell_style.bg = Some(invert_color(bg));
+                        }
+                    }
+                    Cell::from(cell_str).style(selected_cell_style)
+                } else {
+                    cell
                 }
-                cell
-            });
+            }).collect();
+            
+            // Create row with applied styles
             let mut r = Row::new(cells);
-            if global_row == self.selection.row {
-                r = r.style(Style::default().add_modifier(Modifier::REVERSED));
-            } else if global_row % 2 == 0 {
-                r = r.style(self.style.table_row_even);
+            
+            // Apply row-level style if set
+            if let Some(ref rs) = row_style {
+                r = r.style(*rs);
             } else {
-                r = r.style(self.style.table_row_odd);
+                // Default row styling
+                if global_row == self.selection.row {
+                    r = r.style(Style::default().add_modifier(Modifier::REVERSED));
+                } else if global_row % 2 == 0 {
+                    r = r.style(self.style.table_row_even);
+                } else {
+                    r = r.style(self.style.table_row_odd);
+                }
             }
             r
         }).collect();
+
         let widths = col_widths
             .iter()
             .enumerate()

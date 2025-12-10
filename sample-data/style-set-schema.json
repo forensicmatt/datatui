@@ -1,0 +1,966 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StyleSet",
+  "description": "A collection of style rules with metadata",
+  "type": "object",
+  "required": [
+    "description",
+    "id",
+    "name",
+    "rules"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "categories": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "tags": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "description": {
+      "type": "string"
+    },
+    "yaml_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/StyleRule"
+      }
+    },
+    "schema_hint": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SchemaHint"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "StyleRule": {
+      "description": "A single styling rule",
+      "type": "object",
+      "required": [
+        "logic"
+      ],
+      "properties": {
+        "name": {
+          "description": "Optional name for the rule",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logic": {
+          "description": "The logic that controls matching and styling",
+          "allOf": [
+            {
+              "$ref": "#/definitions/StyleLogic"
+            }
+          ]
+        },
+        "priority": {
+          "description": "Rule priority: higher values are processed later and win conflicts",
+          "default": 0,
+          "type": "integer",
+          "format": "int32"
+        },
+        "merge_mode": {
+          "description": "How to combine with previously matched styles",
+          "default": "Override",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MergeMode"
+            }
+          ]
+        }
+      }
+    },
+    "StyleLogic": {
+      "description": "The main logic type for a style rule",
+      "oneOf": [
+        {
+          "description": "Condition-based styling with one or more style applications",
+          "type": "object",
+          "required": [
+            "Conditional"
+          ],
+          "properties": {
+            "Conditional": {
+              "$ref": "#/definitions/ConditionalStyle"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Gradient based on numeric column value",
+          "type": "object",
+          "required": [
+            "Gradient"
+          ],
+          "properties": {
+            "Gradient": {
+              "$ref": "#/definitions/GradientStyle"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Categorical palette based on unique values",
+          "type": "object",
+          "required": [
+            "Categorical"
+          ],
+          "properties": {
+            "Categorical": {
+              "$ref": "#/definitions/CategoricalStyle"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ConditionalStyle": {
+      "description": "A condition with one or more style applications",
+      "type": "object",
+      "required": [
+        "applications",
+        "condition"
+      ],
+      "properties": {
+        "condition": {
+          "description": "The condition that must match",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Condition"
+            }
+          ]
+        },
+        "applications": {
+          "description": "Style applications to apply when the condition matches Multiple applications allow styling different scopes from one condition",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/StyleApplication"
+          }
+        }
+      }
+    },
+    "Condition": {
+      "description": "Defines when a style should be applied",
+      "oneOf": [
+        {
+          "description": "Match based on a filter expression (complex conditions)",
+          "type": "object",
+          "required": [
+            "Filter"
+          ],
+          "properties": {
+            "Filter": {
+              "type": "object",
+              "required": [
+                "expr"
+              ],
+              "properties": {
+                "expr": {
+                  "description": "The filter expression to evaluate",
+                  "allOf": [
+                    {
+                      "$ref": "#/definitions/FilterExpr"
+                    }
+                  ]
+                },
+                "columns": {
+                  "description": "Columns to evaluate the filter against (glob patterns) If None or empty, evaluates against all columns",
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Match based on a regex pattern",
+          "type": "object",
+          "required": [
+            "Regex"
+          ],
+          "properties": {
+            "Regex": {
+              "type": "object",
+              "required": [
+                "pattern"
+              ],
+              "properties": {
+                "pattern": {
+                  "description": "The regex pattern to match",
+                  "type": "string"
+                },
+                "columns": {
+                  "description": "Columns to match against (glob patterns) If None or empty, matches against all columns",
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "FilterExpr": {
+      "description": "Recursive filter expression: single condition or AND/OR group",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "Condition"
+          ],
+          "properties": {
+            "Condition": {
+              "$ref": "#/definitions/ColumnFilter"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "And"
+          ],
+          "properties": {
+            "And": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/FilterExpr"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Or"
+          ],
+          "properties": {
+            "Or": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/FilterExpr"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ColumnFilter": {
+      "description": "Filter applied to a column",
+      "type": "object",
+      "required": [
+        "column",
+        "condition"
+      ],
+      "properties": {
+        "column": {
+          "type": "string"
+        },
+        "condition": {
+          "$ref": "#/definitions/FilterCondition"
+        }
+      }
+    },
+    "FilterCondition": {
+      "description": "Filter condition for a column",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "IsEmpty",
+            "IsNotEmpty",
+            "NotNull",
+            "IsNull"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "Contains"
+          ],
+          "properties": {
+            "Contains": {
+              "type": "object",
+              "required": [
+                "case_sensitive",
+                "value"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "case_sensitive": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Regex"
+          ],
+          "properties": {
+            "Regex": {
+              "type": "object",
+              "required": [
+                "case_sensitive",
+                "pattern"
+              ],
+              "properties": {
+                "pattern": {
+                  "type": "string"
+                },
+                "case_sensitive": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Equals"
+          ],
+          "properties": {
+            "Equals": {
+              "type": "object",
+              "required": [
+                "case_sensitive",
+                "value"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "case_sensitive": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "GreaterThan"
+          ],
+          "properties": {
+            "GreaterThan": {
+              "type": "object",
+              "required": [
+                "value"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "LessThan"
+          ],
+          "properties": {
+            "LessThan": {
+              "type": "object",
+              "required": [
+                "value"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "GreaterThanOrEqual"
+          ],
+          "properties": {
+            "GreaterThanOrEqual": {
+              "type": "object",
+              "required": [
+                "value"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "LessThanOrEqual"
+          ],
+          "properties": {
+            "LessThanOrEqual": {
+              "type": "object",
+              "required": [
+                "value"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Range check: value between min and max",
+          "type": "object",
+          "required": [
+            "Between"
+          ],
+          "properties": {
+            "Between": {
+              "type": "object",
+              "required": [
+                "inclusive",
+                "max",
+                "min"
+              ],
+              "properties": {
+                "min": {
+                  "type": "string"
+                },
+                "max": {
+                  "type": "string"
+                },
+                "inclusive": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Set membership: value in list of values",
+          "type": "object",
+          "required": [
+            "InList"
+          ],
+          "properties": {
+            "InList": {
+              "type": "object",
+              "required": [
+                "case_sensitive",
+                "values"
+              ],
+              "properties": {
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "case_sensitive": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Negation: NOT condition",
+          "type": "object",
+          "required": [
+            "Not"
+          ],
+          "properties": {
+            "Not": {
+              "$ref": "#/definitions/FilterCondition"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Phase 2: Column comparison",
+          "type": "object",
+          "required": [
+            "CompareColumns"
+          ],
+          "properties": {
+            "CompareColumns": {
+              "type": "object",
+              "required": [
+                "operator",
+                "other_column"
+              ],
+              "properties": {
+                "other_column": {
+                  "type": "string"
+                },
+                "operator": {
+                  "$ref": "#/definitions/CompareOp"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Phase 2: String length check",
+          "type": "object",
+          "required": [
+            "StringLength"
+          ],
+          "properties": {
+            "StringLength": {
+              "type": "object",
+              "required": [
+                "length",
+                "operator"
+              ],
+              "properties": {
+                "operator": {
+                  "$ref": "#/definitions/CompareOp"
+                },
+                "length": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0.0
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "CompareOp": {
+      "description": "Comparison operator for advanced conditions",
+      "type": "string",
+      "enum": [
+        "Eq",
+        "Ne",
+        "Lt",
+        "Gt",
+        "Lte",
+        "Gte"
+      ]
+    },
+    "StyleApplication": {
+      "description": "Combines a scope with a style",
+      "type": "object",
+      "required": [
+        "style"
+      ],
+      "properties": {
+        "scope": {
+          "description": "Where to apply the style",
+          "default": "Row",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApplicationScope"
+            }
+          ]
+        },
+        "style": {
+          "description": "The style to apply",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MatchedStyle"
+            }
+          ]
+        },
+        "target_columns": {
+          "description": "Optional: specific columns to target (for Cell scope) If None, applies to columns that matched the condition",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ApplicationScope": {
+      "description": "Defines where a style should be applied",
+      "oneOf": [
+        {
+          "description": "Apply style to the entire row",
+          "type": "string",
+          "enum": [
+            "Row"
+          ]
+        },
+        {
+          "description": "Apply style to the entire cell",
+          "type": "string",
+          "enum": [
+            "Cell"
+          ]
+        },
+        {
+          "description": "Apply style only to the matching regex capture group within a cell",
+          "type": "object",
+          "required": [
+            "RegexGroup"
+          ],
+          "properties": {
+            "RegexGroup": {
+              "$ref": "#/definitions/GrepCapture"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "GrepCapture": {
+      "description": "Identifies which part of a regex match to style",
+      "oneOf": [
+        {
+          "description": "Apply style to the section of text that matches this named capture group",
+          "type": "object",
+          "required": [
+            "Name"
+          ],
+          "properties": {
+            "Name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Apply style to the section of text that matches this numbered capture group (0 = entire match)",
+          "type": "object",
+          "required": [
+            "Group"
+          ],
+          "properties": {
+            "Group": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "MatchedStyle": {
+      "description": "Style to apply when a rule matches",
+      "type": "object",
+      "properties": {
+        "fg": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bg": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modifiers": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "GradientStyle": {
+      "description": "Gradient style for numeric data visualization",
+      "type": "object",
+      "required": [
+        "max_style",
+        "min_style",
+        "source_column"
+      ],
+      "properties": {
+        "source_column": {
+          "description": "Column to read numeric values from",
+          "type": "string"
+        },
+        "min_style": {
+          "description": "Style at minimum value",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MatchedStyle"
+            }
+          ]
+        },
+        "max_style": {
+          "description": "Style at maximum value",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MatchedStyle"
+            }
+          ]
+        },
+        "scale": {
+          "description": "Interpolation scale",
+          "default": "Linear",
+          "allOf": [
+            {
+              "$ref": "#/definitions/GradientScale"
+            }
+          ]
+        },
+        "bounds": {
+          "description": "Optional fixed bounds (min, max). If None, auto-detect from data",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "number",
+              "format": "double"
+            }
+          ],
+          "maxItems": 2,
+          "minItems": 2
+        },
+        "target_columns": {
+          "description": "Which columns to apply the gradient to (if None, applies to source_column)",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "GradientScale": {
+      "description": "Scale type for gradient interpolation",
+      "type": "string",
+      "enum": [
+        "Linear",
+        "Logarithmic",
+        "Percentile"
+      ]
+    },
+    "CategoricalStyle": {
+      "description": "Categorical style for auto-assigning colors to unique values",
+      "type": "object",
+      "required": [
+        "palette",
+        "source_column"
+      ],
+      "properties": {
+        "source_column": {
+          "description": "Column to read category values from",
+          "type": "string"
+        },
+        "palette": {
+          "description": "Color palette to cycle through",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "apply_to_fg": {
+          "description": "Apply to foreground (true) or background (false)",
+          "default": true,
+          "type": "boolean"
+        },
+        "target_columns": {
+          "description": "Which columns to apply the categorical style to (if None, applies to source_column)",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "MergeMode": {
+      "description": "How to combine styles when multiple rules match",
+      "oneOf": [
+        {
+          "description": "Replace previous style completely (default)",
+          "type": "string",
+          "enum": [
+            "Override"
+          ]
+        },
+        {
+          "description": "Only override non-None properties from this rule",
+          "type": "string",
+          "enum": [
+            "Merge"
+          ]
+        },
+        {
+          "description": "Add modifiers to existing, keep colors from higher priority",
+          "type": "string",
+          "enum": [
+            "Additive"
+          ]
+        }
+      ]
+    },
+    "SchemaHint": {
+      "description": "Schema hint for auto-detection of matching datasets",
+      "type": "object",
+      "properties": {
+        "required_columns": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ColumnMatcher"
+          }
+        },
+        "optional_columns": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ColumnMatcher"
+          }
+        },
+        "min_confidence": {
+          "default": 0.5,
+          "type": "number",
+          "format": "float"
+        }
+      }
+    },
+    "ColumnMatcher": {
+      "description": "Column matcher for schema hints",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "ExactName"
+          ],
+          "properties": {
+            "ExactName": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Pattern"
+          ],
+          "properties": {
+            "Pattern": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "TypedPattern"
+          ],
+          "properties": {
+            "TypedPattern": {
+              "type": "object",
+              "required": [
+                "expected_type",
+                "pattern"
+              ],
+              "properties": {
+                "pattern": {
+                  "type": "string"
+                },
+                "expected_type": {
+                  "$ref": "#/definitions/ExpectedType"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ExpectedType": {
+      "description": "Expected data type for column matching",
+      "type": "string",
+      "enum": [
+        "Any",
+        "Numeric",
+        "String",
+        "DateTime",
+        "Boolean"
+      ]
+    }
+  }
+}
