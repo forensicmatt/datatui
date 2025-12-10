@@ -14,6 +14,7 @@ and this project adheres to
 
 ### Fixed
 - Various dialog navigation issues
+- Double loading data after import
 
 ## [0.3.0]
 ### Added

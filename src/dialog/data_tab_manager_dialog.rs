@@ -241,76 +241,75 @@ impl DataTabManagerDialog {
         // Get all available DataFrames for SQL context
         let available_datasets = self.get_available_datasets()?;
         
-        // Load all DataFrames from DataManagementDialog
-        for data_source in &self.data_management_dialog.data_sources {
-            let loaded_dataframes = data_source.load_dataframes()?;
+        // Use cached DataFrames from DataManagementDialog to avoid reloading from disk
+        // Uses the mutable version to populate cache if data needs to be loaded (e.g., workspace restore)
+        let cached_dataframes = self.data_management_dialog.get_cached_dataframes_mut();
+        
+        for (_dataset_id, loaded_dataset) in cached_dataframes {
+            // Convert Arc<DataFrame> to ManagedDataFrame
+            let managed_df = ManagedDataFrame::from_arc(
+                loaded_dataset.dataframe.clone(),
+                loaded_dataset.dataset.name.clone(),
+                Some(format!("From {}", loaded_dataset.data_source.name)),
+                Some(loaded_dataset.data_source.file_path.clone().into()),
+            );
             
-            for (_dataset_id, loaded_dataset) in loaded_dataframes {
-                // Convert Arc<DataFrame> to ManagedDataFrame
-                let managed_df = ManagedDataFrame::from_arc(
-                    loaded_dataset.dataframe.clone(),
-                    loaded_dataset.dataset.name.clone(),
-                    Some(format!("From {}", loaded_dataset.data_source.name)),
-                    Some(loaded_dataset.data_source.file_path.clone().into()),
-                );
-                
-                // Create DataTab
-                let tab = DataTab::new(
-                    loaded_dataset.clone(),
-                    managed_df.clone(),
-                );
-                
-                // Create DataTable and DataTableContainer for this tab
-                let mut datatable = DataTable::new(managed_df, self.style.clone());
-                // Set enabled style sets
-                let enabled_sets = self.style_set_manager.get_enabled_sets();
-                datatable.set_style_sets(enabled_sets.into_iter().cloned().collect());
-                let mut container = DataTableContainer::new_with_dataframes(
-                    datatable, self.style.clone(), available_datasets.clone()
-                );
-                // Register config with the new container
-                let _ = container.register_config_handler(self.config.clone());
-                // If we had an existing container for this dataset, carry over transient UI state
-                if let Some(prev) = old_containers.get(&loaded_dataset.dataset.id) {
-                    // Preserve SQL textarea content if present
-                    let prev_sql = prev.sql_dialog.textarea.lines().join("\n");
-                    if !prev_sql.is_empty() {
-                        container.sql_dialog.set_textarea_content(prev_sql);
-                    }
-                    // Preserve datatable state (current_df, sort, filter, widths, last_sql)
-                    container.datatable.dataframe.current_df = prev.datatable.dataframe.current_df.clone();
-                    container.datatable.dataframe.last_sort = prev.datatable.dataframe.last_sort.clone();
-                    container.datatable.dataframe.filter = prev.datatable.dataframe.filter.clone();
-                    // Ensure the FilterDialog reflects any existing filter
-                    if let Some(f) = container.datatable.dataframe.filter.clone() {
-                        container.set_filter_expression(f);
-                    }
-                    container.datatable.dataframe.column_width_config = prev.datatable.dataframe.column_width_config.clone();
-                    container.datatable.dataframe.last_sql_query = prev.datatable.dataframe.last_sql_query.clone();
-                    // Preserve selection/scroll so view doesn't jump
-                    container.datatable.selection = prev.datatable.selection;
-                    container.datatable.scroll = prev.datatable.scroll;
-                    // Preserve JMES dialog state (body text and add_columns list)
-                    let jmes_lines = prev.jmes_dialog.textarea.lines();
-                    if !jmes_lines.is_empty() {
-                        container.jmes_dialog.textarea = tui_textarea::TextArea::from(jmes_lines.to_vec());
-                        container.jmes_dialog
-                            .textarea
-                            .set_line_number_style(ratatui::style::Style::default().bg(ratatui::style::Color::DarkGray));
-                    }
-                    if !prev.jmes_dialog.add_columns.is_empty() {
-                        container.jmes_dialog.add_columns = prev.jmes_dialog.add_columns.clone();
-                        container.jmes_dialog.selected_add_col = prev.jmes_dialog.selected_add_col.min(container.jmes_dialog.add_columns.len().saturating_sub(1));
-                    }
+            // Create DataTab
+            let tab = DataTab::new(
+                loaded_dataset.clone(),
+                managed_df.clone(),
+            );
+            
+            // Create DataTable and DataTableContainer for this tab
+            let mut datatable = DataTable::new(managed_df, self.style.clone());
+            // Set enabled style sets
+            let enabled_sets = self.style_set_manager.get_enabled_sets();
+            datatable.set_style_sets(enabled_sets.into_iter().cloned().collect());
+            let mut container = DataTableContainer::new_with_dataframes(
+                datatable, self.style.clone(), available_datasets.clone()
+            );
+            // Register config with the new container
+            let _ = container.register_config_handler(self.config.clone());
+            // If we had an existing container for this dataset, carry over transient UI state
+            if let Some(prev) = old_containers.get(&loaded_dataset.dataset.id) {
+                // Preserve SQL textarea content if present
+                let prev_sql = prev.sql_dialog.textarea.lines().join("\n");
+                if !prev_sql.is_empty() {
+                    container.sql_dialog.set_textarea_content(prev_sql);
                 }
-                
-                // Add to tabs and maintain order
-                self.tabs.push(tab);
-                self.tab_order.push(loaded_dataset.dataset.id.clone());
-                
-                // Store the container
-                self.containers.insert(loaded_dataset.dataset.id.clone(), container);
+                // Preserve datatable state (current_df, sort, filter, widths, last_sql)
+                container.datatable.dataframe.current_df = prev.datatable.dataframe.current_df.clone();
+                container.datatable.dataframe.last_sort = prev.datatable.dataframe.last_sort.clone();
+                container.datatable.dataframe.filter = prev.datatable.dataframe.filter.clone();
+                // Ensure the FilterDialog reflects any existing filter
+                if let Some(f) = container.datatable.dataframe.filter.clone() {
+                    container.set_filter_expression(f);
+                }
+                container.datatable.dataframe.column_width_config = prev.datatable.dataframe.column_width_config.clone();
+                container.datatable.dataframe.last_sql_query = prev.datatable.dataframe.last_sql_query.clone();
+                // Preserve selection/scroll so view doesn't jump
+                container.datatable.selection = prev.datatable.selection;
+                container.datatable.scroll = prev.datatable.scroll;
+                // Preserve JMES dialog state (body text and add_columns list)
+                let jmes_lines = prev.jmes_dialog.textarea.lines();
+                if !jmes_lines.is_empty() {
+                    container.jmes_dialog.textarea = tui_textarea::TextArea::from(jmes_lines.to_vec());
+                    container.jmes_dialog
+                        .textarea
+                        .set_line_number_style(ratatui::style::Style::default().bg(ratatui::style::Color::DarkGray));
+                }
+                if !prev.jmes_dialog.add_columns.is_empty() {
+                    container.jmes_dialog.add_columns = prev.jmes_dialog.add_columns.clone();
+                    container.jmes_dialog.selected_add_col = prev.jmes_dialog.selected_add_col.min(container.jmes_dialog.add_columns.len().saturating_sub(1));
+                }
             }
+            
+            // Add to tabs and maintain order
+            self.tabs.push(tab);
+            self.tab_order.push(loaded_dataset.dataset.id.clone());
+            
+            // Store the container
+            self.containers.insert(loaded_dataset.dataset.id.clone(), container);
         }
         
         // Set the first tab as active if we have any tabs
