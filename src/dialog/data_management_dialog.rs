@@ -985,6 +985,9 @@ pub struct DataManagementDialog {
     pub current_json_options: Option<crate::dialog::json_options_dialog::JsonImportOptions>,
     #[serde(skip)]
     pub update_status: Option<Option<crate::update_check::UpdateInfo>>, // None = not checked yet, Some(None) = up-to-date, Some(Some(...)) = update available
+    /// Cache of loaded DataFrames keyed by dataset ID to avoid re-loading from disk
+    #[serde(skip)]
+    pub dataframe_cache: HashMap<String, Arc<DataFrame>>,
 }
 
 impl Default for DataManagementDialog {
@@ -1093,7 +1096,92 @@ impl DataManagementDialog {
             current_json_objects: Vec::new(),
             current_json_options: None,
             update_status: None,
+            dataframe_cache: HashMap::new(),
         }
+    }
+
+    /// Get all loaded dataframes, preferring cache but falling back to loading from disk.
+    /// This avoids re-loading data from disk when syncing tabs during normal operation,
+    /// but still supports loading data when workspace is restored from disk (cache empty).
+    pub fn get_cached_dataframes(&self) -> HashMap<String, LoadedDataset> {
+        let mut result = HashMap::new();
+        for data_source in &self.data_sources {
+            for dataset in &data_source.datasets {
+                if dataset.status == DatasetStatus::Imported {
+                    // First try the cache
+                    if let Some(df_arc) = self.dataframe_cache.get(&dataset.id) {
+                        let loaded_dataset = LoadedDataset {
+                            data_source: data_source.clone(),
+                            dataset: dataset.clone(),
+                            dataframe: df_arc.clone(),
+                        };
+                        result.insert(dataset.id.clone(), loaded_dataset);
+                    } else {
+                        // Fall back to loading from disk if not in cache
+                        // This happens when workspace state is loaded from disk on app startup
+                        if let Ok(df_arc) = data_source.load_dataset(dataset) {
+                            let loaded_dataset = LoadedDataset {
+                                data_source: data_source.clone(),
+                                dataset: dataset.clone(),
+                                dataframe: df_arc,
+                            };
+                            result.insert(dataset.id.clone(), loaded_dataset);
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// Get all loaded dataframes and populate the cache for any that were loaded from disk.
+    /// This is the mutable version that ensures the cache is populated for future calls.
+    pub fn get_cached_dataframes_mut(&mut self) -> HashMap<String, LoadedDataset> {
+        let mut result = HashMap::new();
+        for data_source in &self.data_sources {
+            for dataset in &data_source.datasets {
+                if dataset.status == DatasetStatus::Imported {
+                    // First try the cache
+                    if let Some(df_arc) = self.dataframe_cache.get(&dataset.id) {
+                        let loaded_dataset = LoadedDataset {
+                            data_source: data_source.clone(),
+                            dataset: dataset.clone(),
+                            dataframe: df_arc.clone(),
+                        };
+                        result.insert(dataset.id.clone(), loaded_dataset);
+                    } else {
+                        // Fall back to loading from disk if not in cache
+                        // This happens when workspace state is loaded from disk on app startup
+                        if let Ok(df_arc) = data_source.load_dataset(dataset) {
+                            // Cache the loaded dataframe for future use
+                            self.dataframe_cache.insert(dataset.id.clone(), df_arc.clone());
+                            let loaded_dataset = LoadedDataset {
+                                data_source: data_source.clone(),
+                                dataset: dataset.clone(),
+                                dataframe: df_arc,
+                            };
+                            result.insert(dataset.id.clone(), loaded_dataset);
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// Store a dataframe in the cache
+    pub fn cache_dataframe(&mut self, dataset_id: &str, dataframe: Arc<DataFrame>) {
+        self.dataframe_cache.insert(dataset_id.to_string(), dataframe);
+    }
+
+    /// Clear the dataframe cache (useful when removing data sources)
+    pub fn clear_cache(&mut self) {
+        self.dataframe_cache.clear();
+    }
+
+    /// Remove a specific dataframe from cache
+    pub fn remove_from_cache(&mut self, dataset_id: &str) {
+        self.dataframe_cache.remove(dataset_id);
     }
 
     /// Build instructions string from configured keybindings (Global + DataManagement)
@@ -1219,6 +1307,12 @@ impl DataManagementDialog {
 
     /// Remove a data source by ID
     pub fn remove_data_source(&mut self, id: usize) {
+        // Remove cached dataframes for datasets in this source before removing the source
+        if let Some(source) = self.data_sources.iter().find(|s| s.id == id) {
+            for dataset in &source.datasets {
+                self.dataframe_cache.remove(&dataset.id);
+            }
+        }
         self.data_sources.retain(|source| source.id != id);
         // Reassign IDs
         for (index, source) in self.data_sources.iter_mut().enumerate() {
@@ -1292,7 +1386,7 @@ impl DataManagementDialog {
         }
         
         // Process each pending dataset
-        for (source_id, dataset_name, _dataset_id) in pending_datasets {
+        for (source_id, dataset_name, dataset_id) in pending_datasets {
             // Set status to Processing
             self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Processing);
             // Clear any previous error
@@ -1312,6 +1406,8 @@ impl DataManagementDialog {
                             let row_count = dataframe.height();
                             let column_count = dataframe.width();
                             self.update_dataset_data(source_id, &dataset_name, row_count, column_count);
+                            // Cache the dataframe to avoid reloading
+                            self.cache_dataframe(&dataset_id, dataframe);
                         }
                         Err(e) => {
                             // Failed to load
@@ -1434,6 +1530,9 @@ impl DataManagementDialog {
                         }
                     }
 
+                    // Capture dataset_id for caching
+                    let dataset_id = dataset.id.clone();
+                    
                     // If we staged JSON incremental, keep accumulating until all files are processed
                     if let DataImportConfig::Json(cfg) = &ds_ref.data_import_config {
                         if cfg.merge && !cfg.additional_paths.is_empty() {
@@ -1445,6 +1544,8 @@ impl DataManagementDialog {
                             let df = Self::build_df_from_json_maps_local(&self.current_json_objects)?;
                             self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Imported);
                             self.update_dataset_data(source_id, &dataset_name, df.height(), df.width());
+                            // Cache the dataframe to avoid reloading
+                            self.cache_dataframe(&dataset_id, Arc::new(df));
                             // Clear staged state
                             self.current_json_objects.clear();
                             self.current_json_options = None;
@@ -1456,6 +1557,8 @@ impl DataManagementDialog {
                                     let row_count = dataframe.height();
                                     let column_count = dataframe.width();
                                     self.update_dataset_data(source_id, &dataset_name, row_count, column_count);
+                                    // Cache the dataframe to avoid reloading
+                                    self.cache_dataframe(&dataset_id, dataframe);
                                 }
                                 Err(e) => {
                                     self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Failed);
@@ -1475,6 +1578,8 @@ impl DataManagementDialog {
                                 let row_count = dataframe.height();
                                 let column_count = dataframe.width();
                                 self.update_dataset_data(source_id, &dataset_name, row_count, column_count);
+                                // Cache the dataframe to avoid reloading
+                                self.cache_dataframe(&dataset_id, dataframe);
                             }
                             Err(e) => {
                                 self.update_dataset_status(source_id, &dataset_name, DatasetStatus::Failed);
