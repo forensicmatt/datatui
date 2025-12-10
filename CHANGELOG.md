@@ -9,6 +9,8 @@ and this project adheres to
 ## [0.4.0]
 ### Added
 - Add update check
+- Added highlight rule sets
+- Template validation tool for rule sets
 
 ### Fixed
 - Various dialog navigation issues

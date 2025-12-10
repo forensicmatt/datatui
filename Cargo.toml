@@ -1,6 +1,6 @@
 [package]
 name = "datatui"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "DataTUI: A fast, keyboard-first terminal data viewer."
 authors = ["Matthew Seyer <matthew.seyer@gmail.com>"]
