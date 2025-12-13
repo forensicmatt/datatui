@@ -66,6 +66,8 @@ pub struct DataFrameDetailsDialog {
     describe_rows: Vec<DescribeRow>,
     // Horizontal scroll offset for Describe stats columns
     describe_col_offset: usize,
+    // Maximum allowed horizontal scroll offset (computed during render based on visible width)
+    describe_col_max_offset: usize,
     // Heatmap state
     heatmap_x_col_idx: usize,
     heatmap_y_col_idx: usize,
@@ -123,6 +125,7 @@ impl DataFrameDetailsDialog {
             style: StyleConfig::default(),
             describe_rows: Vec::new(),
             describe_col_offset: 0,
+            describe_col_max_offset: 5, // Default: assume all 6 stats columns, max offset = 5
             heatmap_x_col_idx: 0,
             heatmap_y_col_idx: 0,
             heatmap_cols: Vec::new(),
@@ -486,7 +489,7 @@ impl DataFrameDetailsDialog {
         self.heatmap_y_col_idx = self.heatmap_y_col_idx.min(n.saturating_sub(1));
     }
 
-    pub fn render(&self, area: Rect, buf: &mut Buffer) -> usize {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {
         Clear.render(area, buf);
         if let Some(export) = &self.export_dialog {
             // While export dialog is open, render it full-screen and short-circuit
@@ -920,7 +923,7 @@ impl DataFrameDetailsDialog {
         ratatui::prelude::Widget::render(table, render_area, buf);
     }
 
-    fn render_describe_table(&self, area: Rect, buf: &mut Buffer, max_rows: usize) {
+    fn render_describe_table(&mut self, area: Rect, buf: &mut Buffer, max_rows: usize) {
         let total_items = self.describe_rows.len();
         let start_idx = self.scroll_offset.min(total_items);
         let end_idx = (start_idx + max_rows).min(total_items);
@@ -1034,6 +1037,10 @@ impl DataFrameDetailsDialog {
         let total_stats = stats_headers.len();
         let visible_capacity = visible_stats.len().max(1);
         let offset_max = total_stats.saturating_sub(visible_capacity);
+        
+        // Store the computed max offset for use in key handling
+        self.describe_col_max_offset = offset_max;
+        
         if offset_max > 0 && table_width > 4 {
             let track_x = area.x;
             let track_y = area.y + area.height.saturating_sub(1);
@@ -1482,8 +1489,8 @@ impl DataFrameDetailsDialog {
                     return None;
                 }
                 Action::ScrollStatsRight => {
-                    // Max offset is 5 (6 stats columns: count, mean, std, median, min, max)
-                    if self.describe_col_offset < 5 {
+                    // Only scroll if we haven't reached the max (computed during render)
+                    if self.describe_col_offset < self.describe_col_max_offset {
                         self.describe_col_offset += 1;
                     }
                     return None;
@@ -1504,7 +1511,7 @@ impl DataFrameDetailsDialog {
                     return None;
                 }
                 Action::Right => {
-                    if self.describe_col_offset < 5 {
+                    if self.describe_col_offset < self.describe_col_max_offset {
                         self.describe_col_offset += 1;
                     }
                     return None;
