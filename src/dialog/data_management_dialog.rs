@@ -1706,7 +1706,17 @@ impl DataManagementDialog {
             );
             Clear.render(popup_area, buf);
             let ratio = if self.queue_total > 0 {
-                (self.queue_done as f64 / self.queue_total as f64).clamp(0.0, 1.0)
+                // Base progress: completed datasets
+                let base = self.queue_done as f64 / self.queue_total as f64;
+                // Sub-progress: files within current dataset
+                let sub_progress = if self.current_sub_total > 1 {
+                    self.current_sub_done as f64 / self.current_sub_total as f64
+                } else {
+                    0.0
+                };
+                // Each dataset represents 1/queue_total of the bar, so scale sub-progress accordingly
+                let dataset_slice = 1.0 / self.queue_total as f64;
+                (base + sub_progress * dataset_slice).clamp(0.0, 1.0)
             } else {
                 self.busy_progress.clamp(0.0, 1.0)
             };
