@@ -149,7 +149,7 @@
       "<left>": "ChangeColumnLeft",
       "<right>": "ChangeColumnRight",
       "<Ctrl-s>": "OpenSortChoice",
-      "<Ctrl-c>": "OpenCastOverlay",
+      "<Ctrl-o>": "OpenCastOverlay",
       "<Ctrl-f>": "AddFilterFromValue",
       "<Ctrl-e>": "ExportCurrentTab",
       "<Ctrl-up>": "NavigateHeatmapUp",
