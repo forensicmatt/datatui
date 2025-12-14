@@ -13,6 +13,7 @@ use crate::dialog::table_export_dialog::TableExportDialog;
 use crate::style::StyleConfig;
 use crate::dialog::filter_dialog::{ColumnFilter, FilterCondition};
 use serde::{Deserialize, Serialize};
+use arboard::Clipboard;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DetailsTab {
@@ -160,6 +161,7 @@ impl DataFrameDetailsDialog {
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::OpenSortChoice),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::AddFilterFromValue),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ExportCurrentTab),
+                    (crate::config::Mode::Global, crate::action::Action::CopyText),
                     (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
                     (crate::config::Mode::Global, crate::action::Action::Escape),
                 ])
@@ -170,6 +172,7 @@ impl DataFrameDetailsDialog {
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToNextTab),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::OpenCastOverlay),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ExportCurrentTab),
+                    (crate::config::Mode::Global, crate::action::Action::CopyText),
                     (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
                     (crate::config::Mode::Global, crate::action::Action::Escape),
                 ])
@@ -181,6 +184,7 @@ impl DataFrameDetailsDialog {
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ScrollStatsLeft),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ScrollStatsRight),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ExportCurrentTab),
+                    (crate::config::Mode::Global, crate::action::Action::CopyText),
                     (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
                     (crate::config::Mode::Global, crate::action::Action::Escape),
                 ])
@@ -1216,6 +1220,22 @@ impl DataFrameDetailsDialog {
                     self.show_instructions = !self.show_instructions;
                     return None;
                 }
+                Action::CopyText => {
+                    // Handle copy for tabs that support it
+                    match self.tab {
+                        DetailsTab::UniqueValues => {
+                            self.copy_unique_values();
+                        }
+                        DetailsTab::Columns => {
+                            self.copy_columns();
+                        }
+                        DetailsTab::Describe => {
+                            self.copy_describe();
+                        }
+                        _ => {}
+                    }
+                    return None;
+                }
                 // Other global actions (navigation) are handled in tab-specific phase
                 _ => {}
             }
@@ -1821,6 +1841,56 @@ impl DataFrameDetailsDialog {
             .map(|(n, p, m, d)| vec![n, p, m, d])
             .collect();
         self.export_dialog = Some(TableExportDialog::new(headers, rows, Some("embeddings.csv".to_string())));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Copy Helpers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Copy unique values tab data to clipboard in tabular format.
+    fn copy_unique_values(&self) {
+        let mut text = String::from("Value\tCount\n");
+        for (value, count) in &self.unique_counts {
+            // Escape tabs and newlines in values
+            let escaped_value = value.replace('\t', " ").replace('\n', " ").replace('\r', " ");
+            text.push_str(&format!("{escaped_value}\t{count}\n"));
+        }
+        if let Ok(mut clipboard) = Clipboard::new() {
+            let _ = clipboard.set_text(text);
+        }
+    }
+
+    /// Copy columns tab data to clipboard in tabular format.
+    fn copy_columns(&self) {
+        let mut text = String::from("Column\tType\n");
+        for (name, dtype) in &self.columns_info {
+            // Escape tabs and newlines in values
+            let escaped_name = name.replace('\t', " ").replace('\n', " ").replace('\r', " ");
+            let escaped_dtype = dtype.replace('\t', " ").replace('\n', " ").replace('\r', " ");
+            text.push_str(&format!("{escaped_name}\t{escaped_dtype}\n"));
+        }
+        if let Ok(mut clipboard) = Clipboard::new() {
+            let _ = clipboard.set_text(text);
+        }
+    }
+
+    /// Copy describe tab data to clipboard in tabular format.
+    fn copy_describe(&self) {
+        let mut text = String::from("Column\tcount\tmean\tstd\tmedian\tmin\tmax\n");
+        for r in &self.describe_rows {
+            // Escape tabs and newlines in column name
+            let escaped_column = r.column.replace('\t', " ").replace('\n', " ").replace('\r', " ");
+            let count_str = r.count.to_string();
+            let mean_str = r.mean.map(|v| format!("{v}")).unwrap_or_default();
+            let std_str = r.std.map(|v| format!("{v}")).unwrap_or_default();
+            let median_str = r.median.map(|v| format!("{v}")).unwrap_or_default();
+            let min_str = r.min.map(|v| format!("{v}")).unwrap_or_default();
+            let max_str = r.max.map(|v| format!("{v}")).unwrap_or_default();
+            text.push_str(&format!("{escaped_column}\t{count_str}\t{mean_str}\t{std_str}\t{median_str}\t{min_str}\t{max_str}\n"));
+        }
+        if let Ok(mut clipboard) = Clipboard::new() {
+            let _ = clipboard.set_text(text);
+        }
     }
 }
 
