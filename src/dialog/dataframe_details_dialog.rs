@@ -1778,7 +1778,9 @@ impl DataFrameDetailsDialog {
         let suggested = self.current_column_name()
             .map(|c| format!("unique_values_{c}.csv"))
             .or(Some("unique_values.csv".to_string()));
-        self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
+        let mut dialog = TableExportDialog::new(headers, rows, suggested);
+        let _ = dialog.register_config_handler(self.config.clone());
+        self.export_dialog = Some(dialog);
     }
 
     /// Export columns tab data.
@@ -1788,7 +1790,9 @@ impl DataFrameDetailsDialog {
             .iter()
             .map(|(n, t)| vec![n.clone(), t.clone()])
             .collect();
-        self.export_dialog = Some(TableExportDialog::new(headers, rows, Some("columns.csv".to_string())));
+        let mut dialog = TableExportDialog::new(headers, rows, Some("columns.csv".to_string()));
+        let _ = dialog.register_config_handler(self.config.clone());
+        self.export_dialog = Some(dialog);
     }
 
     /// Export describe tab data.
@@ -1814,7 +1818,9 @@ impl DataFrameDetailsDialog {
                 r.max.map(|v| format!("{v}")).unwrap_or_default(),
             ])
             .collect();
-        self.export_dialog = Some(TableExportDialog::new(headers, rows, Some("describe.csv".to_string())));
+        let mut dialog = TableExportDialog::new(headers, rows, Some("describe.csv".to_string()));
+        let _ = dialog.register_config_handler(self.config.clone());
+        self.export_dialog = Some(dialog);
     }
 
     /// Export embeddings tab data.
@@ -1840,7 +1846,9 @@ impl DataFrameDetailsDialog {
             .into_iter()
             .map(|(n, p, m, d)| vec![n, p, m, d])
             .collect();
-        self.export_dialog = Some(TableExportDialog::new(headers, rows, Some("embeddings.csv".to_string())));
+        let mut dialog = TableExportDialog::new(headers, rows, Some("embeddings.csv".to_string()));
+        let _ = dialog.register_config_handler(self.config.clone());
+        self.export_dialog = Some(dialog);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

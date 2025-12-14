@@ -8,6 +8,7 @@ use ratatui::style::Color;
 use directories::BaseDirs;
 use crate::components::dialog_layout::split_dialog_area;
 use crate::config::Config;
+use tracing::error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileBrowserMode {
@@ -48,9 +49,54 @@ pub struct FileBrowserDialog {
 
 impl FileBrowserDialog {
     pub fn new(start_path: Option<PathBuf>, filter_ext: Option<Vec<&str>>, folder_only: bool, mode: FileBrowserMode) -> Self {
-        let dir = start_path.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        // Determine starting directory, ensuring it exists and is readable
+        let mut dir = start_path
+            .and_then(|p| {
+                // If start_path is provided, check if it's a directory or get its parent
+                if p.is_dir() && p.exists() {
+                    Some(p)
+                } else if p.exists() {
+                    p.parent().map(|parent| parent.to_path_buf())
+                } else {
+                    p.parent().map(|parent| parent.to_path_buf())
+                }
+            })
+            .filter(|p| p.exists() && p.is_dir());
+        
+        // If we don't have a valid directory yet, try current working directory
+        if dir.is_none() {
+            dir = std::env::current_dir()
+                .ok()
+                .filter(|p| p.exists() && p.is_dir());
+        }
+        
+        // Final fallback to "." if it exists and is a directory
+        let dir = dir.unwrap_or_else(|| {
+            let fallback = PathBuf::from(".");
+            if fallback.exists() && fallback.is_dir() {
+                fallback
+            } else {
+                // Last resort: try to use home directory
+                directories::BaseDirs::new()
+                    .map(|bd| bd.home_dir().to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("."))
+            }
+        });
+        
         let ext_vec = filter_ext.map(|v| v.into_iter().map(|s| s.to_string()).collect());
         let entries = Self::read_dir(&dir, ext_vec.as_ref(), folder_only);
+        
+        // Set error if directory couldn't be read
+        let error = if !dir.exists() {
+            Some(format!("Directory does not exist: {}", dir.display()))
+        } else {
+            // Check if we can actually read the directory
+            match fs::read_dir(&dir) {
+                Ok(_) => None, // Directory is readable
+                Err(e) => Some(format!("Cannot read directory: {}", e)),
+            }
+        };
+        
         let filename_active = false; // Always start with filename input not active
         Self {
             current_dir: dir,
@@ -58,7 +104,7 @@ impl FileBrowserDialog {
             selected: 0,
             filter_ext: ext_vec,
             folder_only,
-            error: None,
+            error,
             scroll_offset: 0,
             mode: mode.clone(),
             filename_input: String::new(),
@@ -73,12 +119,13 @@ impl FileBrowserDialog {
 
     fn read_dir(dir: &PathBuf, filter_ext: Option<&Vec<String>>, folder_only: bool) -> Vec<fs::DirEntry> {
         let mut entries: Vec<fs::DirEntry> = match fs::read_dir(dir) {
-            Ok(read_dir) => read_dir.filter_map(|e| e.ok())
-                .filter(|_e| {
-                    true
-                })
-                .collect(),
-            Err(_) => vec![],
+            Ok(read_dir) => read_dir.filter_map(|e| e.ok()).collect(),
+            Err(e) => {
+                // Log error and return empty vector if directory can't be read
+                // Error will be shown in the UI via self.error field
+                error!("Failed to read directory {}: {}", dir.display(), e);
+                return vec![];
+            }
         };
         entries.sort_by_key(|e| e.file_name());
         if folder_only {
@@ -525,6 +572,16 @@ impl FileBrowserDialog {
                                 return None;
                             }
                         }
+                    return None;
+                }
+                crate::action::Action::Right => {
+                    // In Save mode, if file list is selected, move focus to filename input
+                    if self.mode == FileBrowserMode::Save && !self.filename_active {
+                        self.filename_active = true;
+                        self.filename_cursor = self.filename_input.len(); // Position cursor at end
+                        return None;
+                    }
+                    // Otherwise, do nothing (Right key doesn't have meaning in file list)
                     return None;
                 }
                 crate::action::Action::Escape => {
