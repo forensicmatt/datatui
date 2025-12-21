@@ -389,6 +389,10 @@ impl DataTable {
 
     /// Table border width (left + right borders for Borders::ALL)
     const TABLE_BORDER_WIDTH: u16 = 2;
+    /// Table border height (top + bottom borders for Borders::ALL)
+    const TABLE_BORDER_HEIGHT: u16 = 2;
+    /// Header row height
+    const HEADER_HEIGHT: u16 = 1;
     /// Column spacing used by Ratatui Table widget (default is 1)
     const COLUMN_SPACING: u16 = 1;
 
@@ -504,9 +508,10 @@ impl DataTable {
         self.selection.col = self.selection.col.min(ncols.saturating_sub(1));
         
         // Use the same row calculation as draw() for consistency
-        let header_height: u16 = 1;
+        // Visible rows = area height - header - borders (top + bottom)
         let max_visible_rows = if self.last_area_height > 0 {
-            self.last_area_height.saturating_sub(header_height) as usize
+            self.last_area_height
+                .saturating_sub(Self::HEADER_HEIGHT + Self::TABLE_BORDER_HEIGHT) as usize
         } else {
             10 // fallback default
         };
@@ -1116,10 +1121,11 @@ impl Component for DataTable {
             return Ok(None);
         }
         
-        let header_height = 1;
         // Calculate the available height for displaying data rows
+        // Same formula as draw(): area height - header - borders
         let page_height = if self.last_area_height > 0 {
-            self.last_area_height.saturating_sub(header_height + 2) as usize
+            self.last_area_height
+                .saturating_sub(Self::HEADER_HEIGHT + Self::TABLE_BORDER_HEIGHT) as usize
         } else {
             10 // fallback default
         };
@@ -1215,8 +1221,10 @@ impl Component for DataTable {
         let visible_columns = self.get_visible_columns()?;
         let total_rows = df.height();
         let total_cols = visible_columns.len();
-        let header_height = 1;
-        let max_visible_rows = area.height.saturating_sub(header_height) as usize;
+        
+        // Calculate visible rows: area height minus header and borders
+        let max_visible_rows = area.height
+            .saturating_sub(Self::HEADER_HEIGHT + Self::TABLE_BORDER_HEIGHT) as usize;
         
         // Calculate scroll bar FIRST so we know the actual available width
         let needs_vertical_scroll = total_rows > max_visible_rows;
