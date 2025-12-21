@@ -387,6 +387,15 @@ impl DataTable {
         Ok(Value::Null)
     }
 
+    /// Table border width (left + right borders for Borders::ALL)
+    const TABLE_BORDER_WIDTH: u16 = 2;
+    /// Table border height (top + bottom borders for Borders::ALL)
+    const TABLE_BORDER_HEIGHT: u16 = 2;
+    /// Header row height
+    const HEADER_HEIGHT: u16 = 1;
+    /// Column spacing used by Ratatui Table widget (default is 1)
+    const COLUMN_SPACING: u16 = 1;
+
     /// Helper to determine visible columns and their widths given a col_start and area width
     fn visible_col_range(
         &self,
@@ -399,9 +408,11 @@ impl DataTable {
     ) -> (usize, usize, Vec<u16>) {
         let total_cols = columns.len();
         let mut col_widths = Vec::new();
-        let mut total_width = 0u16;
         let mut col_end = col_start;
-        let cell_padding = 0;
+        
+        // Account for table borders (left + right)
+        let available_width = area_width.saturating_sub(Self::TABLE_BORDER_WIDTH);
+        let mut total_width = 0u16;
         
         while col_end < total_cols {
             let col_name = &columns[col_end];
@@ -420,7 +431,7 @@ impl DataTable {
                             .and_then(|s| s.get(i).ok())
                             .map(|v| v.to_string())
                             .unwrap_or_default();
-                        let cell_len = val.chars().count() + cell_padding;
+                        let cell_len = val.chars().count();
                         if cell_len > max_len {
                             max_len = cell_len;
                         }
@@ -435,7 +446,7 @@ impl DataTable {
                             .and_then(|s| s.get(i).ok())
                             .map(|v| v.to_string())
                             .unwrap_or_default();
-                        let cell_len = val.chars().count() + cell_padding;
+                        let cell_len = val.chars().count();
                         if cell_len > max_len {
                             max_len = cell_len;
                         }
@@ -444,43 +455,128 @@ impl DataTable {
                 }
             };
             
-            // Calculate how much width is actually available for this column
-            let remaining_width = area_width.saturating_sub(total_width);
+            // Calculate width needed for this column including spacing
+            // First column doesn't need leading spacing, subsequent columns need spacing before them
+            let spacing = if col_widths.is_empty() { 0 } else { Self::COLUMN_SPACING };
+            let width_with_spacing = col_width + spacing;
             
-            // If no remaining width, we can't fit any more columns
-            if remaining_width == 0 {
+            // Calculate how much width is actually available
+            let remaining_width = available_width.saturating_sub(total_width);
+            
+            // If we can't fit this column with its spacing, stop
+            if remaining_width < width_with_spacing {
+                // Check if we can fit with minimum width
+                let min_width_with_spacing = Self::MIN_COL_WIDTH + spacing;
+                if remaining_width >= min_width_with_spacing {
+                    // Fit with reduced width
+                    let actual_width = remaining_width.saturating_sub(spacing);
+                    if actual_width >= Self::MIN_COL_WIDTH {
+                        col_widths.push(actual_width);
+                        col_end += 1;
+                    }
+                }
                 break;
             }
             
-            // Use the smaller of the column's desired width or remaining width
-            let actual_width = std::cmp::min(col_width, remaining_width);
-            
-            // Only add the column if we can fit at least the minimum width
-            if actual_width >= Self::MIN_COL_WIDTH {
-                col_widths.push(actual_width);
-                total_width += actual_width;
-                col_end += 1;
-            } else {
-                // If we can't even fit the minimum width, stop
-                break;
-            }
+            // Add the column with its full width
+            col_widths.push(col_width);
+            total_width += width_with_spacing;
+            col_end += 1;
         }
         (col_start, col_end, col_widths)
     }
 
-    /// Calculate the optimal scroll position to show a column at the leftmost edge
-    fn calculate_optimal_scroll_for_column(
-        &self,
-        _df: &polars::prelude::DataFrame,
-        _columns: &[String],
-        target_col: usize,
-        _area_width: u16,
-        _row_start: usize,
-        _row_end: usize,
-    ) -> usize {
-        // Simply position the target column at the beginning of the visible area
-        // This ensures the column is at the leftmost edge when scrolled to
-        target_col
+    /// Ensure the current selection is visible within the viewport.
+    /// 
+    /// This method adjusts scroll.x and scroll.y so that the selected cell is
+    /// fully visible. It should be called after any selection change and before drawing.
+    /// 
+    /// Returns true if any scroll adjustment was made.
+    fn ensure_selection_visible(&mut self) -> Result<bool> {
+        let df = self.get_dataframe()?;
+        let df = df.as_ref();
+        let visible_columns = self.get_visible_columns()?;
+        let nrows = df.height();
+        let ncols = visible_columns.len();
+        
+        if nrows == 0 || ncols == 0 {
+            return Ok(false);
+        }
+        
+        // Ensure selection is within bounds
+        self.selection.row = self.selection.row.min(nrows.saturating_sub(1));
+        self.selection.col = self.selection.col.min(ncols.saturating_sub(1));
+        
+        // Use the same row calculation as draw() for consistency
+        // Visible rows = area height - header - borders (top + bottom)
+        let max_visible_rows = if self.last_area_height > 0 {
+            self.last_area_height
+                .saturating_sub(Self::HEADER_HEIGHT + Self::TABLE_BORDER_HEIGHT) as usize
+        } else {
+            10 // fallback default
+        };
+        let area_width = self.last_area_width;
+        let old_scroll = self.scroll;
+        
+        // --- Vertical scroll adjustment ---
+        if self.selection.row < self.scroll.y {
+            self.scroll.y = self.selection.row;
+        } else if max_visible_rows > 0 && self.selection.row >= self.scroll.y + max_visible_rows {
+            self.scroll.y = self.selection.row + 1 - max_visible_rows;
+        }
+        
+        // --- Horizontal scroll adjustment ---
+        // Calculate which columns are currently visible (use same row range as draw())
+        let row_start = self.scroll.y.min(nrows);
+        let row_end = (row_start + max_visible_rows).min(nrows);
+        
+        let sel_col = self.selection.col;
+        
+        // Key insight: We need to ensure the selected column is FULLY visible,
+        // not just partially included in the visible range.
+        // 
+        // Strategy:
+        // 1. If selection is left of scroll.x, scroll left to show it
+        // 2. Otherwise, check if selection would be fully visible from current scroll
+        // 3. If not fully visible (or at edge with truncation), scroll right
+        
+        if sel_col < self.scroll.x {
+            // Selection is to the left of the first visible column - scroll left
+            self.scroll.x = sel_col;
+        } else {
+            // Check if the selection is fully visible from current scroll position
+            let (col_start, col_end, col_widths) = self.visible_col_range(
+                df, &visible_columns, area_width, row_start, row_end, self.scroll.x
+            );
+            
+            // Calculate if the selected column is fully visible
+            let is_fully_visible = if sel_col >= col_start && sel_col < col_end {
+                // Column is in the visible range, but check if it has full width
+                let idx_in_widths = sel_col - col_start;
+                if let Some(&allocated_width) = col_widths.get(idx_in_widths) {
+                    let desired_width = self.desired_column_width(
+                        df, &visible_columns, sel_col, row_start, row_end
+                    );
+                    // Consider fully visible if allocated width >= desired width,
+                    // OR if the column is the only one and takes full width
+                    allocated_width >= desired_width || 
+                        (col_widths.len() == 1 && allocated_width >= area_width.saturating_sub(2))
+                } else {
+                    false
+                }
+            } else {
+                // Column is outside the visible range
+                false
+            };
+            
+            if !is_fully_visible {
+                // Need to scroll to make the selection fully visible
+                // Position the selected column at the left edge for maximum visibility
+                self.scroll.x = sel_col;
+            }
+        }
+        
+        Ok(self.scroll != old_scroll)
     }
 
     /// Compute the desired width for a specific column index within `columns`,
@@ -859,53 +955,7 @@ impl DataTable {
 
     /// Scrolls the table so that the selected cell is visible.
     pub fn scroll_to_selection(&mut self) -> Result<()> {
-        let df = self.get_dataframe()?;
-        let df = df.as_ref();
-        let visible_columns = self.get_visible_columns()?;
-        let nrows = df.height();
-        let ncols = visible_columns.len();
-        let header_height = 1;
-        let area_height = if self.last_area_height > 0 {
-            self.last_area_height.saturating_sub(header_height + 2) as usize
-        } else {
-            10 // fallback default
-        };
-        let area_width = if self.last_area_width > 0 {
-            self.last_area_width as usize
-        } else {
-            ncols // fallback
-        };
-        // Vertical scroll
-        if self.selection.row < self.scroll.y {
-            self.scroll.y = self.selection.row;
-        } else if self.selection.row >= self.scroll.y + area_height {
-            self.scroll.y = self.selection.row + 1 - area_height;
-        }
-        // Horizontal scroll - use the existing logic from handle_key_event
-        let row_start = self.scroll.y.min(nrows);
-        let row_end = (row_start + area_height).min(nrows);
-        let (col_start, col_end, col_widths) = self.visible_col_range(
-            df, &visible_columns, area_width as u16, 
-            row_start, row_end, self.scroll.x
-        );
-        let col = self.selection.col;
-        if col < col_start {
-            self.scroll.x = col;
-        } else if col >= col_end {
-            self.scroll.x = self.calculate_optimal_scroll_for_column(
-                df, &visible_columns, col, area_width as u16, row_start, row_end
-            );
-        } else if col == col_end.saturating_sub(1) {
-            // If the selected column is the last visible one and its desired width exceeds
-            // the allocated width, shift it to the left edge to maximize its visible content.
-            let allocated_idx = col_end.saturating_sub(col_start + 1);
-            if let Some(&allocated_width) = col_widths.get(allocated_idx) {
-                let desired_width = self.desired_column_width(df, &visible_columns, col, row_start, row_end);
-                if desired_width > allocated_width {
-                    self.scroll.x = col;
-                }
-            }
-        }
+        self.ensure_selection_visible()?;
         Ok(())
     }
 
@@ -1059,125 +1109,96 @@ impl Component for DataTable {
     /// Handle key events and produce actions if necessary.
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         use crossterm::event::{KeyCode, KeyModifiers};
+        
         let df = self.get_dataframe()?;
         let df = df.as_ref();
         let nrows = df.height();
         let visible_columns = self.get_visible_columns()?;
         let ncols = visible_columns.len();
-        let mut sel = self.selection;
-        let mut scroll = self.scroll;
-        let header_height = 1;
-
-        // Calculate the available height for displaying data rows by subtracting the header height
-        // from the total area height. If no area height is set yet (last_area_height <= 0),
-        // fall back to a default of 10 rows
-        let area_height = if self.last_area_height > 0 {
-            self.last_area_height.saturating_sub(header_height + 2) as usize
+        
+        // Early return if no data
+        if nrows == 0 || ncols == 0 {
+            return Ok(None);
+        }
+        
+        // Calculate the available height for displaying data rows
+        // Same formula as draw(): area height - header - borders
+        let page_height = if self.last_area_height > 0 {
+            self.last_area_height
+                .saturating_sub(Self::HEADER_HEIGHT + Self::TABLE_BORDER_HEIGHT) as usize
         } else {
             10 // fallback default
         };
-        let area_width = if self.last_area_width > 0 {
-            self.last_area_width as usize
-        } else {
-            ncols // fallback
-        };
-        let min_col_width = Self::MIN_COL_WIDTH as usize;
-        let _max_visible_cols = std::cmp::max(1, area_width / min_col_width);
+        
+        // Estimate visible columns for page-jump (used by Ctrl+Left/Right)
+        let area_width = self.last_area_width;
+        let row_start = self.scroll.y.min(nrows);
+        let row_end = (row_start + page_height).min(nrows).max(row_start + 1);
+        let (col_start, col_end, _) = self.visible_col_range(
+            df, &visible_columns, area_width, row_start, row_end, self.scroll.x
+        );
+        let visible_col_count = col_end.saturating_sub(col_start).max(1);
+        
         if key.kind == KeyEventKind::Press {
             match key.code {
+                // --- Vertical navigation ---
                 KeyCode::Up => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        if sel.row >= area_height {
-                            sel.row -= area_height;
-                        } else {
-                            sel.row = 0;
-                        }
-                    } else if sel.row > 0 {
-                        sel.row -= 1;
+                        // Page up
+                        self.selection.row = self.selection.row.saturating_sub(page_height);
+                    } else if self.selection.row > 0 {
+                        self.selection.row -= 1;
                     }
                 }
                 KeyCode::Down => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        sel.row = (sel.row + area_height).min(nrows.saturating_sub(1));
-                    } else if sel.row + 1 < nrows {
-                        sel.row += 1;
+                        // Page down
+                        self.selection.row = (self.selection.row + page_height).min(nrows.saturating_sub(1));
+                    } else if self.selection.row + 1 < nrows {
+                        self.selection.row += 1;
                     }
                 }
+                
+                // --- Horizontal navigation ---
                 KeyCode::Left => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        if sel.col >= area_width {
-                            sel.col -= area_width;
-                        } else {
-                            sel.col = 0;
-                        }
-                    } else if sel.col > 0 {
-                        sel.col -= 1;
+                        // Page left - move by visible column count
+                        self.selection.col = self.selection.col.saturating_sub(visible_col_count);
+                    } else if self.selection.col > 0 {
+                        self.selection.col -= 1;
                     }
                 }
                 KeyCode::Right => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        sel.col = (sel.col + area_width).min(ncols.saturating_sub(1));
-                    } else if sel.col + 1 < ncols {
-                        sel.col += 1;
+                        // Page right - move by visible column count
+                        self.selection.col = (self.selection.col + visible_col_count).min(ncols.saturating_sub(1));
+                    } else if self.selection.col + 1 < ncols {
+                        self.selection.col += 1;
                     }
                 }
+                
+                // --- Home/End navigation ---
                 KeyCode::Home => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        sel.col = 0;
+                        self.selection.col = 0;
                     } else {
-                        sel.row = 0;
+                        self.selection.row = 0;
                     }
                 }
                 KeyCode::End => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        sel.col = ncols.saturating_sub(1);
+                        self.selection.col = ncols.saturating_sub(1);
                     } else {
-                        sel.row = nrows.saturating_sub(1);
+                        self.selection.row = nrows.saturating_sub(1);
                     }
                 }
                 _ => {}
             }
         }
-        // Ensure selection is in bounds
-        sel.row = sel.row.min(nrows.saturating_sub(1));
-        sel.col = sel.col.min(ncols.saturating_sub(1));
-        // Update scroll to keep selection visible (vertical)
-        if area_height > 0 {
-            if sel.row < scroll.y {
-                scroll.y = sel.row;
-            } else if sel.row >= scroll.y + area_height {
-                scroll.y = sel.row + 1 - area_height;
-            }
-        }
-        // --- Horizontal scroll logic ---
-        // Use visible_col_range to determine which columns are visible for the current scroll.x
-        let row_start = scroll.y.min(nrows);
-        let row_end = (row_start + area_height).min(nrows);
-        let area_width_u16 = self.last_area_width;
-        let (col_start, col_end, col_widths) = self.visible_col_range(
-            df, &visible_columns, area_width_u16, row_start, row_end, scroll.x
-        );
-        // If selection.col is left of visible, scroll left
-        if sel.col < col_start {
-            scroll.x = sel.col;
-        } else if sel.col >= col_end {
-            // Use the optimal scroll calculation to ensure the selected column can display its full width
-            scroll.x = self.calculate_optimal_scroll_for_column(
-                df, &visible_columns, sel.col, area_width_u16, row_start, row_end
-            );
-        } else if sel.col == col_end.saturating_sub(1) {
-            // If the selected column is the last visible one and its desired width exceeds
-            // the allocated width, shift it to the left edge to maximize its visible content.
-            let allocated_idx = col_end.saturating_sub(col_start + 1);
-            if let Some(&allocated_width) = col_widths.get(allocated_idx) {
-                let desired_width = self.desired_column_width(df, &visible_columns, sel.col, row_start, row_end);
-                if desired_width > allocated_width {
-                    scroll.x = sel.col;
-                }
-            }
-        }
-        self.selection = sel;
-        self.scroll = scroll;
+        
+        // Ensure selection is within bounds and scroll to show it
+        self.ensure_selection_visible()?;
+        
         Ok(None)
     }
 
@@ -1195,30 +1216,21 @@ impl Component for DataTable {
 
     /// Render the component on the screen.
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        self.last_area_height = area.height;
-        self.last_area_width = area.width;
-        // Adjust selection if needed due to hidden columns
-        self.adjust_selection_for_visible_columns()?;
         let df = self.get_dataframe()?;
         let df = df.as_ref();
         let visible_columns = self.get_visible_columns()?;
         let total_rows = df.height();
         let total_cols = visible_columns.len();
-        let header_height = 1;
-        let max_visible_rows = area.height.saturating_sub(header_height) as usize;
-        let row_start = self.scroll.y.min(total_rows);
-        let row_end = (row_start + max_visible_rows).min(total_rows);
-        let col_start = self.scroll.x.min(total_cols);
-        let (col_start, col_end, col_widths) = self.visible_col_range(
-            df, &visible_columns, area.width, row_start, row_end, col_start
-        );
-        let visible_columns_slice = &visible_columns[col_start..col_end];
         
-        // Calculate if we need a vertical scroll bar
+        // Calculate visible rows: area height minus header and borders
+        let max_visible_rows = area.height
+            .saturating_sub(Self::HEADER_HEIGHT + Self::TABLE_BORDER_HEIGHT) as usize;
+        
+        // Calculate scroll bar FIRST so we know the actual available width
         let needs_vertical_scroll = total_rows > max_visible_rows;
         let scroll_bar_width = if needs_vertical_scroll { 1 } else { 0 };
         
-        // Adjust table area to account for scroll bar
+        // Calculate the actual table area (accounting for scroll bar)
         let table_area = if needs_vertical_scroll {
             Rect::new(
                 area.x + scroll_bar_width,
@@ -1229,6 +1241,26 @@ impl Component for DataTable {
         } else {
             area
         };
+        
+        // Store the ACTUAL available width for column calculations
+        self.last_area_height = area.height;
+        self.last_area_width = table_area.width;
+        
+        // Adjust selection if needed due to hidden columns
+        self.adjust_selection_for_visible_columns()?;
+        
+        // Ensure the selection is visible (handles window resize, column changes, etc.)
+        self.ensure_selection_visible()?;
+        
+        let row_start = self.scroll.y.min(total_rows);
+        let row_end = (row_start + max_visible_rows).min(total_rows);
+        let col_start = self.scroll.x.min(total_cols);
+        
+        // Use table_area.width (actual available width after scroll bar)
+        let (col_start, col_end, col_widths) = self.visible_col_range(
+            df, &visible_columns, table_area.width, row_start, row_end, col_start
+        );
+        let visible_columns_slice = &visible_columns[col_start..col_end];
         
         // Draw vertical scroll bar if needed
         if needs_vertical_scroll {
@@ -1372,11 +1404,6 @@ impl Component for DataTable {
                 })
         );
 
-        // let selected_cell_style = Style::default()
-        //     .fg(ratatui::style::Color::Black)
-        //     .bg(ratatui::style::Color::Yellow)
-        //     .add_modifier(Modifier::BOLD | Modifier::REVERSED | Modifier::UNDERLINED);
-    
         // Pre-compute gradient bounds for columns that need it
         let gradient_bounds: BTreeMap<String, (f64, f64)> = self.compute_gradient_bounds(df, &visible_columns_slice);
         
@@ -1683,6 +1710,7 @@ impl Component for DataTable {
             .collect::<Vec<_>>();
         let table = Table::new(row_widgets, widths)
             .header(header)
+            .column_spacing(Self::COLUMN_SPACING)
             .block(Block::default()
             .borders(Borders::ALL)
             .style(self.style.table_border));

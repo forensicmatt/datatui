@@ -162,7 +162,8 @@ impl TableExportDialog {
 
         match &mut self.mode {
             TableExportMode::FileBrowser => {
-                if let Some(browser) = &mut self.file_browser && let Some(action) = browser.handle_key_event(key) {
+                if let Some(browser) = &mut self.file_browser {
+                    if let Some(action) = browser.handle_key_event(key) {
                         match action {
                             FileBrowserAction::Selected(path) => {
                                 self.set_file_path(path.to_string_lossy().to_string());
@@ -174,6 +175,7 @@ impl TableExportDialog {
                                 self.file_browser = None;
                             }
                         }
+                    }
                 }
                 None
             }
@@ -242,11 +244,23 @@ impl TableExportDialog {
                         }
                         Action::Right => {
                             if self.file_path_focused {
-                                // forward to textarea
-                                use tui_textarea::Input as TuiInput;
-                                let input: TuiInput = key.into();
-                                self.file_path_input.input(input);
-                                self.sync_file_path_from_input();
+                                // Check if cursor is at the end of the text
+                                let lines = self.file_path_input.lines();
+                                let cursor_pos = self.file_path_input.cursor();
+                                
+                                if cursor_pos.0 == lines.len().saturating_sub(1) && 
+                                   cursor_pos.1 >= lines.last().unwrap_or(&String::new()).len() {
+                                    // Cursor is at the end, move to browse button
+                                    self.file_path_focused = false;
+                                    self.browse_button_selected = true;
+                                    self.export_button_selected = false;
+                                } else {
+                                    // Let the TextArea handle the right arrow normally
+                                    use tui_textarea::Input as TuiInput;
+                                    let input: TuiInput = key.into();
+                                    self.file_path_input.input(input);
+                                    self.sync_file_path_from_input();
+                                }
                             } else if self.browse_button_selected {
                                 self.browse_button_selected = false;
                                 self.export_button_selected = true;
@@ -255,7 +269,18 @@ impl TableExportDialog {
                         }
                         Action::Enter => {
                             if self.browse_button_selected {
-                                self.file_browser = Some(FileBrowserDialog::new(None, Some(vec!["csv"]), false, FileBrowserMode::Save));
+                                // Try to start browser in the directory of the current file path, if it exists
+                                let start_path = PathBuf::from(&self.file_path)
+                                    .parent()
+                                    .map(|p| p.to_path_buf());
+                                let mut browser = FileBrowserDialog::new(start_path, Some(vec!["csv"]), false, FileBrowserMode::Save);
+                                browser.register_config_handler(self.config.clone());
+                                // If current file path has a filename, pre-fill it in the browser
+                                if let Some(file_name) = PathBuf::from(&self.file_path).file_name() {
+                                    browser.filename_input = file_name.to_string_lossy().to_string();
+                                    browser.filename_cursor = browser.filename_input.len();
+                                }
+                                self.file_browser = Some(browser);
                                 self.mode = TableExportMode::FileBrowser;
                                 return None;
                             }
@@ -275,7 +300,18 @@ impl TableExportDialog {
                 if let Some(dialog_action) = self.config.action_for_key(crate::config::Mode::TableExport, key) {
                     match dialog_action {
                         Action::OpenFileBrowser => {
-                            self.file_browser = Some(FileBrowserDialog::new(None, Some(vec!["csv"]), false, FileBrowserMode::Save));
+                            // Try to start browser in the directory of the current file path, if it exists
+                            let start_path = PathBuf::from(&self.file_path)
+                                .parent()
+                                .map(|p| p.to_path_buf());
+                            let mut browser = FileBrowserDialog::new(start_path, Some(vec!["csv"]), false, FileBrowserMode::Save);
+                            browser.register_config_handler(self.config.clone());
+                            // If current file path has a filename, pre-fill it in the browser
+                            if let Some(file_name) = PathBuf::from(&self.file_path).file_name() {
+                                browser.filename_input = file_name.to_string_lossy().to_string();
+                                browser.filename_cursor = browser.filename_input.len();
+                            }
+                            self.file_browser = Some(browser);
                             self.mode = TableExportMode::FileBrowser;
                             return None;
                         }
@@ -329,8 +365,10 @@ impl TableExportDialog {
 
     fn set_file_path(&mut self, path: String) {
         self.file_path = path.clone();
-        self.file_path_input = TextArea::from(vec![path]);
+        self.file_path_input = TextArea::from(vec![path.clone()]);
         self.file_path_input.set_block(Block::default().title("Output File Path").borders(Borders::ALL));
+        // Ensure file_path is synced
+        self.sync_file_path_from_input();
     }
 
     fn sync_file_path_from_input(&mut self) {
@@ -338,15 +376,31 @@ impl TableExportDialog {
     }
 
     fn export_to_csv(&self) -> Result<()> {
-        let path = PathBuf::from(&self.file_path);
-        if let Some(parent) = path.parent() && !parent.as_os_str().is_empty() { let _ = create_dir_all(parent); }
+        // Validate file path is not empty
+        if self.file_path.trim().is_empty() {
+            return Err(color_eyre::eyre::eyre!("File path cannot be empty"));
+        }
+        
+        let path = PathBuf::from(&self.file_path.trim());
+        
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                create_dir_all(parent)?;
+            }
+        }
+        
+        // Create and write to file
         let mut file = File::create(&path)?;
 
-        // write header
+        // Write header
         writeln!(file, "{}", self.headers.iter().map(|h| csv_escape(h)).collect::<Vec<_>>().join(","))?;
+        
+        // Write rows
         for row in &self.rows {
             writeln!(file, "{}", row.iter().map(|c| csv_escape(c)).collect::<Vec<_>>().join(","))?;
         }
+        
         Ok(())
     }
 }

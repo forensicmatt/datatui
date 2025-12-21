@@ -6,13 +6,14 @@ use crate::components::dialog_layout::split_dialog_area;
 use crate::action::Action;
 use crate::components::Component;
 use color_eyre::Result;
-use crossterm::event::{KeyEvent, KeyEventKind, KeyCode, KeyModifiers};
+use crossterm::event::{KeyEvent, KeyEventKind, KeyCode};
 use polars::prelude::*;
 use std::sync::Arc;
 use crate::dialog::table_export_dialog::TableExportDialog;
 use crate::style::StyleConfig;
 use crate::dialog::filter_dialog::{ColumnFilter, FilterCondition};
 use serde::{Deserialize, Serialize};
+use arboard::Clipboard;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DetailsTab {
@@ -66,6 +67,8 @@ pub struct DataFrameDetailsDialog {
     describe_rows: Vec<DescribeRow>,
     // Horizontal scroll offset for Describe stats columns
     describe_col_offset: usize,
+    // Maximum allowed horizontal scroll offset (computed during render based on visible width)
+    describe_col_max_offset: usize,
     // Heatmap state
     heatmap_x_col_idx: usize,
     heatmap_y_col_idx: usize,
@@ -123,6 +126,7 @@ impl DataFrameDetailsDialog {
             style: StyleConfig::default(),
             describe_rows: Vec::new(),
             describe_col_offset: 0,
+            describe_col_max_offset: 5, // Default: assume all 6 stats columns, max offset = 5
             heatmap_x_col_idx: 0,
             heatmap_y_col_idx: 0,
             heatmap_cols: Vec::new(),
@@ -150,49 +154,37 @@ impl DataFrameDetailsDialog {
         match self.tab {
             DetailsTab::UniqueValues => {
                 self.config.actions_to_instructions(&[
-                    (crate::config::Mode::Global, crate::action::Action::Tab),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToPrevTab),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToNextTab),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ChangeColumnLeft),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ChangeColumnRight),
-                    (crate::config::Mode::Global, crate::action::Action::Up),
-                    (crate::config::Mode::Global, crate::action::Action::Down),
-                    (crate::config::Mode::Global, crate::action::Action::PageUp),
-                    (crate::config::Mode::Global, crate::action::Action::PageDown),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::OpenSortChoice),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::AddFilterFromValue),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ExportCurrentTab),
+                    (crate::config::Mode::Global, crate::action::Action::CopyText),
                     (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
                     (crate::config::Mode::Global, crate::action::Action::Escape),
                 ])
             }
             DetailsTab::Columns => {
                 self.config.actions_to_instructions(&[
-                    (crate::config::Mode::Global, crate::action::Action::Tab),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToPrevTab),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToNextTab),
-                    (crate::config::Mode::Global, crate::action::Action::Up),
-                    (crate::config::Mode::Global, crate::action::Action::Down),
-                    (crate::config::Mode::Global, crate::action::Action::PageUp),
-                    (crate::config::Mode::Global, crate::action::Action::PageDown),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::OpenCastOverlay),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ExportCurrentTab),
+                    (crate::config::Mode::Global, crate::action::Action::CopyText),
                     (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
                     (crate::config::Mode::Global, crate::action::Action::Escape),
                 ])
             }
             DetailsTab::Describe => {
                 self.config.actions_to_instructions(&[
-                    (crate::config::Mode::Global, crate::action::Action::Tab),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToPrevTab),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToNextTab),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ScrollStatsLeft),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ScrollStatsRight),
-                    (crate::config::Mode::Global, crate::action::Action::Up),
-                    (crate::config::Mode::Global, crate::action::Action::Down),
-                    (crate::config::Mode::Global, crate::action::Action::PageUp),
-                    (crate::config::Mode::Global, crate::action::Action::PageDown),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ExportCurrentTab),
+                    (crate::config::Mode::Global, crate::action::Action::CopyText),
                     (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
                     (crate::config::Mode::Global, crate::action::Action::Escape),
                 ])
@@ -215,13 +207,8 @@ impl DataFrameDetailsDialog {
             }
             DetailsTab::Embeddings => {
                 self.config.actions_to_instructions(&[
-                    (crate::config::Mode::Global, crate::action::Action::Tab),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToPrevTab),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::SwitchToNextTab),
-                    (crate::config::Mode::Global, crate::action::Action::Up),
-                    (crate::config::Mode::Global, crate::action::Action::Down),
-                    (crate::config::Mode::Global, crate::action::Action::PageUp),
-                    (crate::config::Mode::Global, crate::action::Action::PageDown),
                     (crate::config::Mode::DataFrameDetails, crate::action::Action::ExportCurrentTab),
                     (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
                     (crate::config::Mode::Global, crate::action::Action::Escape),
@@ -506,7 +493,7 @@ impl DataFrameDetailsDialog {
         self.heatmap_y_col_idx = self.heatmap_y_col_idx.min(n.saturating_sub(1));
     }
 
-    pub fn render(&self, area: Rect, buf: &mut Buffer) -> usize {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer) -> usize {
         Clear.render(area, buf);
         if let Some(export) = &self.export_dialog {
             // While export dialog is open, render it full-screen and short-circuit
@@ -940,7 +927,7 @@ impl DataFrameDetailsDialog {
         ratatui::prelude::Widget::render(table, render_area, buf);
     }
 
-    fn render_describe_table(&self, area: Rect, buf: &mut Buffer, max_rows: usize) {
+    fn render_describe_table(&mut self, area: Rect, buf: &mut Buffer, max_rows: usize) {
         let total_items = self.describe_rows.len();
         let start_idx = self.scroll_offset.min(total_items);
         let end_idx = (start_idx + max_rows).min(total_items);
@@ -1054,6 +1041,10 @@ impl DataFrameDetailsDialog {
         let total_stats = stats_headers.len();
         let visible_capacity = visible_stats.len().max(1);
         let offset_max = total_stats.saturating_sub(visible_capacity);
+        
+        // Store the computed max offset for use in key handling
+        self.describe_col_max_offset = offset_max;
+        
         if offset_max > 0 && table_width > 4 {
             let track_x = area.x;
             let track_y = area.y + area.height.saturating_sub(1);
@@ -1160,391 +1151,754 @@ impl DataFrameDetailsDialog {
         }
     }
 
+    /// Handle key events for the DataFrame Details dialog.
+    ///
+    /// # Event Processing Flow
+    ///
+    /// The method processes events in a strict priority order:
+    ///
+    /// 1. **Modal Overlays** (highest priority - consume all input)
+    ///    - Export dialog: Full-screen file export UI
+    ///    - Sort choice overlay: Value/Count sort selector (UniqueValues tab)
+    ///    - Cast overlay: Column type casting selector (Columns tab)
+    ///
+    /// 2. **Global Actions** (dialog-level controls)
+    ///    - Escape: Close dialog
+    ///    - Toggle instructions visibility
+    ///
+    /// 3. **Tab Switching**
+    ///    - Navigate between UniqueValues, Columns, Describe, Heatmap, Embeddings
+    ///
+    /// 4. **Tab-Specific Actions** (delegated to specialized handlers)
+    ///    - Each tab has its own navigation and action handling
+    ///
+    /// # Arguments
+    /// * `key` - The key event to process
+    /// * `max_rows` - Maximum visible rows for scroll calculations
+    ///
+    /// # Returns
+    /// * `Some(Action)` - An action to propagate to the parent component
+    /// * `None` - Event was handled internally or ignored
     pub fn handle_key_event(&mut self, key: KeyEvent, max_rows: usize) -> Option<Action> {
-        if key.kind != KeyEventKind::Press { return None; }
-
-        // Route to export dialog if active
-        if let Some(dialog) = &mut self.export_dialog {
-            if let Some(action) = dialog.handle_key_event(key)
-                && action == Action::DialogClose {
-                    self.export_dialog = None;
-                    return None;
-                }
-            return None;
+        // Only process key press events (ignore release/repeat)
+        if key.kind != KeyEventKind::Press { 
+            return None; 
         }
 
-        // Route to sort choice overlay if active
+        // ─────────────────────────────────────────────────────────────────────
+        // PHASE 1: Modal Overlays (highest priority, consume all input)
+        // ─────────────────────────────────────────────────────────────────────
+        // Modal overlays have exclusive input focus. When active, they must
+        // handle or consume all key events before any other processing.
+
+        // 1a. Export dialog - full-screen file export UI
+        if self.export_dialog.is_some() {
+            return self.handle_export_dialog_input(key);
+        }
+
+        // 1b. Sort choice overlay - value/count sorting selector
         if self.sort_choice_open {
-            match key.code {
-                KeyCode::Up => {
-                    if self.sort_choice_index == 0 { self.sort_choice_index = 1; } else { self.sort_choice_index -= 1; }
-                }
-                KeyCode::Down => {
-                    self.sort_choice_index = (self.sort_choice_index + 1) % 2;
-                }
-                KeyCode::Enter => {
-                    self.sort_by = if self.sort_choice_index == 0 { SortBy::Value } else { SortBy::Count };
-                    self.sort_choice_open = false;
-                    self.recompute_unique_counts();
-                }
-                KeyCode::Esc => {
-                    self.sort_choice_open = false;
-                }
-                _ => {}
-            }
-            return None;
+            return self.handle_sort_choice_input(key);
         }
 
-        // Route to cast overlay if active
+        // 1c. Cast overlay - column type casting selector
         if self.cast_overlay_open {
-            // If an error overlay is present, allow dismissing it with Enter/Esc
-            if self.cast_error.is_some() {
-                match key.code {
-                    KeyCode::Enter | KeyCode::Esc => {
-                        self.clear_cast_error();
-                    }
-                    _ => {}
-                }
-                return None;
-            }
-            match key.code {
-                KeyCode::Up => {
-                    if self.cast_selected_idx == 0 { self.cast_selected_idx = self.cast_options.len().saturating_sub(1); } else { self.cast_selected_idx -= 1; }
-                }
-                KeyCode::Down => {
-                    if !self.cast_options.is_empty() { self.cast_selected_idx = (self.cast_selected_idx + 1) % self.cast_options.len(); }
-                }
-                KeyCode::Enter => {
-                    if let Some((_, dt)) = self.cast_options.get(self.cast_selected_idx).cloned()
-                        && let Some((col, _)) = self.columns_info.get(self.selected_row)
-                    {
-                        return Some(Action::ColumnCastRequested { column: col.clone(), dtype: format!("{dt:?}") });
-                    }
-                }
-                KeyCode::Esc => { self.cast_overlay_open = false; }
-                _ => {}
-            }
-            return None;
+            return self.handle_cast_overlay_input(key);
         }
 
-        // Handle Ctrl+I for instructions toggle
-        if key.code == KeyCode::Char('i') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.show_instructions = !self.show_instructions;
-            return None;
-        }
+        // ─────────────────────────────────────────────────────────────────────
+        // PHASE 2: Global Actions (dialog-level controls)
+        // ─────────────────────────────────────────────────────────────────────
+        // These actions apply regardless of which tab is active.
 
-        // First, honor config-driven Global actions
-        if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
-            match global_action {
-                Action::Escape => return Some(Action::DialogClose),
-                Action::Enter => {
-                    // Handle Enter logic based on dialog state
-                }
-                Action::Up => {
-                    if self.selected_row > 0 { self.selected_row -= 1; }
-                    if self.selected_row < self.scroll_offset { self.scroll_offset = self.selected_row; }
-                }
-                Action::Down => {
-                    let list_len = match self.tab {
-                        DetailsTab::UniqueValues => self.unique_counts.len(),
-                        DetailsTab::Columns => self.columns_info.len(),
-                        DetailsTab::Describe => self.describe_rows.len(),
-                        DetailsTab::Heatmap => 0,
-                        DetailsTab::Embeddings => self.embedding_column_config_mapping.len(),
-                    };
-                    let max_idx = list_len.saturating_sub(1);
-                    if self.selected_row < max_idx { self.selected_row += 1; }
-                    let visible_end = self.scroll_offset + max_rows.saturating_sub(1);
-                    if self.selected_row > visible_end { self.scroll_offset = self.selected_row.saturating_sub(max_rows.saturating_sub(1)); }
-                }
-                Action::Left => {
-                    if matches!(self.tab, DetailsTab::Describe) {
-                        self.describe_col_offset = self.describe_col_offset.saturating_sub(1);
-                    } else if matches!(self.tab, DetailsTab::UniqueValues) && !self.columns.is_empty() {
-                        if self.selected_column_idx == 0 { self.selected_column_idx = self.columns.len() - 1; } else { self.selected_column_idx -= 1; }
-                        self.recompute_unique_counts();
-                    } else if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
-                        if self.heatmap_x_col_idx == 0 { self.heatmap_x_col_idx = self.heatmap_cols.len().saturating_sub(1); } else { self.heatmap_x_col_idx -= 1; }
-                    }
-                }
-                Action::Right => {
-                    if matches!(self.tab, DetailsTab::Describe) {
-                        // Max 5 (0..=5) since there are 6 stats columns
-                        if self.describe_col_offset < 5 { self.describe_col_offset += 1; }
-                    } else if matches!(self.tab, DetailsTab::UniqueValues) && !self.columns.is_empty() {
-                        let n = self.columns.len().max(1);
-                        self.selected_column_idx = (self.selected_column_idx + 1) % n;
-                        self.recompute_unique_counts();
-                    } else if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
-                        let n = self.heatmap_cols.len().max(1);
-                        self.heatmap_x_col_idx = (self.heatmap_x_col_idx + 1) % n;
-                    }
-                }
-                Action::Tab => {
-                    if matches!(self.tab, DetailsTab::UniqueValues) {
-                        if matches!(self.focus, FocusField::ColumnDropdown) {
-                            self.focus = FocusField::Table;
-                        } else {
-                            self.focus = FocusField::ColumnDropdown;
-                        }
-                    }
-                }
-                Action::PageUp => {
-                    let list_len = match self.tab {
-                        DetailsTab::UniqueValues => self.unique_counts.len(),
-                        DetailsTab::Columns => self.columns_info.len(),
-                        DetailsTab::Describe => self.describe_rows.len(),
-                        DetailsTab::Heatmap => 0,
-                        DetailsTab::Embeddings => self.embedding_column_config_mapping.len(),
-                    };
-                    if list_len == 0 { return None; }
-                    let page = max_rows.max(1);
-                    let new_selected = self.selected_row.saturating_sub(page);
-                    self.selected_row = new_selected;
-                    if self.selected_row < self.scroll_offset {
-                        self.scroll_offset = self.selected_row;
-                    }
-                }
-                Action::PageDown => {
-                    let list_len = match self.tab {
-                        DetailsTab::UniqueValues => self.unique_counts.len(),
-                        DetailsTab::Columns => self.columns_info.len(),
-                        DetailsTab::Describe => self.describe_rows.len(),
-                        DetailsTab::Heatmap => 0,
-                        DetailsTab::Embeddings => self.embedding_column_config_mapping.len(),
-                    };
-                    if list_len == 0 { return None; }
-                    let page = max_rows.max(1);
-                    let new_selected = (self.selected_row + page).min(list_len.saturating_sub(1));
-                    self.selected_row = new_selected;
-                    // Ensure selection is visible
-                    let visible_end = self.scroll_offset + max_rows.saturating_sub(1);
-                    if self.selected_row > visible_end {
-                        self.scroll_offset = self.selected_row.saturating_sub(max_rows.saturating_sub(1));
-                    }
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            match action {
+                Action::Escape => {
+                    return Some(Action::DialogClose);
                 }
                 Action::ToggleInstructions => {
                     self.show_instructions = !self.show_instructions;
+                    return None;
                 }
+                Action::CopyText => {
+                    // Handle copy for tabs that support it
+                    match self.tab {
+                        DetailsTab::UniqueValues => {
+                            self.copy_unique_values();
+                        }
+                        DetailsTab::Columns => {
+                            self.copy_columns();
+                        }
+                        DetailsTab::Describe => {
+                            self.copy_describe();
+                        }
+                        _ => {}
+                    }
+                    return None;
+                }
+                // Other global actions (navigation) are handled in tab-specific phase
                 _ => {}
             }
         }
 
-        // Next, check for dialog-specific actions
-        if let Some(dialog_action) = self.config.action_for_key(crate::config::Mode::DataFrameDetails, key) {
-            match dialog_action {
+        // ─────────────────────────────────────────────────────────────────────
+        // PHASE 3: Tab Switching
+        // ─────────────────────────────────────────────────────────────────────
+        // Switch between tabs before processing tab-specific actions.
+
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::DataFrameDetails, key) {
+            match action {
                 Action::SwitchToNextTab => {
-                    self.tab = match self.tab {
-                        DetailsTab::UniqueValues => DetailsTab::Columns,
-                        DetailsTab::Columns => DetailsTab::Describe,
-                        DetailsTab::Describe => DetailsTab::Heatmap,
-                        DetailsTab::Heatmap => DetailsTab::Embeddings,
-                        DetailsTab::Embeddings => DetailsTab::UniqueValues,
-                    };
-                    // Reset selection and scroll when switching tabs
-                    self.selected_row = 0;
-                    self.scroll_offset = 0;
-                    if matches!(self.tab, DetailsTab::Columns | DetailsTab::Describe | DetailsTab::Heatmap | DetailsTab::Embeddings) { self.focus = FocusField::Table; }
+                    self.switch_to_next_tab();
                     return None;
                 }
                 Action::SwitchToPrevTab => {
-                    self.tab = match self.tab {
-                        DetailsTab::UniqueValues => DetailsTab::Embeddings,
-                        DetailsTab::Columns => DetailsTab::UniqueValues,
-                        DetailsTab::Describe => DetailsTab::Columns,
-                        DetailsTab::Heatmap => DetailsTab::Describe,
-                        DetailsTab::Embeddings => DetailsTab::Heatmap,
-                    };
-                    // Reset selection and scroll when switching tabs
-                    self.selected_row = 0;
-                    self.scroll_offset = 0;
-                    if matches!(self.tab, DetailsTab::Columns | DetailsTab::Describe | DetailsTab::Heatmap | DetailsTab::Embeddings) { self.focus = FocusField::Table; }
+                    self.switch_to_prev_tab();
                     return None;
                 }
-                Action::ChangeColumnLeft => {
-                    if matches!(self.tab, DetailsTab::UniqueValues) && !self.columns.is_empty() {
-                        if self.selected_column_idx == 0 { self.selected_column_idx = self.columns.len() - 1; } else { self.selected_column_idx -= 1; }
-                        self.recompute_unique_counts();
+                _ => {} // Other actions handled in tab-specific phase
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // PHASE 4: Tab-Specific Actions
+        // ─────────────────────────────────────────────────────────────────────
+        // Delegate to specialized handlers based on the active tab.
+        // Each handler manages its own navigation, scrolling, and actions.
+
+        match self.tab {
+            DetailsTab::UniqueValues => self.handle_unique_values_input(key, max_rows),
+            DetailsTab::Columns => self.handle_columns_input(key, max_rows),
+            DetailsTab::Describe => self.handle_describe_input(key, max_rows),
+            DetailsTab::Heatmap => self.handle_heatmap_input(key),
+            DetailsTab::Embeddings => self.handle_embeddings_input(key, max_rows),
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Modal Overlay Handlers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Handle input when the export dialog is active.
+    fn handle_export_dialog_input(&mut self, key: KeyEvent) -> Option<Action> {
+        if let Some(dialog) = &mut self.export_dialog {
+            if let Some(action) = dialog.handle_key_event(key) {
+                if action == Action::DialogClose {
+                    self.export_dialog = None;
+                }
+            }
+        }
+        None // Export dialog consumes all input
+    }
+
+    /// Handle input when the sort choice overlay is active.
+    /// Allows selecting between Value and Count sorting for unique values.
+    fn handle_sort_choice_input(&mut self, key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Up => {
+                self.sort_choice_index = if self.sort_choice_index == 0 { 1 } else { 0 };
+            }
+            KeyCode::Down => {
+                self.sort_choice_index = (self.sort_choice_index + 1) % 2;
+            }
+            KeyCode::Enter => {
+                self.sort_by = if self.sort_choice_index == 0 { SortBy::Value } else { SortBy::Count };
+                self.sort_choice_open = false;
+                self.recompute_unique_counts();
+            }
+            KeyCode::Esc => {
+                self.sort_choice_open = false;
+            }
+            _ => {}
+        }
+        None // Sort choice overlay consumes all input
+    }
+
+    /// Handle input when the cast overlay is active.
+    /// Allows selecting a target data type for column casting.
+    fn handle_cast_overlay_input(&mut self, key: KeyEvent) -> Option<Action> {
+        // If an error overlay is present, only allow dismissing it
+        if self.cast_error.is_some() {
+            if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
+                self.clear_cast_error();
+            }
+            return None;
+        }
+
+        match key.code {
+            KeyCode::Up => {
+                self.cast_selected_idx = if self.cast_selected_idx == 0 {
+                    self.cast_options.len().saturating_sub(1)
+                } else {
+                    self.cast_selected_idx - 1
+                };
+            }
+            KeyCode::Down => {
+                if !self.cast_options.is_empty() {
+                    self.cast_selected_idx = (self.cast_selected_idx + 1) % self.cast_options.len();
+                }
+            }
+            KeyCode::Enter => {
+                if let Some((_, dt)) = self.cast_options.get(self.cast_selected_idx).cloned() {
+                    if let Some((col, _)) = self.columns_info.get(self.selected_row) {
+                        return Some(Action::ColumnCastRequested { 
+                            column: col.clone(), 
+                            dtype: format!("{dt:?}") 
+                        });
                     }
+                }
+            }
+            KeyCode::Esc => {
+                self.cast_overlay_open = false;
+            }
+            _ => {}
+        }
+        None // Cast overlay consumes all input
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Tab Navigation
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Switch to the next tab in sequence.
+    fn switch_to_next_tab(&mut self) {
+        self.tab = match self.tab {
+            DetailsTab::UniqueValues => DetailsTab::Columns,
+            DetailsTab::Columns => DetailsTab::Describe,
+            DetailsTab::Describe => DetailsTab::Heatmap,
+            DetailsTab::Heatmap => DetailsTab::Embeddings,
+            DetailsTab::Embeddings => DetailsTab::UniqueValues,
+        };
+        self.reset_tab_state();
+    }
+
+    /// Switch to the previous tab in sequence.
+    fn switch_to_prev_tab(&mut self) {
+        self.tab = match self.tab {
+            DetailsTab::UniqueValues => DetailsTab::Embeddings,
+            DetailsTab::Columns => DetailsTab::UniqueValues,
+            DetailsTab::Describe => DetailsTab::Columns,
+            DetailsTab::Heatmap => DetailsTab::Describe,
+            DetailsTab::Embeddings => DetailsTab::Heatmap,
+        };
+        self.reset_tab_state();
+    }
+
+    /// Reset selection and scroll state when switching tabs.
+    fn reset_tab_state(&mut self) {
+        self.selected_row = 0;
+        self.scroll_offset = 0;
+        // UniqueValues is the only tab with a column dropdown focus
+        if !matches!(self.tab, DetailsTab::UniqueValues) {
+            self.focus = FocusField::Table;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Tab-Specific Input Handlers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Handle input for the Unique Values tab.
+    /// Supports: vertical navigation, column switching, sort selection, filtering, export.
+    fn handle_unique_values_input(&mut self, key: KeyEvent, max_rows: usize) -> Option<Action> {
+        let list_len = self.unique_counts.len();
+
+        // Check for dialog-specific actions first
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::DataFrameDetails, key) {
+            match action {
+                Action::ChangeColumnLeft => {
+                    self.navigate_column(-1);
+                    return None;
                 }
                 Action::ChangeColumnRight => {
-                    if matches!(self.tab, DetailsTab::UniqueValues) && !self.columns.is_empty() {
-                        let n = self.columns.len().max(1);
-                        self.selected_column_idx = (self.selected_column_idx + 1) % n;
-                        self.recompute_unique_counts();
-                    }
+                    self.navigate_column(1);
+                    return None;
                 }
                 Action::OpenSortChoice => {
-                    if matches!(self.tab, DetailsTab::UniqueValues) {
-                        self.sort_choice_open = true;
-                        self.sort_choice_index = match self.sort_by { SortBy::Value => 0, SortBy::Count => 1 };
-                    }
-                }
-                Action::OpenCastOverlay => {
-                    if matches!(self.tab, DetailsTab::Columns) && let Some(df) = &self.df {
-                        let name_opt = self.columns_info.get(self.selected_row).map(|(n, _)| n.clone());
-                        if let Some(col) = name_opt.as_deref() && let Ok(s) = df.column(col) {
-                            let cur_dt = s.dtype().clone();
-                            let mut opts = Self::allowed_casts_for(&cur_dt)
-                                .into_iter()
-                                .map(|dt| (format!("{dt:?}"), dt))
-                                .collect::<Vec<_>>();
-                            // Dedup by label and keep only distinct
-                            let mut seen = std::collections::HashSet::new();
-                            opts.retain(|(label, _)| seen.insert(label.clone()));
-                            // Remove current dtype label to avoid no-op
-                            let cur_label = format!("{cur_dt:?}");
-                            opts.retain(|(label, _)| label != &cur_label);
-                            // Sort labels for stable UI
-                            opts.sort_by(|a, b| a.0.cmp(&b.0));
-                            self.cast_options = opts;
-                            self.cast_selected_idx = 0;
-                            self.cast_overlay_open = true;
-                        }
-                    }
+                    self.sort_choice_open = true;
+                    self.sort_choice_index = match self.sort_by { SortBy::Value => 0, SortBy::Count => 1 };
+                    return None;
                 }
                 Action::AddFilterFromValue => {
-                    if matches!(self.tab, DetailsTab::UniqueValues) {
-                        // Determine current value string from unique_counts at selected_row
-                        if let Some((value, _count)) = self.unique_counts.get(self.selected_row)
-                            && let Some(col) = self.current_column_name()
-                        {
-                            let filter = ColumnFilter {
-                                column: col.to_string(),
-                                condition: FilterCondition::Equals { value: value.clone(), case_sensitive: false },
-                            };
-                            return Some(Action::AddFilterCondition(filter));
-                        }
-                    }
+                    return self.create_filter_from_selected_value();
                 }
                 Action::ExportCurrentTab => {
-                    match self.tab {
-                        DetailsTab::UniqueValues => {
-                            let headers = vec!["Value".to_string(), "Count".to_string()];
-                            let rows: Vec<Vec<String>> = self.unique_counts.iter().map(|(v, c)| vec![v.clone(), c.to_string()]).collect();
-                            let suggested = self.current_column_name()
-                                .map(|c| format!("unique_values_{c}.csv"))
-                                .or_else(|| Some("unique_values.csv".to_string()));
-                            self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
-                        }
-                        DetailsTab::Columns => {
-                            let headers = vec!["Column".to_string(), "Type".to_string()];
-                            let rows: Vec<Vec<String>> = self.columns_info.iter().map(|(n, t)| vec![n.clone(), t.clone()]).collect();
-                            let suggested = Some("columns.csv".to_string());
-                            self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
-                        }
-                        DetailsTab::Describe => {
-                            let headers = vec!["Column".to_string(), "count".to_string(), "mean".to_string(), "std".to_string(), "median".to_string(), "min".to_string(), "max".to_string()];
-                            let rows: Vec<Vec<String>> = self.describe_rows.iter().map(|r| vec![
-                                r.column.clone(),
-                                r.count.to_string(),
-                                r.mean.map(|v| format!("{v}")).unwrap_or_default(),
-                                r.std.map(|v| format!("{v}")).unwrap_or_default(),
-                                r.median.map(|v| format!("{v}")).unwrap_or_default(),
-                                r.min.map(|v| format!("{v}")).unwrap_or_default(),
-                                r.max.map(|v| format!("{v}")).unwrap_or_default(),
-                            ]).collect();
-                            let suggested = Some("describe.csv".to_string());
-                            self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
-                        }
-                        DetailsTab::Heatmap => { /* no export for heatmap */ }
-                        DetailsTab::Embeddings => {
-                            let mut cols: Vec<(String, String, String, String)> = self
-                                .embedding_column_config_mapping
-                                .iter()
-                                .map(|(name, cfg)| {
-                                    (
-                                        name.clone(),
-                                        cfg.provider.display_name().to_string(),
-                                        cfg.model_name.clone(),
-                                        cfg.num_dimensions.to_string(),
-                                    )
-                                })
-                                .collect();
-                            cols.sort_by(|a, b| a.0.cmp(&b.0));
-                            let headers = vec![
-                                "Column".to_string(),
-                                "Provider".to_string(),
-                                "Model".to_string(),
-                                "Dims".to_string(),
-                            ];
-                            let rows: Vec<Vec<String>> = cols
-                                .into_iter()
-                                .map(|(n, p, m, d)| vec![n, p, m, d])
-                                .collect();
-                            let suggested = Some("embeddings.csv".to_string());
-                            self.export_dialog = Some(TableExportDialog::new(headers, rows, suggested));
-                        }
-                    }
-                }
-                Action::NavigateHeatmapLeft => {
-                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
-                        if self.heatmap_x_col_idx == 0 { self.heatmap_x_col_idx = self.heatmap_cols.len().saturating_sub(1); } else { self.heatmap_x_col_idx -= 1; }
-                    }
-                }
-                Action::NavigateHeatmapRight => {
-                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
-                        let n = self.heatmap_cols.len().max(1);
-                        self.heatmap_x_col_idx = (self.heatmap_x_col_idx + 1) % n;
-                    }
-                }
-                Action::NavigateHeatmapUp => {
-                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
-                        if self.heatmap_y_col_idx == 0 { self.heatmap_y_col_idx = self.heatmap_cols.len().saturating_sub(1); } else { self.heatmap_y_col_idx -= 1; }
-                    }
-                }
-                Action::NavigateHeatmapDown => {
-                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
-                        let n = self.heatmap_cols.len().max(1);
-                        self.heatmap_y_col_idx = (self.heatmap_y_col_idx + 1) % n;
-                    }
-                }
-                Action::NavigateHeatmapPageUp => {
-                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
-                        let step = std::cmp::max(1, self.heatmap_cols.len() / 5);
-                        self.heatmap_y_col_idx = self.heatmap_y_col_idx.saturating_sub(step);
-                    }
-                }
-                Action::NavigateHeatmapPageDown => {
-                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
-                        let step = std::cmp::max(1, self.heatmap_cols.len() / 5);
-                        let n = self.heatmap_cols.len();
-                        self.heatmap_y_col_idx = (self.heatmap_y_col_idx.saturating_add(step)).min(n.saturating_sub(1));
-                    }
-                }
-                Action::NavigateHeatmapHome => {
-                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
-                        self.heatmap_x_col_idx = 0;
-                        self.heatmap_y_col_idx = 0;
-                    }
-                }
-                Action::NavigateHeatmapEnd => {
-                    if matches!(self.tab, DetailsTab::Heatmap) && !self.heatmap_cols.is_empty() {
-                        let last = self.heatmap_cols.len().saturating_sub(1);
-                        self.heatmap_x_col_idx = last;
-                        self.heatmap_y_col_idx = last;
-                    }
-                }
-                Action::ScrollStatsLeft => {
-                    if matches!(self.tab, DetailsTab::Describe) {
-                        self.describe_col_offset = self.describe_col_offset.saturating_sub(1);
-                    }
-                }
-                Action::ScrollStatsRight => {
-                    if matches!(self.tab, DetailsTab::Describe) {
-                        // Max 5 (0..=5) since there are 6 stats columns
-                        if self.describe_col_offset < 5 { self.describe_col_offset += 1; }
-                    }
+                    self.export_unique_values();
+                    return None;
                 }
                 _ => {}
             }
         }
 
-        // Fallback for character input or other unhandled keys
-        if let KeyCode::Char(_c) = key.code {
-            // Handle character input if needed
+        // Handle global navigation actions
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            match action {
+                Action::Up => {
+                    self.navigate_row_up();
+                    return None;
+                }
+                Action::Down => {
+                    self.navigate_row_down(list_len, max_rows);
+                    return None;
+                }
+                Action::Left => {
+                    self.navigate_column(-1);
+                    return None;
+                }
+                Action::Right => {
+                    self.navigate_column(1);
+                    return None;
+                }
+                Action::PageUp => {
+                    self.navigate_page_up(list_len, max_rows);
+                    return None;
+                }
+                Action::PageDown => {
+                    self.navigate_page_down(list_len, max_rows);
+                    return None;
+                }
+                Action::Tab => {
+                    // Toggle between column dropdown and table focus
+                    self.focus = match self.focus {
+                        FocusField::ColumnDropdown => FocusField::Table,
+                        FocusField::Table => FocusField::ColumnDropdown,
+                    };
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    /// Handle input for the Columns tab.
+    /// Supports: vertical navigation, cast overlay, export.
+    fn handle_columns_input(&mut self, key: KeyEvent, max_rows: usize) -> Option<Action> {
+        let list_len = self.columns_info.len();
+
+        // Check for dialog-specific actions first
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::DataFrameDetails, key) {
+            match action {
+                Action::OpenCastOverlay => {
+                    self.open_cast_overlay();
+                    return None;
+                }
+                Action::ExportCurrentTab => {
+                    self.export_columns();
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
+        // Handle global navigation actions
+        self.handle_list_navigation(key, list_len, max_rows)
+    }
+
+    /// Handle input for the Describe tab.
+    /// Supports: vertical navigation, horizontal stats scrolling, export.
+    fn handle_describe_input(&mut self, key: KeyEvent, max_rows: usize) -> Option<Action> {
+        let list_len = self.describe_rows.len();
+
+        // Check for dialog-specific actions first
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::DataFrameDetails, key) {
+            match action {
+                Action::ScrollStatsLeft => {
+                    self.describe_col_offset = self.describe_col_offset.saturating_sub(1);
+                    return None;
+                }
+                Action::ScrollStatsRight => {
+                    // Only scroll if we haven't reached the max (computed during render)
+                    if self.describe_col_offset < self.describe_col_max_offset {
+                        self.describe_col_offset += 1;
+                    }
+                    return None;
+                }
+                Action::ExportCurrentTab => {
+                    self.export_describe();
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
+        // Handle global navigation actions
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            match action {
+                Action::Left => {
+                    self.describe_col_offset = self.describe_col_offset.saturating_sub(1);
+                    return None;
+                }
+                Action::Right => {
+                    if self.describe_col_offset < self.describe_col_max_offset {
+                        self.describe_col_offset += 1;
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
+        self.handle_list_navigation(key, list_len, max_rows)
+    }
+
+    /// Handle input for the Heatmap tab.
+    /// Supports: 2D grid navigation using X/Y column indices.
+    fn handle_heatmap_input(&mut self, key: KeyEvent) -> Option<Action> {
+        if self.heatmap_cols.is_empty() {
+            return None;
+        }
+
+        let n = self.heatmap_cols.len();
+
+        // Check for dialog-specific actions
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::DataFrameDetails, key) {
+            match action {
+                Action::NavigateHeatmapLeft => {
+                    self.heatmap_x_col_idx = if self.heatmap_x_col_idx == 0 { 
+                        n.saturating_sub(1) 
+                    } else { 
+                        self.heatmap_x_col_idx - 1 
+                    };
+                }
+                Action::NavigateHeatmapRight => {
+                    self.heatmap_x_col_idx = (self.heatmap_x_col_idx + 1) % n;
+                }
+                Action::NavigateHeatmapUp => {
+                    self.heatmap_y_col_idx = if self.heatmap_y_col_idx == 0 { 
+                        n.saturating_sub(1) 
+                    } else { 
+                        self.heatmap_y_col_idx - 1 
+                    };
+                }
+                Action::NavigateHeatmapDown => {
+                    self.heatmap_y_col_idx = (self.heatmap_y_col_idx + 1) % n;
+                }
+                Action::NavigateHeatmapPageUp => {
+                    let step = std::cmp::max(1, n / 5);
+                    self.heatmap_y_col_idx = self.heatmap_y_col_idx.saturating_sub(step);
+                }
+                Action::NavigateHeatmapPageDown => {
+                    let step = std::cmp::max(1, n / 5);
+                    self.heatmap_y_col_idx = (self.heatmap_y_col_idx + step).min(n.saturating_sub(1));
+                }
+                Action::NavigateHeatmapHome => {
+                    self.heatmap_x_col_idx = 0;
+                    self.heatmap_y_col_idx = 0;
+                }
+                Action::NavigateHeatmapEnd => {
+                    let last = n.saturating_sub(1);
+                    self.heatmap_x_col_idx = last;
+                    self.heatmap_y_col_idx = last;
+                }
+                _ => {}
+            }
+        }
+
+        // Handle global arrow keys for heatmap navigation
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            match action {
+                Action::Left => {
+                    self.heatmap_x_col_idx = if self.heatmap_x_col_idx == 0 { 
+                        n.saturating_sub(1) 
+                    } else { 
+                        self.heatmap_x_col_idx - 1 
+                    };
+                }
+                Action::Right => {
+                    self.heatmap_x_col_idx = (self.heatmap_x_col_idx + 1) % n;
+                }
+                Action::Up => {
+                    self.heatmap_y_col_idx = if self.heatmap_y_col_idx == 0 { 
+                        n.saturating_sub(1) 
+                    } else { 
+                        self.heatmap_y_col_idx - 1 
+                    };
+                }
+                Action::Down => {
+                    self.heatmap_y_col_idx = (self.heatmap_y_col_idx + 1) % n;
+                }
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    /// Handle input for the Embeddings tab.
+    /// Supports: vertical navigation, export.
+    fn handle_embeddings_input(&mut self, key: KeyEvent, max_rows: usize) -> Option<Action> {
+        let list_len = self.embedding_column_config_mapping.len();
+
+        // Check for dialog-specific actions
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::DataFrameDetails, key) {
+            if action == Action::ExportCurrentTab {
+                self.export_embeddings();
+                return None;
+            }
+        }
+
+        // Handle global navigation actions
+        self.handle_list_navigation(key, list_len, max_rows)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Navigation Helpers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Handle common list navigation (Up/Down/PageUp/PageDown) for tabs with vertical lists.
+    fn handle_list_navigation(&mut self, key: KeyEvent, list_len: usize, max_rows: usize) -> Option<Action> {
+        if let Some(action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            match action {
+                Action::Up => self.navigate_row_up(),
+                Action::Down => self.navigate_row_down(list_len, max_rows),
+                Action::PageUp => self.navigate_page_up(list_len, max_rows),
+                Action::PageDown => self.navigate_page_down(list_len, max_rows),
+                _ => {}
+            }
         }
         None
+    }
+
+    /// Move selection up by one row, scrolling if necessary.
+    fn navigate_row_up(&mut self) {
+        if self.selected_row > 0 {
+            self.selected_row -= 1;
+        }
+        if self.selected_row < self.scroll_offset {
+            self.scroll_offset = self.selected_row;
+        }
+    }
+
+    /// Move selection down by one row, scrolling if necessary.
+    fn navigate_row_down(&mut self, list_len: usize, max_rows: usize) {
+        let max_idx = list_len.saturating_sub(1);
+        if self.selected_row < max_idx {
+            self.selected_row += 1;
+        }
+        let visible_end = self.scroll_offset + max_rows.saturating_sub(1);
+        if self.selected_row > visible_end {
+            self.scroll_offset = self.selected_row.saturating_sub(max_rows.saturating_sub(1));
+        }
+    }
+
+    /// Move selection up by one page.
+    fn navigate_page_up(&mut self, list_len: usize, max_rows: usize) {
+        if list_len == 0 { return; }
+        let page = max_rows.max(1);
+        self.selected_row = self.selected_row.saturating_sub(page);
+        if self.selected_row < self.scroll_offset {
+            self.scroll_offset = self.selected_row;
+        }
+    }
+
+    /// Move selection down by one page.
+    fn navigate_page_down(&mut self, list_len: usize, max_rows: usize) {
+        if list_len == 0 { return; }
+        let page = max_rows.max(1);
+        self.selected_row = (self.selected_row + page).min(list_len.saturating_sub(1));
+        let visible_end = self.scroll_offset + max_rows.saturating_sub(1);
+        if self.selected_row > visible_end {
+            self.scroll_offset = self.selected_row.saturating_sub(max_rows.saturating_sub(1));
+        }
+    }
+
+    /// Navigate to adjacent column (UniqueValues tab).
+    /// `direction`: -1 for left, +1 for right
+    fn navigate_column(&mut self, direction: i32) {
+        if self.columns.is_empty() { return; }
+        let n = self.columns.len();
+        self.selected_column_idx = if direction < 0 {
+            if self.selected_column_idx == 0 { n - 1 } else { self.selected_column_idx - 1 }
+        } else {
+            (self.selected_column_idx + 1) % n
+        };
+        self.recompute_unique_counts();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Action Helpers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Open the cast overlay for the currently selected column.
+    fn open_cast_overlay(&mut self) {
+        let Some(df) = &self.df else { return };
+        let Some((col_name, _)) = self.columns_info.get(self.selected_row) else { return };
+        let Ok(series) = df.column(col_name) else { return };
+
+        let cur_dt = series.dtype().clone();
+        let mut opts: Vec<(String, DataType)> = Self::allowed_casts_for(&cur_dt)
+            .into_iter()
+            .map(|dt| (format!("{dt:?}"), dt))
+            .collect();
+
+        // Deduplicate by label
+        let mut seen = std::collections::HashSet::new();
+        opts.retain(|(label, _)| seen.insert(label.clone()));
+
+        // Remove current dtype (no-op cast)
+        let cur_label = format!("{cur_dt:?}");
+        opts.retain(|(label, _)| label != &cur_label);
+
+        // Sort for stable UI ordering
+        opts.sort_by(|a, b| a.0.cmp(&b.0));
+
+        self.cast_options = opts;
+        self.cast_selected_idx = 0;
+        self.cast_overlay_open = true;
+    }
+
+    /// Create a filter condition from the currently selected unique value.
+    fn create_filter_from_selected_value(&self) -> Option<Action> {
+        let (value, _) = self.unique_counts.get(self.selected_row)?;
+        let col = self.current_column_name()?;
+        
+        let filter = ColumnFilter {
+            column: col.to_string(),
+            condition: FilterCondition::Equals { 
+                value: value.clone(), 
+                case_sensitive: false 
+            },
+        };
+        Some(Action::AddFilterCondition(filter))
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Export Helpers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Export unique values tab data.
+    fn export_unique_values(&mut self) {
+        let headers = vec!["Value".to_string(), "Count".to_string()];
+        let rows: Vec<Vec<String>> = self.unique_counts
+            .iter()
+            .map(|(v, c)| vec![v.clone(), c.to_string()])
+            .collect();
+        let suggested = self.current_column_name()
+            .map(|c| format!("unique_values_{c}.csv"))
+            .or(Some("unique_values.csv".to_string()));
+        let mut dialog = TableExportDialog::new(headers, rows, suggested);
+        let _ = dialog.register_config_handler(self.config.clone());
+        self.export_dialog = Some(dialog);
+    }
+
+    /// Export columns tab data.
+    fn export_columns(&mut self) {
+        let headers = vec!["Column".to_string(), "Type".to_string()];
+        let rows: Vec<Vec<String>> = self.columns_info
+            .iter()
+            .map(|(n, t)| vec![n.clone(), t.clone()])
+            .collect();
+        let mut dialog = TableExportDialog::new(headers, rows, Some("columns.csv".to_string()));
+        let _ = dialog.register_config_handler(self.config.clone());
+        self.export_dialog = Some(dialog);
+    }
+
+    /// Export describe tab data.
+    fn export_describe(&mut self) {
+        let headers = vec![
+            "Column".to_string(), 
+            "count".to_string(), 
+            "mean".to_string(), 
+            "std".to_string(), 
+            "median".to_string(), 
+            "min".to_string(), 
+            "max".to_string(),
+        ];
+        let rows: Vec<Vec<String>> = self.describe_rows
+            .iter()
+            .map(|r| vec![
+                r.column.clone(),
+                r.count.to_string(),
+                r.mean.map(|v| format!("{v}")).unwrap_or_default(),
+                r.std.map(|v| format!("{v}")).unwrap_or_default(),
+                r.median.map(|v| format!("{v}")).unwrap_or_default(),
+                r.min.map(|v| format!("{v}")).unwrap_or_default(),
+                r.max.map(|v| format!("{v}")).unwrap_or_default(),
+            ])
+            .collect();
+        let mut dialog = TableExportDialog::new(headers, rows, Some("describe.csv".to_string()));
+        let _ = dialog.register_config_handler(self.config.clone());
+        self.export_dialog = Some(dialog);
+    }
+
+    /// Export embeddings tab data.
+    fn export_embeddings(&mut self) {
+        let mut cols: Vec<(String, String, String, String)> = self.embedding_column_config_mapping
+            .iter()
+            .map(|(name, cfg)| (
+                name.clone(),
+                cfg.provider.display_name().to_string(),
+                cfg.model_name.clone(),
+                cfg.num_dimensions.to_string(),
+            ))
+            .collect();
+        cols.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let headers = vec![
+            "Column".to_string(),
+            "Provider".to_string(),
+            "Model".to_string(),
+            "Dims".to_string(),
+        ];
+        let rows: Vec<Vec<String>> = cols
+            .into_iter()
+            .map(|(n, p, m, d)| vec![n, p, m, d])
+            .collect();
+        let mut dialog = TableExportDialog::new(headers, rows, Some("embeddings.csv".to_string()));
+        let _ = dialog.register_config_handler(self.config.clone());
+        self.export_dialog = Some(dialog);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Copy Helpers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Copy unique values tab data to clipboard in tabular format.
+    fn copy_unique_values(&self) {
+        let mut text = String::from("Value\tCount\n");
+        for (value, count) in &self.unique_counts {
+            // Escape tabs and newlines in values
+            let escaped_value = value.replace('\t', " ").replace('\n', " ").replace('\r', " ");
+            text.push_str(&format!("{escaped_value}\t{count}\n"));
+        }
+        if let Ok(mut clipboard) = Clipboard::new() {
+            let _ = clipboard.set_text(text);
+        }
+    }
+
+    /// Copy columns tab data to clipboard in tabular format.
+    fn copy_columns(&self) {
+        let mut text = String::from("Column\tType\n");
+        for (name, dtype) in &self.columns_info {
+            // Escape tabs and newlines in values
+            let escaped_name = name.replace('\t', " ").replace('\n', " ").replace('\r', " ");
+            let escaped_dtype = dtype.replace('\t', " ").replace('\n', " ").replace('\r', " ");
+            text.push_str(&format!("{escaped_name}\t{escaped_dtype}\n"));
+        }
+        if let Ok(mut clipboard) = Clipboard::new() {
+            let _ = clipboard.set_text(text);
+        }
+    }
+
+    /// Copy describe tab data to clipboard in tabular format.
+    fn copy_describe(&self) {
+        let mut text = String::from("Column\tcount\tmean\tstd\tmedian\tmin\tmax\n");
+        for r in &self.describe_rows {
+            // Escape tabs and newlines in column name
+            let escaped_column = r.column.replace('\t', " ").replace('\n', " ").replace('\r', " ");
+            let count_str = r.count.to_string();
+            let mean_str = r.mean.map(|v| format!("{v}")).unwrap_or_default();
+            let std_str = r.std.map(|v| format!("{v}")).unwrap_or_default();
+            let median_str = r.median.map(|v| format!("{v}")).unwrap_or_default();
+            let min_str = r.min.map(|v| format!("{v}")).unwrap_or_default();
+            let max_str = r.max.map(|v| format!("{v}")).unwrap_or_default();
+            text.push_str(&format!("{escaped_column}\t{count_str}\t{mean_str}\t{std_str}\t{median_str}\t{min_str}\t{max_str}\n"));
+        }
+        if let Ok(mut clipboard) = Clipboard::new() {
+            let _ = clipboard.set_text(text);
+        }
     }
 }
 
