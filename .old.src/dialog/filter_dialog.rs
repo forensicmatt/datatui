@@ -974,6 +974,26 @@ impl FilterDialog {
         self.add_column_index = current_index.min(self.columns.len().saturating_sub(1));
     }
 
+    /// Add a filter condition programmatically (from command bar)
+    pub fn add_filter_condition(&mut self, filter: ColumnFilter) {
+        match &mut self.root_expr {
+            FilterExpr::And(filters) => {
+                filters.push(FilterExpr::Condition(filter));
+            }
+            FilterExpr::Or(filters) => {
+                filters.push(FilterExpr::Condition(filter));
+            }
+            FilterExpr::Condition(existing) => {
+                // Convert single condition to AND group
+                let existing_clone = existing.clone();
+                self.root_expr = FilterExpr::And(vec![
+                    FilterExpr::Condition(existing_clone),
+                    FilterExpr::Condition(filter),
+                ]);
+            }
+        }
+    }
+
     /// Save the current filter expression to a file as JSON
     pub fn save_to_file(&self, path: &Path) -> color_eyre::Result<()> {
         let file = File::create(path)?;

@@ -50,6 +50,7 @@ pub enum Mode {
     StyleSetEditorDialog,
     ApplicationScopeEditorDialog,
     ColorPickerDialog,
+    CommandBar,
 }
 
 const CONFIG: &str = include_str!("../.config/config.json5");
@@ -499,6 +500,10 @@ impl Config {
             Action::CloseColorPickerDialog => "Close Color Picker",
             Action::SelectNextColor => "Next Color",
             Action::SelectPrevColor => "Prev Color",
+            
+            // CommandBar actions
+            Action::OpenCommandBar => "Command Bar",
+            Action::CloseCommandBar => "Close Command Bar",
             
             // Default to the debug representation for unknown actions
             _ => "Unknown",

@@ -414,6 +414,16 @@ pub enum Action {
     ColorPickerDialogApplied(Option<ratatui::style::Color>),
     SelectNextColor,
     SelectPrevColor,
+    /// CommandBar specific actions
+    OpenCommandBar,
+    CloseCommandBar,
+    /// Sort subcommand actions (from command bar)
+    SortAddColumn { column: String, ascending: bool },
+    SortRemoveColumn { column: String },
+    SortToggleColumn { column: String },
+    SortClear,
+    /// Filter subcommand actions (from command bar)
+    FilterAddCondition { column: String, operator: String, value: String },
 }
 
 #[cfg(test)]

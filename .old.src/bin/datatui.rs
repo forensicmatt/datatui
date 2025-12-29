@@ -332,8 +332,6 @@ fn run_app<B: ratatui::backend::Backend>(
     Ok(())
 }
 
-
-
 // Ensure only known option keys are present for a given kind; otherwise return an error
 fn ensure_only_allowed_keys(kind: &str, kv: &std::collections::HashMap<String, String>, allowed: &[&str]) -> color_eyre::Result<()> {
     let mut unknown: Vec<String> = Vec::new();

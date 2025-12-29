@@ -109,6 +109,42 @@ impl SortDialog {
         self.columns.iter().filter(|c| !self.sort_columns.iter().any(|sc| &sc.name == *c)).collect()
     }
 
+    /// Add a sort column by name with specified direction
+    pub fn add_sort_column_named(&mut self, column: &str, ascending: bool) {
+        // Check if column exists and isn't already in sort
+        if self.columns.iter().any(|c| c == column) 
+            && !self.sort_columns.iter().any(|sc| sc.name == column) {
+            self.sort_columns.push(SortColumn {
+                name: column.to_string(),
+                ascending,
+            });
+            self.active_index = self.sort_columns.len().saturating_sub(1);
+        }
+    }
+
+    /// Remove a sort column by name
+    pub fn remove_sort_column_named(&mut self, column: &str) {
+        if let Some(idx) = self.sort_columns.iter().position(|sc| sc.name == column) {
+            self.sort_columns.remove(idx);
+            if self.active_index >= self.sort_columns.len() && !self.sort_columns.is_empty() {
+                self.active_index = self.sort_columns.len() - 1;
+            }
+        }
+    }
+
+    /// Toggle sort direction for a column by name
+    pub fn toggle_sort_column_named(&mut self, column: &str) {
+        if let Some(sc) = self.sort_columns.iter_mut().find(|sc| sc.name == column) {
+            sc.ascending = !sc.ascending;
+        }
+    }
+
+    /// Clear all sort columns
+    pub fn clear_all_sorts(&mut self) {
+        self.sort_columns.clear();
+        self.active_index = 0;
+    }
+
     /// Render the dialog (UI skeleton)
     pub fn render(&self, area: Rect, buf: &mut Buffer) -> usize {
         // Clear the background for the popup
@@ -251,7 +287,8 @@ impl SortDialog {
                     Action::Enter => {
                         match self.mode {
                             SortDialogMode::List => {
-                                return Some(Action::SortDialogApplied(self.sort_columns.clone()));
+                                // Close dialog on Enter in list mode
+                                return Some(Action::DialogClose);
                             }
                             SortDialogMode::AddColumn => {
                                 let available = self.available_columns();
@@ -279,6 +316,8 @@ impl SortDialog {
                                     // Reset AddColumn state
                                     self.add_column_index = 0;
                                     self.add_column_scroll_offset = 0;
+                                    // Apply sort immediately after adding column
+                                    return Some(Action::SortDialogApplied(self.sort_columns.clone()));
                                 }
                                 return None;
                             }
@@ -355,6 +394,8 @@ impl SortDialog {
                         if self.mode == SortDialogMode::List
                             && let Some(col) = self.sort_columns.get_mut(self.active_index) {
                                 col.ascending = !col.ascending;
+                                // Apply sort immediately after toggling direction
+                                return Some(Action::SortDialogApplied(self.sort_columns.clone()));
                             }
                         return None;
                     }
@@ -381,6 +422,8 @@ impl SortDialog {
                                         self.scroll_offset = self.sort_columns.len().saturating_sub(max_rows);
                                     }
                                 }
+                                // Apply sort immediately after removing column
+                                return Some(Action::SortDialogApplied(self.sort_columns.clone()));
                             }
                         return None;
                     }

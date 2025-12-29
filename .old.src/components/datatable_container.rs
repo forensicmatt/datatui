@@ -94,6 +94,7 @@ use polars::prelude::{NamedFrom, IntoColumn};
 use crate::dialog::OperationOptions;
 use crate::dialog::{ClusterAlgorithm, KmeansOptions, DbscanOptions};
 use crate::dialog::styling::{StyleLogic, Condition, ApplicationScope, GrepCapture, matches_column};
+use crate::dialog::command_bar::{CommandBar, get_datatable_commands, get_sort_dialog_commands, get_filter_dialog_commands, get_find_dialog_commands, get_sql_dialog_commands, get_jmes_dialog_commands, get_column_width_dialog_commands, get_details_dialog_commands};
 // use crate::dialog::DataExportDialog; // moved to DataTabManagerDialog
 use linfa::prelude::{Fit, Predict};
 use linfa_reduction::Pca as LinfaPca;
@@ -195,6 +196,8 @@ pub struct DataTableContainer {
     pub embeddings_prompt_dialog_active: bool,
     // Pending prompt flow to reopen after embeddings generation
     pub pending_prompt_flow: Option<PendingPromptFlow>,
+    // Vim-like command bar
+    pub command_bar: CommandBar,
 }
 
 #[derive(Debug, Clone)]
@@ -670,6 +673,7 @@ impl DataTableContainer {
             embeddings_prompt_dialog: None,
             embeddings_prompt_dialog_active: false,
             pending_prompt_flow: None,
+            command_bar: CommandBar::new(),
         }
     }
 
@@ -689,6 +693,100 @@ impl DataTableContainer {
             .into_iter()
             .map(|s| s.to_string())
             .collect()
+    }
+
+    /// Get commands for the current active context (dialog or main view)
+    fn get_current_context_commands(&self) -> Vec<crate::dialog::command_bar::Command> {
+        if self.sort_dialog_active {
+            get_sort_dialog_commands()
+        } else if self.filter_dialog_active {
+            get_filter_dialog_commands()
+        } else if self.find_dialog_active {
+            get_find_dialog_commands()
+        } else if self.sql_dialog_active {
+            get_sql_dialog_commands()
+        } else if self.jmes_dialog_active {
+            get_jmes_dialog_commands()
+        } else if self.column_width_dialog_active {
+            get_column_width_dialog_commands()
+        } else if self.dataframe_details_dialog_active {
+            get_details_dialog_commands()
+        } else {
+            get_datatable_commands()
+        }
+    }
+
+    /// Get the name of the current active context
+    fn get_current_context_name(&self) -> &str {
+        if self.sort_dialog_active {
+            "Sort"
+        } else if self.filter_dialog_active {
+            "Filter"
+        } else if self.find_dialog_active {
+            "Find"
+        } else if self.sql_dialog_active {
+            "SQL"
+        } else if self.jmes_dialog_active {
+            "JMESPath"
+        } else if self.column_width_dialog_active {
+            "Columns"
+        } else if self.dataframe_details_dialog_active {
+            "Details"
+        } else {
+            "DataTable"
+        }
+    }
+
+    /// Get field names from the current dataframe for autocomplete
+    fn get_field_names(&self) -> Vec<String> {
+        self.datatable.get_dataframe()
+            .map(|df| df.get_column_names_owned().into_iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Parse a filter condition from command bar arguments
+    fn parse_filter_condition(&self, column: &str, operator: &str, value: &str) -> Option<crate::dialog::ColumnFilter> {
+        use crate::dialog::filter_dialog::FilterCondition;
+        
+        let condition = match operator.to_lowercase().as_str() {
+            "=" | "==" | "equals" | "eq" => FilterCondition::Equals { 
+                value: value.to_string(), 
+                case_sensitive: false 
+            },
+            "!=" | "<>" | "neq" => FilterCondition::Not(Box::new(
+                FilterCondition::Equals { value: value.to_string(), case_sensitive: false }
+            )),
+            ">" | "gt" => FilterCondition::GreaterThan { value: value.to_string() },
+            "<" | "lt" => FilterCondition::LessThan { value: value.to_string() },
+            ">=" | "gte" => FilterCondition::GreaterThanOrEqual { value: value.to_string() },
+            "<=" | "lte" => FilterCondition::LessThanOrEqual { value: value.to_string() },
+            "contains" | "like" => FilterCondition::Contains { 
+                value: value.to_string(), 
+                case_sensitive: false 
+            },
+            "startswith" | "starts" => FilterCondition::Regex { 
+                pattern: format!("^{}", regex::escape(value)), 
+                case_sensitive: false 
+            },
+            "endswith" | "ends" => FilterCondition::Regex { 
+                pattern: format!("{}$", regex::escape(value)), 
+                case_sensitive: false 
+            },
+            "regex" | "matches" => FilterCondition::Regex { 
+                pattern: value.to_string(), 
+                case_sensitive: false 
+            },
+            "empty" | "isempty" => FilterCondition::IsEmpty,
+            "notempty" | "isnotempty" => FilterCondition::IsNotEmpty,
+            "null" | "isnull" => FilterCondition::IsNull,
+            "notnull" | "isnotnull" => FilterCondition::NotNull,
+            _ => return None,
+        };
+
+        Some(crate::dialog::ColumnFilter {
+            column: column.to_string(),
+            condition,
+        })
     }
 
     /// Helper: convert an optional Polars AnyValue into serde_json::Value for JMES input.
@@ -1312,6 +1410,110 @@ impl Component for DataTableContainer {
         // If busy overlay is active, consume input except maybe Esc; block cell navigation
         if self.busy_active {
             // Ignore all input while busy to prevent navigation/interaction
+            return Ok(None);
+        }
+
+        // Route key events to CommandBar if active (highest priority)
+        if self.command_bar.active {
+            if let Some(action) = self.command_bar.handle_key_event(key) {
+                match action {
+                    Action::DialogClose | Action::CloseCommandBar => {
+                        // Command bar was closed via Escape or close command
+                        self.command_bar.close();
+                        return Ok(None);
+                    }
+                    Action::Quit => {
+                        // Quit action should propagate up
+                        self.command_bar.close();
+                        return Ok(Some(Action::Quit));
+                    }
+                    // Handle dialog opening commands locally
+                    Action::OpenSortDialog => {
+                        self.sort_dialog_active = true;
+                    }
+                    Action::OpenFilterDialog => {
+                        let df = self.datatable.get_dataframe()?;
+                        let columns: Vec<String> = df.get_column_names_owned().into_iter().map(|s| s.to_string()).collect();
+                        let col_index = self.datatable.selection.col.min(columns.len().saturating_sub(1));
+                        self.filter_dialog.set_columns(columns, col_index);
+                        self.filter_dialog_active = true;
+                    }
+                    Action::OpenFindDialog => {
+                        self.find_dialog_active = true;
+                    }
+                    Action::OpenSqlDialog => {
+                        self.sql_dialog_active = true;
+                    }
+                    Action::OpenJmesDialog => {
+                        self.jmes_dialog_active = true;
+                    }
+                    Action::OpenColumnWidthDialog => {
+                        let df = self.datatable.get_dataframe()?;
+                        let columns: Vec<String> = df.get_column_names_owned().into_iter().map(|s| s.to_string()).collect();
+                        self.column_width_dialog.set_columns(columns);
+                        let config = self.datatable.get_column_width_config();
+                        self.column_width_dialog.set_config(config);
+                        if let Ok(widths) = self.datatable.get_all_column_widths() {
+                            self.column_width_dialog.set_current_calculated_widths(widths);
+                        }
+                        self.column_width_dialog_active = true;
+                    }
+                    Action::OpenDataframeDetailsDialog => {
+                        let df_arc = self.datatable.get_dataframe()?;
+                        self.dataframe_details_dialog.set_dataframe(df_arc);
+                        self.dataframe_details_dialog_active = true;
+                    }
+                    Action::OpenColumnOperationsDialog => {
+                        self.column_operations_dialog_active = true;
+                    }
+                    Action::CopySelectedCell => {
+                        let cell_value = self.selected_cell_json_value()?;
+                        let cell_value = match cell_value { serde_json::Value::String(s) => s, v => v.to_string() };
+                        if let Err(e) = arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(cell_value.clone())) {
+                            error!("Failed to copy to clipboard: {}", e);
+                        }
+                    }
+                    Action::ToggleInstructions => {
+                        self.toggle_instructions();
+                    }
+                    // Sort subcommand actions
+                    Action::SortAddColumn { column, ascending } => {
+                        // Add column to sort dialog
+                        self.sort_dialog.add_sort_column_named(&column, ascending);
+                        if !self.sort_dialog_active {
+                            self.sort_dialog_active = true;
+                        }
+                    }
+                    Action::SortRemoveColumn { column } => {
+                        self.sort_dialog.remove_sort_column_named(&column);
+                    }
+                    Action::SortToggleColumn { column } => {
+                        self.sort_dialog.toggle_sort_column_named(&column);
+                    }
+                    Action::SortClear => {
+                        self.sort_dialog.clear_all_sorts();
+                    }
+                    // Filter subcommand actions
+                    Action::FilterAddCondition { column, operator, value } => {
+                        // Add filter condition programmatically
+                        if let Some(filter) = self.parse_filter_condition(&column, &operator, &value) {
+                            self.filter_dialog.add_filter_condition(filter);
+                            if !self.filter_dialog_active {
+                                let df = self.datatable.get_dataframe()?;
+                                let columns: Vec<String> = df.get_column_names_owned().into_iter().map(|s| s.to_string()).collect();
+                                let col_index = columns.iter().position(|c| c == &column).unwrap_or(0);
+                                self.filter_dialog.set_columns(columns, col_index);
+                                self.filter_dialog_active = true;
+                            }
+                        }
+                    }
+                    other_action => {
+                        // For any other action, return it to be handled by parent
+                        return Ok(Some(other_action));
+                    }
+                }
+                return Ok(None);
+            }
             return Ok(None);
         }
 
@@ -1941,14 +2143,18 @@ impl Component for DataTableContainer {
             if let Some(action) = self.sort_dialog.handle_key_event(key, max_rows) {
                 match action {
                     crate::action::Action::SortDialogApplied(sort_columns) => {
-                        // Apply sort to DataTable/DataFrame here
+                        // Apply sort to DataTable/DataFrame here (keep dialog open)
                         if let Err(e) = self.datatable.dataframe.sort_by_columns(&sort_columns) {
                             error!("Sort error: {e}");
                         }
-                        self.sort_dialog_active = false;
                         return Ok(Some(Action::SaveWorkspaceState));
                     }
+                    crate::action::Action::DialogClose => {
+                        // Close the dialog
+                        self.sort_dialog_active = false;
+                    }
                     _ => {
+                        // Other actions might close the dialog
                         self.sort_dialog_active = false;
                     }
                 }
@@ -2275,8 +2481,29 @@ impl Component for DataTableContainer {
                     return Ok(None);
                 }
                 Action::ToggleInstructions => { self.toggle_instructions(); return Ok(None); }
+                Action::OpenCommandBar => {
+                    // Open command bar with context-aware commands and field names
+                    let commands = self.get_current_context_commands();
+                    let field_names = self.get_field_names();
+                    let context_name = self.get_current_context_name().to_string();
+                    self.command_bar.open(commands, field_names, context_name);
+                    return Ok(None);
+                }
                 _ => {
                     debug!("DataTableContainer unhandled action: {:?} for key: {:?}", action, key);
+                }
+            }
+        }
+
+        // Handle colon key to open command bar (vim-style, not via config)
+        if key.kind == crossterm::event::KeyEventKind::Press {
+            if let crossterm::event::KeyCode::Char(':') = key.code {
+                if key.modifiers.is_empty() || key.modifiers == crossterm::event::KeyModifiers::SHIFT {
+                    let commands = self.get_current_context_commands();
+                    let field_names = self.get_field_names();
+                    let context_name = self.get_current_context_name().to_string();
+                    self.command_bar.open(commands, field_names, context_name);
+                    return Ok(None);
                 }
             }
         }
@@ -2688,6 +2915,12 @@ impl Component for DataTableContainer {
                 .label("Working...");
             gauge.render(popup_area, frame.buffer_mut());
         }
+
+        // Render CommandBar overlay if active (always on top of everything)
+        if self.command_bar.active {
+            self.command_bar.render(area, frame.buffer_mut());
+        }
+
         Ok(())
     }
 } 
