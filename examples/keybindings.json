@@ -1,0 +1,152 @@
+{
+  "bindings": [
+    {
+      "key": "Up",
+      "action": "MoveUp"
+    },
+    {
+      "key": "Down",
+      "action": "MoveDown"
+    },
+    {
+      "key": "Left",
+      "action": "MoveLeft"
+    },
+    {
+      "key": "Right",
+      "action": "MoveRight"
+    },
+    {
+      "key": "k",
+      "action": "MoveUp"
+    },
+    {
+      "key": "j",
+      "action": "MoveDown"
+    },
+    {
+      "key": "h",
+      "action": "MoveLeft"
+    },
+    {
+      "key": "l",
+      "action": "MoveRight"
+    },
+    {
+      "key": "PageUp",
+      "action": "PageUp"
+    },
+    {
+      "key": "PageDown",
+      "action": "PageDown"
+    },
+    {
+      "key": "Ctrl+u",
+      "action": "PageUp"
+    },
+    {
+      "key": "Ctrl+d",
+      "action": "PageDown"
+    },
+    {
+      "key": "Home",
+      "action": "Home"
+    },
+    {
+      "key": "End",
+      "action": "End"
+    },
+    {
+      "key": "0",
+      "action": "Home"
+    },
+    {
+      "key": "Shift+4",
+      "action": "End"
+    },
+    {
+      "key": "g",
+      "action": "GoToTop"
+    },
+    {
+      "key": "Shift+g",
+      "action": "GoToBottom"
+    },
+    {
+      "key": "q",
+      "action": "Quit"
+    },
+    {
+      "key": "Esc",
+      "action": "Cancel"
+    },
+    {
+      "key": "Enter",
+      "action": "Confirm"
+    },
+    {
+      "key": "Shift+/",
+      "action": "ToggleHelp"
+    },
+    {
+      "key": "F1",
+      "action": "ToggleHelp"
+    },
+    {
+      "key": "s",
+      "action": "Sort"
+    },
+    {
+      "key": "f",
+      "action": "Filter"
+    },
+    {
+      "key": "Shift+;",
+      "action": "Query"
+    },
+    {
+      "key": "r",
+      "action": "Refresh"
+    },
+    {
+      "key": "F5",
+      "action": "Refresh"
+    },
+    {
+      "key": "Tab",
+      "action": "NextTab"
+    },
+    {
+      "key": "Shift+Tab",
+      "action": "PrevTab"
+    },
+    {
+      "key": "w",
+      "action": "CloseTab"
+    },
+    {
+      "key": "t",
+      "action": "NewTab"
+    },
+    {
+      "key": "c",
+      "action": "Copy"
+    },
+    {
+      "key": "Shift+c",
+      "action": "CopyWithHeaders"
+    },
+    {
+      "key": "o",
+      "action": "Import"
+    },
+    {
+      "key": "e",
+      "action": "Export"
+    },
+    {
+      "key": "/",
+      "action": "Find"
+    }
+  ]
+}
