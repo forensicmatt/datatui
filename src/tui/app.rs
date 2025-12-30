@@ -45,7 +45,7 @@ impl App {
     /// Load a dataset into the data table
     pub fn load_dataset(&mut self, dataset_id: &DatasetId) -> Result<()> {
         let dataset = self.data_service.get_dataset(dataset_id)?;
-        let mut table = DataTable::new(dataset);
+        let mut table = DataTable::new(dataset)?;
         table.set_focused(true);
         self.data_table = Some(table);
         Ok(())

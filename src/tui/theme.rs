@@ -85,6 +85,14 @@ impl Theme {
             .add_modifier(Modifier::BOLD)
     }
 
+    /// Style for the currently active cell
+    pub fn selected_cell_style(&self) -> Style {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    }
+
     pub fn normal_style(&self) -> Style {
         Style::default().fg(self.foreground).bg(self.background)
     }
