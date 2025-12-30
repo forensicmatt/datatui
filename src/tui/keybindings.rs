@@ -255,6 +255,7 @@ impl KeyPattern {
 
         // Parse key code
         let code = match key_part.to_lowercase().as_str() {
+            // Special keys first
             "up" | "↑" => KeyCode::Up,
             "down" | "↓" => KeyCode::Down,
             "left" | "←" => KeyCode::Left,
@@ -271,8 +272,15 @@ impl KeyPattern {
             "delete" | "del" => KeyCode::Delete,
             "insert" | "ins" => KeyCode::Insert,
             "space" => KeyCode::Char(' '),
-            s if s.starts_with('f') && s.len() <= 3 => {
-                // Function keys: F1-F12
+
+            // Single characters (must come before function key check to avoid matching 'f')
+            s if s.len() == 1 => {
+                let ch = s.chars().next().unwrap().to_ascii_lowercase();
+                KeyCode::Char(ch)
+            }
+
+            // Function keys: F1-F12
+            s if s.starts_with('f') && s.len() >= 2 && s.len() <= 3 => {
                 if let Ok(n) = s[1..].parse::<u8>() {
                     if (1..=12).contains(&n) {
                         KeyCode::F(n)
@@ -283,10 +291,7 @@ impl KeyPattern {
                     return Err(format!("Invalid function key: {}", s));
                 }
             }
-            s if s.len() == 1 => {
-                let ch = s.chars().next().unwrap().to_ascii_lowercase();
-                KeyCode::Char(ch)
-            }
+
             _ => return Err(format!("Unknown key: {}", key_part)),
         };
 
@@ -365,9 +370,18 @@ mod tests {
         let bindings = KeyBindings::default();
         let warnings = bindings.validate();
 
+        // Print warnings for debugging
+        for warning in &warnings {
+            eprintln!("Warning: {}", warning);
+        }
+
         // Should have warning about unbound actions, but no invalid patterns
         for warning in &warnings {
-            assert!(!warning.contains("Invalid key pattern"));
+            assert!(
+                !warning.contains("Invalid key pattern"),
+                "Found invalid pattern: {}",
+                warning
+            );
         }
     }
 

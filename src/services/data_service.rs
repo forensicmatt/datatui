@@ -33,13 +33,13 @@ pub struct DataService {
 impl DataService {
     /// Create a new DataService for the given workspace
     ///
-    /// Initializes both global and workspace databases
-    pub fn new(workspace_path: &Path) -> Result<Self> {
-        Self::new_impl(workspace_path, None)
+    /// Create a new DataService for the given workspace
+    pub fn new(workspace_path: impl AsRef<Path>) -> Result<Self> {
+        Self::new_impl(workspace_path.as_ref(), None)
     }
 
-    /// Internal constructor that allows specifying global DB path (for tests)
-    fn new_impl(workspace_path: &Path, global_db_path: Option<PathBuf>) -> Result<Self> {
+    /// Internal constructor with optional global DB path (for testing)
+    pub(crate) fn new_impl(workspace_path: &Path, global_db_path: Option<PathBuf>) -> Result<Self> {
         // Open global DuckDB database
         let global_db_path = global_db_path.unwrap_or_else(|| {
             directories::BaseDirs::new()
