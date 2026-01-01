@@ -93,12 +93,15 @@ impl SearchService {
         let (query, params) =
             Self::build_find_query_with_filter(&column_names, pattern, options, mode)?;
 
-        // Convert String parameters to &dyn ToSql for DuckDB
-        let params_refs: Vec<&dyn duckdb::ToSql> =
-            params.iter().map(|s| s as &dyn duckdb::ToSql).collect();
-
-        // Execute the query with parameters
-        let batch = match dataset.execute_query_with_params(&query, &params_refs) {
+        // Execute query (params will be empty since we inline everything)
+        let batch = match if params.is_empty() {
+            dataset.execute_query(&query)
+        } else {
+            // Fallback for future compatibility
+            let params_refs: Vec<&dyn duckdb::ToSql> =
+                params.iter().map(|s| s as &dyn duckdb::ToSql).collect();
+            dataset.execute_query_with_params(&query, &params_refs)
+        } {
             Ok(b) => b,
             Err(e) => {
                 return Err(color_eyre::eyre::eyre!(
@@ -135,18 +138,25 @@ impl SearchService {
         // Build COUNT query that sums matches across all columns - returns (query, params)
         let (count_query, params) = Self::build_count_query(&column_names, pattern, options, mode)?;
 
-        // Convert String parameters to &dyn ToSql for DuckDB
-        let params_refs: Vec<&dyn duckdb::ToSql> =
-            params.iter().map(|s| s as &dyn duckdb::ToSql).collect();
-
-        // Execute query with parameters
-        let batch = dataset.execute_query_with_params(&count_query, &params_refs)?;
+        // Execute query (params will be empty since we inline everything)
+        let batch = if params.is_empty() {
+            dataset.execute_query(&count_query)?
+        } else {
+            // Fallback for future compatibility
+            let params_refs: Vec<&dyn duckdb::ToSql> =
+                params.iter().map(|s| s as &dyn duckdb::ToSql).collect();
+            dataset.execute_query_with_params(&count_query, &params_refs)?
+        };
 
         // Parse the count from the result
         Self::parse_count_result(&batch)
     }
 
     /// Find all occurrences with context strings
+    ///
+    /// This method iterates through the entire dataset row-by-row and checks each column
+    /// for matches, avoiding DuckDB SQL parameter binding issues with UNION ALL queries.
+    /// Processes rows within each page in parallel for better performance.
     pub fn find_all(
         dataset: &ManagedDataset,
         pattern: &str,
@@ -154,6 +164,9 @@ impl SearchService {
         mode: &SearchMode,
         context_chars: usize,
     ) -> Result<Vec<FindAllResult>> {
+        use duckdb::arrow::array::Array;
+        use rayon::prelude::*;
+
         if pattern.is_empty() {
             return Ok(Vec::new());
         }
@@ -163,23 +176,164 @@ impl SearchService {
             return Ok(Vec::new());
         }
 
-        // Build query to get all matches with their values - returns (query, params)
-        let (query, params) =
-            Self::build_find_query_with_filter(&column_names, pattern, options, mode)?;
+        let row_count = dataset.row_count()?;
+        if row_count == 0 {
+            return Ok(Vec::new());
+        }
 
-        // Convert String parameters to &dyn ToSql for DuckDB
-        let params_refs: Vec<&dyn duckdb::ToSql> =
-            params.iter().map(|s| s as &dyn duckdb::ToSql).collect();
+        let mut all_results = Vec::new();
 
-        // Execute query with parameters
-        let batch = dataset.execute_query_with_params(&query, &params_refs)?;
+        // Fetch the entire dataset in pages to avoid memory issues
+        const PAGE_SIZE: usize = 10000;
+        let mut offset = 0;
 
-        // Parse results and generate context strings
-        Self::parse_find_all_results(&batch, pattern, context_chars, options, mode)
+        while offset < row_count {
+            let batch = dataset.get_page(offset, PAGE_SIZE)?;
+            let num_rows = batch.num_rows();
+
+            // Process rows in parallel using Rayon
+            let page_results: Vec<Vec<FindAllResult>> = (0..num_rows)
+                .into_par_iter()
+                .filter_map(|row_idx| {
+                    let global_row_idx = offset + row_idx;
+                    let mut row_results = Vec::new();
+
+                    // Check each column in this row
+                    for (col_idx, col_name) in column_names.iter().enumerate() {
+                        let column = batch.column(col_idx);
+
+                        // Skip null values
+                        if column.is_null(row_idx) {
+                            continue;
+                        }
+
+                        // Convert column value to string
+                        let value_str = Self::column_value_to_string(column, row_idx);
+
+                        // Check if this value matches the pattern
+                        if Self::value_matches_pattern(&value_str, pattern, options, mode) {
+                            let context = Self::generate_context(
+                                &value_str,
+                                pattern,
+                                context_chars,
+                                options,
+                                mode,
+                            );
+
+                            row_results.push(FindAllResult {
+                                row: global_row_idx,
+                                column: col_name.clone(),
+                                context,
+                            });
+                        }
+                    }
+
+                    if row_results.is_empty() {
+                        None
+                    } else {
+                        Some(row_results)
+                    }
+                })
+                .collect();
+
+            // Flatten and collect results from this page
+            all_results.extend(page_results.into_iter().flatten());
+
+            offset += PAGE_SIZE;
+        }
+
+        Ok(all_results)
+    }
+
+    /// Helper to convert a column value at a specific row index to a string
+    fn column_value_to_string(column: &duckdb::arrow::array::ArrayRef, row_idx: usize) -> String {
+        use duckdb::arrow::array::*;
+        use duckdb::arrow::datatypes::DataType;
+
+        match column.data_type() {
+            DataType::Utf8 => column
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .map(|arr| arr.value(row_idx).to_string())
+                .unwrap_or_default(),
+            DataType::Int64 => column
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .map(|arr| arr.value(row_idx).to_string())
+                .unwrap_or_default(),
+            DataType::Int32 => column
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .map(|arr| arr.value(row_idx).to_string())
+                .unwrap_or_default(),
+            DataType::Float64 => column
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .map(|arr| arr.value(row_idx).to_string())
+                .unwrap_or_default(),
+            DataType::Boolean => column
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .map(|arr| arr.value(row_idx).to_string())
+                .unwrap_or_default(),
+            // Add more types as needed
+            _ => format!("{:?}", column.slice(row_idx, 1)),
+        }
+    }
+
+    /// Check if a value matches the given pattern with options
+    fn value_matches_pattern(
+        value: &str,
+        pattern: &str,
+        options: &FindOptions,
+        mode: &SearchMode,
+    ) -> bool {
+        match mode {
+            SearchMode::Normal => {
+                let search_value = if options.match_case {
+                    value.to_string()
+                } else {
+                    value.to_lowercase()
+                };
+                let search_pattern = if options.match_case {
+                    pattern.to_string()
+                } else {
+                    pattern.to_lowercase()
+                };
+
+                if options.whole_word {
+                    search_value == search_pattern
+                } else {
+                    search_value.contains(&search_pattern)
+                }
+            }
+            SearchMode::Regex => {
+                let regex_pattern = if options.whole_word {
+                    format!("^{}$", pattern)
+                } else {
+                    pattern.to_string()
+                };
+
+                let regex_pattern = if options.match_case {
+                    regex_pattern
+                } else {
+                    format!("(?i){}", regex_pattern)
+                };
+
+                if let Ok(re) = regex::Regex::new(&regex_pattern) {
+                    re.is_match(value)
+                } else {
+                    false
+                }
+            }
+        }
     }
 
     /// Build query with WHERE clause filtering (used internally after getting structure)
     /// Returns (query_string, parameters_vector) for use with prepared statements
+    ///
+    /// NOTE: Due to DuckDB limitations with parameter binding in UNION ALL queries,
+    /// we inline the pattern with proper SQL escaping instead of using placeholders.
     fn build_find_query_with_filter(
         column_names: &[String],
         pattern: &str,
@@ -187,26 +341,40 @@ impl SearchService {
         mode: &SearchMode,
     ) -> Result<(String, Vec<String>)> {
         let mut queries = Vec::new();
-        let mut all_params = Vec::new();
+
+        // Helper function to safely escape SQL string literals
+        let escape_sql_string = |s: &str| -> String {
+            // Replace single quotes with two single quotes (SQL standard escaping)
+            s.replace("'", "''")
+        };
 
         for col_name in column_names {
-            // Build the condition for this specific column using ? placeholders
-            let (condition, param_value) = match mode {
+            // Build the condition by inlining the escaped pattern
+            let condition = match mode {
                 SearchMode::Normal => {
                     if options.whole_word {
                         if options.match_case {
-                            ("value = ?".to_string(), pattern.to_string())
+                            format!("value = '{}'", escape_sql_string(pattern))
                         } else {
-                            ("LOWER(value) = LOWER(?)".to_string(), pattern.to_string())
+                            // For case-insensitive, lowercase the value AND the pattern before comparing
+                            format!(
+                                "LOWER(value) = '{}'",
+                                escape_sql_string(&pattern.to_lowercase())
+                            )
                         }
                     } else {
-                        if options.match_case {
-                            ("value LIKE ?".to_string(), format!("%{}%", pattern))
+                        let like_pattern = if options.match_case {
+                            format!("%{}%", escape_sql_string(pattern))
                         } else {
-                            (
-                                "LOWER(value) LIKE LOWER(?)".to_string(),
-                                format!("%{}%", pattern),
-                            )
+                            // For case-insensitive LIKE, lowercase the pattern
+                            format!("%{}%", escape_sql_string(&pattern.to_lowercase()))
+                        };
+
+                        if options.match_case {
+                            format!("value LIKE '{}'", like_pattern)
+                        } else {
+                            // Lowercase the column value, pattern is already lowercase
+                            format!("LOWER(value) LIKE '{}'", like_pattern)
                         }
                     }
                 }
@@ -223,7 +391,10 @@ impl SearchService {
                         format!("(?i){}", regex_pattern)
                     };
 
-                    ("regexp_matches(value, ?)".to_string(), regex_pattern)
+                    format!(
+                        "regexp_matches(value, '{}')",
+                        escape_sql_string(&regex_pattern)
+                    )
                 }
             };
 
@@ -233,8 +404,8 @@ impl SearchService {
                 Self::quote_identifier(col_name),
                 condition
             );
+
             queries.push(query);
-            all_params.push(param_value);
         }
 
         if queries.is_empty() {
@@ -244,11 +415,17 @@ impl SearchService {
             ));
         }
 
-        Ok((queries.join(" UNION ALL "), all_params))
+        let final_query = queries.join(" UNION ALL ");
+
+        // Return empty params vector since we're inlining everything
+        Ok((final_query, vec![]))
     }
 
     /// Build COUNT query
     /// Returns (query_string, parameters_vector) for use with prepared statements
+    ///
+    /// NOTE: Due to DuckDB limitations with parameter binding in complex queries,
+    /// we inline the pattern with proper SQL escaping instead of using placeholders.
     fn build_count_query(
         column_names: &[String],
         pattern: &str,
@@ -256,31 +433,43 @@ impl SearchService {
         mode: &SearchMode,
     ) -> Result<(String, Vec<String>)> {
         let mut case_statements = Vec::new();
-        let mut param_values = Vec::new();
+
+        // Helper function to safely escape SQL string literals
+        let escape_sql_string = |s: &str| -> String {
+            // Replace single quotes with two single quotes (SQL standard escaping)
+            s.replace("'", "''")
+        };
 
         for col_name in column_names {
             let col_expr = format!("CAST({} AS VARCHAR)", Self::quote_identifier(col_name));
 
-            // Build the condition for this specific column using ? placeholders
-            let (condition, param_value) = match mode {
+            // Build the condition by inlining the escaped pattern
+            let condition = match mode {
                 SearchMode::Normal => {
                     if options.whole_word {
                         if options.match_case {
-                            (format!("{} = ?", col_expr), pattern.to_string())
+                            format!("{} = '{}'", col_expr, escape_sql_string(pattern))
                         } else {
-                            (
-                                format!("LOWER({}) = LOWER(?)", col_expr),
-                                pattern.to_string(),
+                            // For case-insensitive, lowercase the value AND the pattern before comparing
+                            format!(
+                                "LOWER({}) = '{}'",
+                                col_expr,
+                                escape_sql_string(&pattern.to_lowercase())
                             )
                         }
                     } else {
-                        if options.match_case {
-                            (format!("{} LIKE ?", col_expr), format!("%{}%", pattern))
+                        let like_pattern = if options.match_case {
+                            format!("%{}%", escape_sql_string(pattern))
                         } else {
-                            (
-                                format!("LOWER({}) LIKE LOWER(?)", col_expr),
-                                format!("%{}%", pattern),
-                            )
+                            // For case-insensitive LIKE, lowercase the pattern
+                            format!("%{}%", escape_sql_string(&pattern.to_lowercase()))
+                        };
+
+                        if options.match_case {
+                            format!("{} LIKE '{}'", col_expr, like_pattern)
+                        } else {
+                            // Lowercase the column value, pattern is already lowercase
+                            format!("LOWER({}) LIKE '{}'", col_expr, like_pattern)
                         }
                     }
                 }
@@ -297,12 +486,15 @@ impl SearchService {
                         format!("(?i){}", regex_pattern)
                     };
 
-                    (format!("regexp_matches({}, ?)", col_expr), regex_pattern)
+                    format!(
+                        "regexp_matches({}, '{}')",
+                        col_expr,
+                        escape_sql_string(&regex_pattern)
+                    )
                 }
             };
 
             case_statements.push(format!("SUM(CASE WHEN {} THEN 1 ELSE 0 END)", condition));
-            param_values.push(param_value);
         }
 
         Ok((
@@ -310,7 +502,7 @@ impl SearchService {
                 "SELECT {} as total FROM {{table}}",
                 case_statements.join(" + ")
             ),
-            param_values,
+            vec![], // Return empty params vector since we're inlining everything
         ))
     }
 
@@ -449,6 +641,11 @@ impl SearchService {
 
         let mut results = Vec::new();
 
+        eprintln!(
+            "parse_find_all_results: batch has {} rows",
+            batch.num_rows()
+        );
+
         if batch.num_rows() == 0 {
             return Ok(results);
         }
@@ -472,15 +669,22 @@ impl SearchService {
         for i in 0..batch.num_rows() {
             if !row_col.is_null(i) && !col_name_col.is_null(i) && !value_col.is_null(i) {
                 let value = value_col.value(i);
+                let column_name = col_name_col.value(i);
+                eprintln!("  Row {}: column='{}', value='{}'", i, column_name, value);
                 let context = Self::generate_context(value, pattern, context_chars, options, mode);
 
                 results.push(FindAllResult {
                     row: row_col.value(i) as usize,
-                    column: col_name_col.value(i).to_string(),
+                    column: column_name.to_string(),
                     context,
                 });
             }
         }
+
+        eprintln!(
+            "parse_find_all_results: returning {} results",
+            results.len()
+        );
 
         Ok(results)
     }

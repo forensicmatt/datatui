@@ -37,9 +37,10 @@ pub struct FindAllResultsDialog {
     selected_index: usize,
     pattern: String,
     display_mode: DisplayMode,
-    viewport_top: usize,    // First visible result index
-    viewport_height: usize, // Number of visible rows
-    focused: bool,          // Whether this component has focus
+    viewport_top: usize,                       // First visible result index
+    viewport_height: usize,                    // Number of visible rows
+    focused: bool,                             // Whether this component has focus
+    elapsed_time: Option<std::time::Duration>, // Time taken for search
 }
 
 impl FindAllResultsDialog {
@@ -62,6 +63,7 @@ impl FindAllResultsDialog {
             viewport_top: 0,
             viewport_height: 10, // Default, will be updated during render
             focused: false,
+            elapsed_time: None,
         }
     }
 
@@ -89,6 +91,16 @@ impl FindAllResultsDialog {
     /// Get result count
     pub fn result_count(&self) -> usize {
         self.results.len()
+    }
+
+    /// Set the elapsed time for the search
+    pub fn set_elapsed_time(&mut self, duration: std::time::Duration) {
+        self.elapsed_time = Some(duration);
+    }
+
+    /// Get the elapsed time for the search
+    pub fn get_elapsed_time(&self) -> Option<std::time::Duration> {
+        self.elapsed_time
     }
 
     /// Ensure selected item is within viewport
@@ -176,11 +188,26 @@ impl Component for FindAllResultsDialog {
         }
 
         // Create title
-        let title = format!(
-            " Find All Results: \"{}\" ({} matches) ",
-            self.pattern,
-            self.results.len()
-        );
+        let title = if let Some(duration) = self.elapsed_time {
+            let elapsed_ms = duration.as_millis();
+            let elapsed_str = if elapsed_ms < 1000 {
+                format!("{}ms", elapsed_ms)
+            } else {
+                format!("{:.2}s", duration.as_secs_f64())
+            };
+            format!(
+                " Find All Results: \"{}\" ({} matches in {}) ",
+                self.pattern,
+                self.results.len(),
+                elapsed_str
+            )
+        } else {
+            format!(
+                " Find All Results: \"{}\" ({} matches) ",
+                self.pattern,
+                self.results.len()
+            )
+        };
 
         let block = Block::default()
             .title(title)

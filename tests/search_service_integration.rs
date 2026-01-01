@@ -72,10 +72,28 @@ fn test_search_service_find_all() {
     // Should find: bob@test.com, david@test.com, Test User = at least 3
     assert!(!results.is_empty(), "Expected to find matches for 'test'");
 
-    // Check that context is generated
+    // IMPORTANT: Verify that we found results from MULTIPLE columns
+    // "test" appears in both "name" (Test User) and "email" (bob@test.com, david@test.com)
+    let mut columns_found = std::collections::HashSet::new();
     for result in &results {
+        columns_found.insert(result.column.as_str());
         assert!(!result.context.is_empty(), "Context should not be empty");
     }
+
+    println!("Columns found: {:?}", columns_found);
+    println!("Results:");
+    for result in &results {
+        println!(
+            "  Row {}, Column '{}': {}",
+            result.row, result.column, result.context
+        );
+    }
+
+    assert!(
+        columns_found.len() >= 2,
+        "Expected results from at least 2 columns, but only found: {:?}",
+        columns_found
+    );
 }
 
 #[test]

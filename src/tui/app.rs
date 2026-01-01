@@ -249,10 +249,14 @@ impl App {
                             if let Some(table) = &mut self.data_table {
                                 let dataset = table.dataset();
 
+                                // Track elapsed time
+                                let start = std::time::Instant::now();
                                 match SearchService::find_all(
                                     dataset, &pattern, &options, &mode, 30,
                                 ) {
                                     Ok(results) => {
+                                        let elapsed = start.elapsed();
+
                                         if results.is_empty() {
                                             if let Some(d) = &mut self.find_dialog {
                                                 d.set_error("No matches found".to_string());
@@ -265,6 +269,8 @@ impl App {
 
                                             let mut dialog =
                                                 FindAllResultsDialog::new(results, pattern.clone());
+                                            // Set elapsed time
+                                            dialog.set_elapsed_time(elapsed);
                                             // Give focus to the dialog initially
                                             dialog.set_focused(true);
                                             self.find_all_results_dialog = Some(dialog);
