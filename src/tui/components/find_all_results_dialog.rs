@@ -1,12 +1,12 @@
 //! Find All Results Dialog Component
 //!
-//! Displays all search results in a navigable table format.
+//! Displays all search results in a navigable table format with column aggregations.
 
 use crate::services::search_service::FindAllResult;
 use crate::tui::{Action, Component, Theme};
 use color_eyre::Result;
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
@@ -15,6 +15,7 @@ use ratatui::{
     },
     Frame,
 };
+use std::collections::HashMap;
 
 /// Display mode for Find All Results
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +127,216 @@ impl FindAllResultsDialog {
             self.ensure_selection_visible();
         }
     }
+
+    /// Compute counts of matches grouped by column
+    fn compute_column_counts(&self) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        for result in &self.results {
+            *counts.entry(result.column.clone()).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    /// Render the results table on the left side
+    fn render_results_table(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        // Create the Results block wrapper
+        let results_block = Block::default()
+            .title(" Results ")
+            .borders(Borders::ALL)
+            .border_style(theme.border_style())
+            .style(theme.normal_style());
+
+        let results_inner = results_block.inner(area);
+        frame.render_widget(results_block, area);
+
+        // Reserve space for help text (1 blank line + 1 help line)
+        let help_height = 2;
+
+        // Check if scrollbar is needed
+        let scrollbar_needed =
+            self.results.len() > (results_inner.height.saturating_sub(help_height + 1) as usize);
+        let scrollbar_width = if scrollbar_needed { 1 } else { 0 };
+
+        let table_area = Rect {
+            x: results_inner.x,
+            y: results_inner.y,
+            width: results_inner.width.saturating_sub(scrollbar_width),
+            height: results_inner.height.saturating_sub(help_height),
+        };
+
+        // Calculate viewport height (subtract 1 for header)
+        let viewport_height = table_area.height.saturating_sub(1) as usize;
+
+        // Ensure viewport_top is valid
+        if self.viewport_top >= self.results.len() {
+            self.viewport_top = self.results.len().saturating_sub(1);
+        }
+
+        // Calculate visible range of results
+        let visible_end = (self.viewport_top + viewport_height).min(self.results.len());
+        let visible_results = &self.results[self.viewport_top..visible_end];
+
+        // Create table rows only for visible results
+        let rows: Vec<Row> = visible_results
+            .iter()
+            .enumerate()
+            .map(|(visible_idx, result)| {
+                let actual_idx = self.viewport_top + visible_idx;
+                let row_style = if actual_idx == self.selected_index {
+                    theme.selected_style()
+                } else {
+                    Style::default()
+                };
+
+                // Truncate context to fit
+                let max_context_len = (results_inner.width as usize).saturating_sub(30);
+                let context = if result.context.len() > max_context_len {
+                    format!(
+                        "{}...",
+                        &result.context[..max_context_len.saturating_sub(3)]
+                    )
+                } else {
+                    result.context.clone()
+                };
+
+                Row::new(vec![
+                    format!("{}", result.row),
+                    result.column.clone(),
+                    context,
+                ])
+                .style(row_style)
+            })
+            .collect();
+
+        // Create table
+        let table = Table::new(
+            rows,
+            [
+                ratatui::layout::Constraint::Length(6),  // Row#
+                ratatui::layout::Constraint::Length(15), // Column
+                ratatui::layout::Constraint::Min(20),    // Context
+            ],
+        )
+        .header(Row::new(vec!["Row", "Column", "Context"]).style(theme.header_style()))
+        .style(theme.normal_style());
+
+        frame.render_widget(table, table_area);
+
+        // Render help text at bottom of results_inner area
+        let help_y = results_inner.y + results_inner.height.saturating_sub(1);
+        let help_area = Rect {
+            x: results_inner.x,
+            y: help_y,
+            width: results_inner.width,
+            height: 1,
+        };
+
+        let help_text = Line::from(vec![
+            Span::styled("[Enter]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(" Jump  "),
+            Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(" Close"),
+        ]);
+
+        let help = Paragraph::new(help_text).style(theme.normal_style());
+        frame.render_widget(help, help_area);
+
+        // Render scrollbar for results if needed
+        if scrollbar_needed {
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("↑"))
+                .end_symbol(Some("↓"));
+
+            let mut scrollbar_state =
+                ScrollbarState::new(self.results.len()).position(self.selected_index);
+
+            // Scrollbar area is on the right edge of the results block (on the border)
+            let scrollbar_area = Rect {
+                x: area.x + area.width.saturating_sub(1),
+                y: area.y + 1, // Skip top border
+                width: 1,
+                height: area.height.saturating_sub(2), // Skip top and bottom borders
+            };
+
+            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+        }
+
+        // Update viewport_height for next navigation
+        self.viewport_height = viewport_height;
+    }
+
+    /// Render the aggregations panel on the right side
+    fn render_aggregations(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        // Compute column counts
+        let column_counts = self.compute_column_counts();
+
+        // Sort columns by count (descending) then by name (alphabetically)
+        let mut sorted_counts: Vec<_> = column_counts.into_iter().collect();
+        sorted_counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+        // Create the aggregation block
+        let agg_block = Block::default()
+            .title(" Column Counts ")
+            .borders(Borders::ALL)
+            .border_style(theme.border_style())
+            .style(theme.normal_style());
+
+        let agg_inner = agg_block.inner(area);
+        frame.render_widget(agg_block, area);
+
+        // Calculate available height for the table (subtract 1 for header)
+        let available_height = agg_inner.height.saturating_sub(1) as usize;
+
+        // Check if scrollbar is needed
+        let scrollbar_needed = sorted_counts.len() > available_height;
+        let scrollbar_width = if scrollbar_needed { 1 } else { 0 };
+
+        let table_area = Rect {
+            x: agg_inner.x,
+            y: agg_inner.y,
+            width: agg_inner.width.saturating_sub(scrollbar_width),
+            height: agg_inner.height,
+        };
+
+        // For now, show all rows (in future, implement viewport scrolling if needed)
+        // Create table rows for the aggregations
+        let agg_rows: Vec<Row> = sorted_counts
+            .iter()
+            .map(|(column, count)| Row::new(vec![column.clone(), format!("{}", count)]))
+            .collect();
+
+        // Create aggregation table
+        let agg_table = Table::new(
+            agg_rows,
+            [
+                ratatui::layout::Constraint::Percentage(70), // Column name
+                ratatui::layout::Constraint::Percentage(30), // Count
+            ],
+        )
+        .header(Row::new(vec!["Column", "Count"]).style(theme.header_style()))
+        .style(theme.normal_style());
+
+        frame.render_widget(agg_table, table_area);
+
+        // Render scrollbar if there are too many columns
+        if scrollbar_needed {
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("↑"))
+                .end_symbol(Some("↓"));
+
+            let mut scrollbar_state = ScrollbarState::new(sorted_counts.len()).position(0);
+
+            // Scrollbar area is on the right edge of the aggregation block (on the border)
+            let scrollbar_area = Rect {
+                x: area.x + area.width.saturating_sub(1),
+                y: area.y + 1, // Skip top border
+                width: 1,
+                height: area.height.saturating_sub(2), // Skip top and bottom borders
+            };
+
+            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+        }
+    }
 }
 
 impl Component for FindAllResultsDialog {
@@ -233,120 +444,20 @@ impl Component for FindAllResultsDialog {
             return;
         }
 
-        // Reserve space for help text (1 blank line + 1 help line)
-        let help_height = 2;
+        // Split the inner area: 75% for results table, 25% for aggregations
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(75), Constraint::Percentage(25)])
+            .split(inner);
 
-        // Check if scrollbar is needed
-        let scrollbar_needed =
-            self.results.len() > (inner.height.saturating_sub(help_height + 1) as usize);
-        let scrollbar_width = if scrollbar_needed { 1 } else { 0 };
+        let results_area = chunks[0];
+        let aggregation_area = chunks[1];
 
-        let table_area = Rect {
-            x: inner.x,
-            y: inner.y,
-            width: inner.width.saturating_sub(scrollbar_width),
-            height: inner.height.saturating_sub(help_height),
-        };
+        // ===== RENDER RESULTS TABLE (LEFT SIDE) =====
+        self.render_results_table(frame, results_area, &theme);
 
-        // Calculate viewport height (subtract 1 for header)
-        let viewport_height = table_area.height.saturating_sub(1) as usize;
-
-        // Ensure viewport_top is valid
-        if self.viewport_top >= self.results.len() {
-            self.viewport_top = self.results.len().saturating_sub(1);
-        }
-
-        // Calculate visible range of results
-        let visible_end = (self.viewport_top + viewport_height).min(self.results.len());
-        let visible_results = &self.results[self.viewport_top..visible_end];
-
-        // Create table rows only for visible results
-        let rows: Vec<Row> = visible_results
-            .iter()
-            .enumerate()
-            .map(|(visible_idx, result)| {
-                let actual_idx = self.viewport_top + visible_idx;
-                let row_style = if actual_idx == self.selected_index {
-                    theme.selected_style()
-                } else {
-                    Style::default()
-                };
-
-                // Truncate context to fit
-                let max_context_len = (dialog_area.width as usize).saturating_sub(30);
-                let context = if result.context.len() > max_context_len {
-                    format!(
-                        "{}...",
-                        &result.context[..max_context_len.saturating_sub(3)]
-                    )
-                } else {
-                    result.context.clone()
-                };
-
-                Row::new(vec![
-                    format!("{}", result.row),
-                    result.column.clone(),
-                    context,
-                ])
-                .style(row_style)
-            })
-            .collect();
-
-        // Create table
-        let table = Table::new(
-            rows,
-            [
-                ratatui::layout::Constraint::Length(6),  // Row#
-                ratatui::layout::Constraint::Length(15), // Column
-                ratatui::layout::Constraint::Min(20),    // Context
-            ],
-        )
-        .header(Row::new(vec!["Row", "Column", "Context"]).style(theme.header_style()))
-        .style(theme.normal_style());
-
-        frame.render_widget(table, table_area);
-
-        // Render help text at bottom of inner area
-        let help_y = inner.y + inner.height.saturating_sub(1);
-        let help_area = Rect {
-            x: inner.x,
-            y: help_y,
-            width: inner.width,
-            height: 1,
-        };
-
-        let help_text = Line::from(vec![
-            Span::styled("[Enter]", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" Jump  "),
-            Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" Close"),
-        ]);
-
-        let help = Paragraph::new(help_text).style(theme.normal_style());
-        frame.render_widget(help, help_area);
-
-        // Update viewport_height for next navigation
-        self.viewport_height = viewport_height;
-
-        // Render vertical scrollbar if needed (matching DataTable style)
-        if self.results.len() > viewport_height {
-            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(Some("↑"))
-                .end_symbol(Some("↓"));
-
-            let mut scrollbar_state =
-                ScrollbarState::new(self.results.len()).position(self.selected_index);
-
-            // Scrollbar area is the right edge of the dialog area (on the border, like DataTable)
-            let scrollbar_area = Rect {
-                x: dialog_area.x + dialog_area.width.saturating_sub(1),
-                y: dialog_area.y + 1, // Skip top border
-                width: 1,
-                height: dialog_area.height.saturating_sub(2), // Skip top and bottom borders
-            };
-
-            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
-        }
+        // ===== RENDER AGGREGATIONS (RIGHT SIDE) =====
+        self.render_aggregations(frame, aggregation_area, &theme);
     }
 
     fn supported_actions(&self) -> &[Action] {
