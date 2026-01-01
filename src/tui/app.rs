@@ -1,9 +1,14 @@
 use crate::core::DatasetId;
-use crate::services::DataService;
-use crate::tui::{Action, Component, DataTable, Focusable, KeyBindings, Theme};
+use crate::services::search_service::{FindOptions, SearchMode};
+use crate::services::{DataService, SearchService};
+use crate::tui::components::{CellViewer, DataTable, FindAllResultsDialog, FindDialog};
+use crate::tui::{Action, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
-use crossterm::event::{KeyEvent, KeyEventKind};
-use ratatui::Frame;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::{
+    layout::{Constraint, Direction, Layout, Rect},
+    Frame,
+};
 use std::path::Path;
 
 /// Application state
@@ -15,6 +20,18 @@ pub struct App {
 
     /// Current active component (DataTable for now)
     data_table: Option<DataTable>,
+
+    /// Cell viewer component
+    cell_viewer: CellViewer,
+
+    /// Find dialog (when active)
+    find_dialog: Option<FindDialog>,
+
+    /// Find All results dialog (when active)
+    find_all_results_dialog: Option<FindAllResultsDialog>,
+
+    /// Last search parameters (for F3 repeat search)
+    last_search: Option<(String, FindOptions, SearchMode)>,
 
     /// Keybindings configuration
     keybindings: KeyBindings,
@@ -36,6 +53,10 @@ impl App {
         Ok(Self {
             data_service,
             data_table: None,
+            cell_viewer: CellViewer::new(),
+            find_dialog: None,
+            find_all_results_dialog: None,
+            last_search: None,
             keybindings,
             theme,
             should_quit: false,
@@ -58,6 +79,38 @@ impl App {
             return Ok(());
         }
 
+        // If find dialog is active, give it priority for character input
+        if let Some(dialog) = &mut self.find_dialog {
+            // Handle character input for pattern field
+            if let KeyCode::Char(c) = key.code {
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                {
+                    // Insert character into pattern
+                    dialog
+                        .search_pattern
+                        .insert(dialog.search_pattern_cursor, c);
+                    dialog.search_pattern_cursor += 1;
+                    return Ok(());
+                }
+            } else if key.code == KeyCode::Backspace {
+                // Handle backspace in pattern field
+                if dialog.search_pattern_cursor > 0 && !dialog.search_pattern.is_empty() {
+                    dialog
+                        .search_pattern
+                        .remove(dialog.search_pattern_cursor - 1);
+                    dialog.search_pattern_cursor -= 1;
+                }
+                return Ok(());
+            } else if key.code == KeyCode::Delete {
+                // Handle delete in pattern field
+                if dialog.search_pattern_cursor < dialog.search_pattern.len() {
+                    dialog.search_pattern.remove(dialog.search_pattern_cursor);
+                }
+                return Ok(());
+            }
+        }
+
         // Translate key to action
         if let Some(action) = self.keybindings.get_action(&key) {
             self.handle_action(action)?;
@@ -74,7 +127,209 @@ impl App {
                 self.should_quit = true;
                 return Ok(());
             }
+            Action::NextTab => {
+                // If FindAllResultsDialog is active, toggle focus between it and DataTable
+                if let Some(dialog) = &mut self.find_all_results_dialog {
+                    if let Some(table) = &mut self.data_table {
+                        // Toggle focus
+                        let dialog_focused = dialog.is_focused();
+                        dialog.set_focused(!dialog_focused);
+                        table.set_focused(dialog_focused);
+                    }
+                    return Ok(());
+                }
+            }
+            Action::Find => {
+                // Open find dialog, populating from last search if available
+                let mut dialog = FindDialog::new();
+
+                // Restore previous search parameters if they exist
+                if let Some((pattern, options, mode)) = &self.last_search {
+                    dialog.search_pattern = pattern.clone();
+                    dialog.search_pattern_cursor = pattern.len();
+                    dialog.options = options.clone();
+                    dialog.search_mode = mode.clone();
+                }
+
+                self.find_dialog = Some(dialog);
+                return Ok(());
+            }
+            Action::Cancel => {
+                // Close find all results dialog if active
+                if self.find_all_results_dialog.is_some() {
+                    // Restore focus to table
+                    if let Some(table) = &mut self.data_table {
+                        table.set_focused(true);
+                    }
+                    self.find_all_results_dialog = None;
+                    return Ok(());
+                }
+
+                // Close find dialog if active
+                if self.find_dialog.is_some() {
+                    self.find_dialog = None;
+                    return Ok(());
+                }
+            }
+            Action::Confirm => {
+                // Execute search if dialog is active
+                if let Some(dialog) = &self.find_dialog {
+                    if dialog.search_pattern.is_empty() {
+                        // Show error
+                        if let Some(d) = &mut self.find_dialog {
+                            d.set_error("Search pattern cannot be empty".to_string());
+                        }
+                        return Ok(());
+                    }
+
+                    // Get search parameters
+                    let (pattern, options, mode) = dialog.get_search_params();
+                    let action_selected = dialog.action_selected;
+
+                    // Store as last search
+                    self.last_search = Some((pattern.clone(), options.clone(), mode.clone()));
+
+                    // Execute based on selected action
+                    match action_selected {
+                        crate::tui::components::find_dialog::FindActionSelected::FindNext => {
+                            // Execute find next
+                            if let Some(table) = &mut self.data_table {
+                                let dataset = table.dataset();
+                                let (start_row, start_col) = table.get_cursor_position();
+
+                                match SearchService::find_next(
+                                    dataset, &pattern, &options, &mode, start_row, start_col,
+                                ) {
+                                    Ok(Some(result)) => {
+                                        // Navigate to result
+                                        table.goto_cell(result.row, &result.column)?;
+                                        // Close dialog
+                                        self.find_dialog = None;
+                                    }
+                                    Ok(None) => {
+                                        // No results found
+                                        if let Some(d) = &mut self.find_dialog {
+                                            d.set_error("No matches found".to_string());
+                                        }
+                                    }
+                                    Err(e) => {
+                                        // Search error (e.g., invalid regex)
+                                        if let Some(d) = &mut self.find_dialog {
+                                            d.set_error(format!("Search error: {}", e));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        crate::tui::components::find_dialog::FindActionSelected::Count => {
+                            // Execute count
+                            if let Some(table) = &self.data_table {
+                                let dataset = table.dataset();
+
+                                match SearchService::count_matches(
+                                    dataset, &pattern, &options, &mode,
+                                ) {
+                                    Ok(count) => {
+                                        // Show count in dialog
+                                        if let Some(d) = &mut self.find_dialog {
+                                            d.set_count(count);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        // Search error
+                                        if let Some(d) = &mut self.find_dialog {
+                                            d.set_error(format!("Search error: {}", e));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        crate::tui::components::find_dialog::FindActionSelected::FindAll => {
+                            // Execute find all
+                            if let Some(table) = &mut self.data_table {
+                                let dataset = table.dataset();
+
+                                match SearchService::find_all(
+                                    dataset, &pattern, &options, &mode, 30,
+                                ) {
+                                    Ok(results) => {
+                                        if results.is_empty() {
+                                            if let Some(d) = &mut self.find_dialog {
+                                                d.set_error("No matches found".to_string());
+                                            }
+                                        } else {
+                                            // Open FindAllResults dialog with results
+                                            // Clone first result data before moving results
+                                            let first_result =
+                                                results.first().map(|r| (r.row, r.column.clone()));
+
+                                            let mut dialog =
+                                                FindAllResultsDialog::new(results, pattern.clone());
+                                            // Give focus to the dialog initially
+                                            dialog.set_focused(true);
+                                            self.find_all_results_dialog = Some(dialog);
+
+                                            // Jump to first result
+                                            if let Some((row, col)) = first_result {
+                                                table.goto_cell(row, &col)?;
+                                            }
+
+                                            // Remove focus from table since dialog now has focus
+                                            table.set_focused(false);
+
+                                            // Close find dialog
+                                            self.find_dialog = None;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        if let Some(d) = &mut self.find_dialog {
+                                            d.set_error(format!("Search error: {}", e));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    return Ok(());
+                }
+
+                // Jump to selected result if find all results dialog is active
+                if let Some(dialog) = &self.find_all_results_dialog {
+                    if let Some(result) = dialog.get_selected() {
+                        if let Some(table) = &mut self.data_table {
+                            table.goto_cell(result.row, &result.column)?;
+                        }
+                    }
+                    // Keep dialog open so user can see and navigate to other results
+                    return Ok(());
+                }
+            }
             _ => {}
+        }
+
+        // Route to find dialog if active
+        if let Some(dialog) = &mut self.find_dialog {
+            let keep_open = dialog.handle_action(action)?;
+            if !keep_open {
+                self.find_dialog = None;
+            }
+            return Ok(());
+        }
+
+        // Route to find all results dialog if active and focused
+        if let Some(dialog) = &mut self.find_all_results_dialog {
+            if dialog.is_focused() {
+                let keep_open = dialog.handle_action(action)?;
+                if !keep_open {
+                    // Restore focus to table when dialog closes
+                    if let Some(table) = &mut self.data_table {
+                        table.set_focused(true);
+                    }
+                    self.find_all_results_dialog = None;
+                }
+                return Ok(());
+            }
         }
 
         // Route to focused component
@@ -102,13 +357,88 @@ impl App {
 
     /// Render the app
     pub fn render(&mut self, frame: &mut Frame) {
-        let area = frame.size();
+        let area = frame.area();
 
         if let Some(table) = &mut self.data_table {
-            table.render(frame, area);
+            // Update cell viewer with current selection first
+            if let Ok(cell_info) = table.get_current_cell_info() {
+                self.cell_viewer.set_cell_info(Some(cell_info));
+            }
+
+            // Calculate the height needed for the cell viewer
+            let viewer_height = self.cell_viewer.calculate_height(area.width);
+
+            // Determine layout based on whether find all results panel is active
+            let (table_area, results_area) = if self.find_all_results_dialog.is_some() {
+                // Split screen: cell viewer (top), table (middle), results panel (bottom)
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(viewer_height), // Cell viewer
+                        Constraint::Percentage(70),        // DataTable (80%)
+                        Constraint::Percentage(30),        // Results panel (20%)
+                    ])
+                    .split(area);
+
+                // Render the cell viewer (top)
+                self.cell_viewer.render(frame, chunks[0]);
+
+                (chunks[1], Some(chunks[2]))
+            } else {
+                // Normal split: cell viewer (top), table (bottom)
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Length(viewer_height), Constraint::Min(0)])
+                    .split(area);
+
+                // Render the cell viewer (top)
+                self.cell_viewer.render(frame, chunks[0]);
+
+                (chunks[1], None)
+            };
+
+            // Render the data table
+            table.render(frame, table_area);
+
+            // Render find all results panel if active
+            if let Some(dialog) = &mut self.find_all_results_dialog {
+                if let Some(area) = results_area {
+                    dialog.render(frame, area);
+                }
+            }
         } else {
             // TODO: Render welcome screen or file browser
         }
+
+        // Render find dialog overlay on top if active (always overlay)
+        if let Some(dialog) = &mut self.find_dialog {
+            let dialog_area = Self::centered_rect(60, 50, area);
+            dialog.render(frame, dialog_area);
+        }
+    }
+
+    /// Helper to create centered rectangle
+    fn centered_rect(percent_w: u16, percent_h: u16, area: Rect) -> Rect {
+        let width = (area.width * percent_w) / 100;
+        let height = (area.height * percent_h) / 100;
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// Get reference to cell viewer configuration
+    pub fn cell_viewer_config(&self) -> &crate::tui::components::ViewerConfig {
+        self.cell_viewer.config()
+    }
+
+    /// Set cell viewer configuration
+    pub fn set_cell_viewer_config(&mut self, config: crate::tui::components::ViewerConfig) {
+        self.cell_viewer.set_config(config);
     }
 
     /// Get reference to data service
@@ -168,6 +498,10 @@ mod tests {
         let mut app = App {
             data_service,
             data_table: None,
+            cell_viewer: CellViewer::new(),
+            find_dialog: None,
+            find_all_results_dialog: None,
+            last_search: None,
             keybindings,
             theme,
             should_quit: false,
@@ -191,6 +525,10 @@ mod tests {
         let app = App {
             data_service,
             data_table: None,
+            cell_viewer: CellViewer::new(),
+            find_dialog: None,
+            find_all_results_dialog: None,
+            last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),
             should_quit: false,
@@ -245,6 +583,10 @@ mod tests {
         let mut app = App {
             data_service,
             data_table: None,
+            cell_viewer: CellViewer::new(),
+            find_dialog: None,
+            find_all_results_dialog: None,
+            last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),
             should_quit: false,
@@ -266,6 +608,10 @@ mod tests {
         let mut app = App {
             data_service,
             data_table: None,
+            cell_viewer: CellViewer::new(),
+            find_dialog: None,
+            find_all_results_dialog: None,
+            last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),
             should_quit: false,

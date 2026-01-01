@@ -276,6 +276,59 @@ impl DataTable {
         Ok(())
     }
 
+    /// Get information about the currently selected cell
+    pub fn get_current_cell_info(&self) -> Result<super::CellInfo> {
+        let column_names = self.dataset.column_names()?;
+        let column_name = column_names
+            .get(self.cursor.col)
+            .cloned()
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        // Fetch the data for the current cell
+        let batch = self.dataset.get_page(self.cursor.row, 1)?;
+
+        let (value, data_type) = if self.cursor.col < batch.num_columns() {
+            let column = batch.column(self.cursor.col);
+            let value_str = self.format_cell_value(column, 0); // row 0 since we fetched just 1 row
+            let type_str = format!("{:?}", column.data_type());
+            (value_str, Some(type_str))
+        } else {
+            ("Error: Column out of bounds".to_string(), None)
+        };
+
+        Ok(super::CellInfo::new(
+            self.cursor.row,
+            self.cursor.col,
+            column_name,
+            value,
+            data_type,
+        ))
+    }
+
+    /// Navigate to a specific cell by row and column name
+    pub fn goto_cell(&mut self, row: usize, column_name: &str) -> Result<()> {
+        let column_names = self.dataset.column_names()?;
+        if let Some(col_idx) = column_names.iter().position(|c| c == column_name) {
+            let row_count = self.row_count()?;
+            self.cursor.row = row.min(row_count.saturating_sub(1));
+            self.cursor.col = col_idx.min(column_names.len().saturating_sub(1));
+            self.ensure_cursor_visible();
+            // Invalidate cache to force re-render with new cursor position
+            self.cache_valid = false;
+        }
+        Ok(())
+    }
+
+    /// Get current cursor posit (row, col_index)
+    pub fn get_cursor_position(&self) -> (usize, usize) {
+        (self.cursor.row, self.cursor.col)
+    }
+
+    /// Get reference to dataset (for search operations)
+    pub fn dataset(&self) -> &crate::core::ManagedDataset {
+        &self.dataset
+    }
+
     // Column Width Management
 
     /// Calculate column widths based on content and configuration
@@ -541,7 +594,10 @@ impl Component for DataTable {
             Ok(names) => names,
             Err(_) => vec!["Error".to_string()],
         };
-        let visible_columns = &all_columns[self.viewport.left_col..end_col];
+        // Ensure end_col doesn't exceed actual column count
+        let safe_end_col = end_col.min(all_columns.len());
+        let visible_columns =
+            &all_columns[self.viewport.left_col.min(all_columns.len())..safe_end_col];
 
         // Create header from visible columns
         let header_cells: Vec<Cell> = visible_columns

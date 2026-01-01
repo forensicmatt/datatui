@@ -66,6 +66,7 @@ impl KeyBindings {
             // Data operations
             KeyBinding::new("s", Action::Sort),
             KeyBinding::new("f", Action::Filter),
+            KeyBinding::new("Ctrl+f", Action::Find),
             KeyBinding::new("/", Action::Find),
             KeyBinding::new(":", Action::Query),
             // Refresh
