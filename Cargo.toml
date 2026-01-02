@@ -12,15 +12,20 @@ default = []
 
 [dependencies]
 chrono = {version = "0.4.42", features = ["serde"]}
+clap = {version = "4.5", features = ["derive"]}
 color-eyre = "0.6.5"
 crossterm = "0.28"
 directories = "6.0"
 duckdb = {version = "1.4.3", features = ["bundled"]}
+lazy_static = "1.4"
 ratatui = "0.29"
 rayon = "1.10"
 regex = "1.12.2"
 serde = {version = "1.0.228", features = ["derive"]}
 serde_json = "1.0"
+tracing = "0.1"
+tracing-error = "0.2"
+tracing-subscriber = {version = "0.3", features = ["env-filter"]}
 uuid = {version = "1.19.0", features = ["v4", "serde"]}
 
 [dev-dependencies]

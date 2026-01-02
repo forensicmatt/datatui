@@ -3,6 +3,7 @@
 #![allow(clippy::collapsible_else_if)]
 
 pub mod core;
+pub mod logging;
 pub mod services;
 pub mod tui;
 
