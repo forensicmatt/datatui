@@ -1,21 +1,38 @@
 //! Find All Results Dialog Component
 //!
 //! Displays all search results in a navigable table format with column aggregations.
+//! Supports multiple tabs, one for each search pattern.
 
 use crate::services::search_service::FindAllResult;
+use crate::tui::components::find_all_tab::FindAllTab;
 use crate::tui::{Action, Component, Theme};
 use color_eyre::Result;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
         Block, Borders, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        Table,
+        Table, Tabs,
     },
     Frame,
 };
-use std::collections::HashMap;
+use std::time::Duration;
+
+/// Focus panel within the dialog
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelFocus {
+    /// Focus on results table (left panel)
+    Results,
+    /// Focus on column counts (right panel)
+    ColumnCounts,
+}
+
+impl Default for PanelFocus {
+    fn default() -> Self {
+        Self::Results
+    }
+}
 
 /// Display mode for Find All Results
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,16 +49,25 @@ impl Default for DisplayMode {
     }
 }
 
-/// Dialog showing all search results
+/// Dialog showing all search results with tabbed interface for multiple patterns
 pub struct FindAllResultsDialog {
-    results: Vec<FindAllResult>,
-    selected_index: usize,
-    pattern: String,
+    /// Tabs containing search results
+    tabs: Vec<FindAllTab>,
+
+    /// Currently active tab index
+    active_tab_index: usize,
+
+    /// Display mode
     display_mode: DisplayMode,
-    viewport_top: usize,                       // First visible result index
-    viewport_height: usize,                    // Number of visible rows
-    focused: bool,                             // Whether this component has focus
-    elapsed_time: Option<std::time::Duration>, // Time taken for search
+
+    /// Whether this component has focus
+    focused: bool,
+
+    /// Which panel has focus within the dialog
+    panel_focus: PanelFocus,
+
+    /// Scroll position for column counts panel
+    column_counts_scroll: usize,
 }
 
 impl FindAllResultsDialog {
@@ -56,94 +82,186 @@ impl FindAllResultsDialog {
         pattern: String,
         display_mode: DisplayMode,
     ) -> Self {
+        let tab = FindAllTab::new(pattern, results);
         Self {
-            results,
-            selected_index: 0,
-            pattern,
+            tabs: vec![tab],
+            active_tab_index: 0,
             display_mode,
-            viewport_top: 0,
-            viewport_height: 10, // Default, will be updated during render
             focused: false,
-            elapsed_time: None,
+            panel_focus: PanelFocus::default(),
+            column_counts_scroll: 0,
         }
     }
 
-    /// Get the currently selected result
+    /// Add a new tab with search results
+    pub fn add_tab(&mut self, pattern: String, results: Vec<FindAllResult>) {
+        let tab = FindAllTab::new(pattern, results);
+        self.tabs.push(tab);
+        // Switch to the newly added tab
+        self.active_tab_index = self.tabs.len() - 1;
+    }
+
+    /// Add a new tab with elapsed time
+    pub fn add_tab_with_time(
+        &mut self,
+        pattern: String,
+        results: Vec<FindAllResult>,
+        elapsed_time: Duration,
+    ) {
+        let tab = FindAllTab::with_elapsed_time(pattern, results, elapsed_time);
+        self.tabs.push(tab);
+        // Switch to the newly added tab
+        self.active_tab_index = self.tabs.len() - 1;
+    }
+
+    /// Close the current tab
+    pub fn close_current_tab(&mut self) -> bool {
+        if self.tabs.len() <= 1 {
+            // Closing the last tab should close the dialog
+            return false;
+        }
+
+        self.tabs.remove(self.active_tab_index);
+
+        // Adjust active tab index
+        if self.active_tab_index >= self.tabs.len() {
+            self.active_tab_index = self.tabs.len() - 1;
+        }
+
+        true
+    }
+
+    /// Switch to next tab
+    pub fn next_tab(&mut self) {
+        if self.tabs.len() > 1 {
+            self.active_tab_index = (self.active_tab_index + 1) % self.tabs.len();
+        }
+    }
+
+    /// Switch to previous tab
+    pub fn previous_tab(&mut self) {
+        if self.tabs.len() > 1 {
+            self.active_tab_index = if self.active_tab_index == 0 {
+                self.tabs.len() - 1
+            } else {
+                self.active_tab_index - 1
+            };
+        }
+    }
+
+    /// Get the active tab
+    fn get_active_tab(&self) -> Option<&FindAllTab> {
+        self.tabs.get(self.active_tab_index)
+    }
+
+    /// Get the active tab mutably
+    fn get_active_tab_mut(&mut self) -> Option<&mut FindAllTab> {
+        self.tabs.get_mut(self.active_tab_index)
+    }
+
+    /// Get the currently selected result from active tab
     pub fn get_selected(&self) -> Option<&FindAllResult> {
-        self.results.get(self.selected_index)
+        self.get_active_tab()?.get_selected()
     }
 
-    /// Navigate selection up
+    /// Navigate selection up in active tab
     pub fn select_previous(&mut self) {
-        if self.selected_index > 0 {
-            self.selected_index -= 1;
-            self.ensure_selection_visible();
+        if let Some(tab) = self.get_active_tab_mut() {
+            tab.select_previous();
         }
     }
 
-    /// Navigate selection down
+    /// Navigate selection down in active tab
     pub fn select_next(&mut self) {
-        if self.selected_index + 1 < self.results.len() {
-            self.selected_index += 1;
-            self.ensure_selection_visible();
+        if let Some(tab) = self.get_active_tab_mut() {
+            tab.select_next();
         }
     }
 
-    /// Get result count
+    /// Get result count from active tab
     pub fn result_count(&self) -> usize {
-        self.results.len()
+        self.get_active_tab()
+            .map(|tab| tab.result_count())
+            .unwrap_or(0)
     }
 
-    /// Set the elapsed time for the search
-    pub fn set_elapsed_time(&mut self, duration: std::time::Duration) {
-        self.elapsed_time = Some(duration);
-    }
-
-    /// Get the elapsed time for the search
-    pub fn get_elapsed_time(&self) -> Option<std::time::Duration> {
-        self.elapsed_time
-    }
-
-    /// Ensure selected item is within viewport
-    fn ensure_selection_visible(&mut self) {
-        if self.selected_index < self.viewport_top {
-            self.viewport_top = self.selected_index;
-        } else if self.selected_index >= self.viewport_top + self.viewport_height {
-            self.viewport_top = self.selected_index.saturating_sub(self.viewport_height - 1);
+    /// Set the elapsed time for the active tab
+    pub fn set_elapsed_time(&mut self, duration: Duration) {
+        if let Some(tab) = self.get_active_tab_mut() {
+            tab.set_elapsed_time(duration);
         }
     }
 
-    /// Page up
+    /// Get the elapsed time for the active tab
+    pub fn get_elapsed_time(&self) -> Option<Duration> {
+        self.get_active_tab()?.get_elapsed_time()
+    }
+
+    /// Page up in active tab
     fn page_up(&mut self) {
-        self.selected_index = self.selected_index.saturating_sub(self.viewport_height);
-        self.ensure_selection_visible();
+        if let Some(tab) = self.get_active_tab_mut() {
+            tab.page_up();
+        }
     }
 
-    /// Page down
+    /// Page down in active tab
     fn page_down(&mut self) {
-        if self.results.len() > 0 {
-            self.selected_index =
-                (self.selected_index + self.viewport_height).min(self.results.len() - 1);
-            self.ensure_selection_visible();
+        if let Some(tab) = self.get_active_tab_mut() {
+            tab.page_down();
         }
     }
 
-    /// Compute counts of matches grouped by column
-    fn compute_column_counts(&self) -> HashMap<String, usize> {
-        let mut counts = HashMap::new();
-        for result in &self.results {
-            *counts.entry(result.column.clone()).or_insert(0) += 1;
-        }
-        counts
+    /// Render tab bar at top
+    fn render_tab_bar(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let tab_titles: Vec<String> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(_i, tab)| {
+                let truncated_pattern = if tab.pattern.len() > 15 {
+                    format!("{}...", &tab.pattern[..12])
+                } else {
+                    tab.pattern.clone()
+                };
+                format!(" {} ({}) ", truncated_pattern, tab.result_count())
+            })
+            .collect();
+
+        let tabs_widget = Tabs::new(tab_titles)
+            .select(self.active_tab_index)
+            .style(theme.normal_style())
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .divider("|");
+
+        frame.render_widget(tabs_widget, area);
     }
 
     /// Render the results table on the left side
     fn render_results_table(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        // Check tab count and panel focus before getting mutable reference
+        let has_multiple_tabs = self.tabs.len() > 1;
+        let results_focused = self.panel_focus == PanelFocus::Results;
+
+        let Some(tab) = self.get_active_tab_mut() else {
+            return;
+        };
+
+        // Determine border style based on panel focus
+        let border_style = if results_focused {
+            theme.focused_border_style()
+        } else {
+            theme.border_style()
+        };
+
         // Create the Results block wrapper
         let results_block = Block::default()
             .title(" Results ")
             .borders(Borders::ALL)
-            .border_style(theme.border_style())
+            .border_style(border_style)
             .style(theme.normal_style());
 
         let results_inner = results_block.inner(area);
@@ -154,7 +272,7 @@ impl FindAllResultsDialog {
 
         // Check if scrollbar is needed
         let scrollbar_needed =
-            self.results.len() > (results_inner.height.saturating_sub(help_height + 1) as usize);
+            tab.results.len() > (results_inner.height.saturating_sub(help_height + 1) as usize);
         let scrollbar_width = if scrollbar_needed { 1 } else { 0 };
 
         let table_area = Rect {
@@ -168,21 +286,21 @@ impl FindAllResultsDialog {
         let viewport_height = table_area.height.saturating_sub(1) as usize;
 
         // Ensure viewport_top is valid
-        if self.viewport_top >= self.results.len() {
-            self.viewport_top = self.results.len().saturating_sub(1);
+        if tab.viewport_top >= tab.results.len() {
+            tab.viewport_top = tab.results.len().saturating_sub(1);
         }
 
         // Calculate visible range of results
-        let visible_end = (self.viewport_top + viewport_height).min(self.results.len());
-        let visible_results = &self.results[self.viewport_top..visible_end];
+        let visible_end = (tab.viewport_top + viewport_height).min(tab.results.len());
+        let visible_results = &tab.results[tab.viewport_top..visible_end];
 
         // Create table rows only for visible results
         let rows: Vec<Row> = visible_results
             .iter()
             .enumerate()
             .map(|(visible_idx, result)| {
-                let actual_idx = self.viewport_top + visible_idx;
-                let row_style = if actual_idx == self.selected_index {
+                let actual_idx = tab.viewport_top + visible_idx;
+                let row_style = if actual_idx == tab.selected_index {
                     theme.selected_style()
                 } else {
                     Style::default()
@@ -231,12 +349,28 @@ impl FindAllResultsDialog {
             height: 1,
         };
 
-        let help_text = Line::from(vec![
-            Span::styled("[Enter]", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" Jump  "),
-            Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(" Close"),
-        ]);
+        // Use the has_multiple_tabs flag set earlier
+        let help_text = if has_multiple_tabs {
+            Line::from(vec![
+                Span::styled("[←/→]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" Tab  "),
+                Span::styled("[Tab]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" Panel  "),
+                Span::styled("[Enter]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" Jump  "),
+                Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" Close"),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("[Tab]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" Panel  "),
+                Span::styled("[Enter]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" Jump  "),
+                Span::styled("[Esc]", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" Close"),
+            ])
+        };
 
         let help = Paragraph::new(help_text).style(theme.normal_style());
         frame.render_widget(help, help_area);
@@ -248,7 +382,7 @@ impl FindAllResultsDialog {
                 .end_symbol(Some("↓"));
 
             let mut scrollbar_state =
-                ScrollbarState::new(self.results.len()).position(self.selected_index);
+                ScrollbarState::new(tab.results.len()).position(tab.selected_index);
 
             // Scrollbar area is on the right edge of the results block (on the border)
             let scrollbar_area = Rect {
@@ -262,23 +396,34 @@ impl FindAllResultsDialog {
         }
 
         // Update viewport_height for next navigation
-        self.viewport_height = viewport_height;
+        tab.set_viewport_height(viewport_height);
     }
 
     /// Render the aggregations panel on the right side
-    fn render_aggregations(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn render_aggregations(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let Some(tab) = self.get_active_tab() else {
+            return;
+        };
+
         // Compute column counts
-        let column_counts = self.compute_column_counts();
+        let column_counts = tab.compute_column_counts();
 
         // Sort columns by count (descending) then by name (alphabetically)
         let mut sorted_counts: Vec<_> = column_counts.into_iter().collect();
         sorted_counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 
+        // Determine border style based on panel focus
+        let border_style = if self.panel_focus == PanelFocus::ColumnCounts {
+            theme.focused_border_style()
+        } else {
+            theme.border_style()
+        };
+
         // Create the aggregation block
         let agg_block = Block::default()
             .title(" Column Counts ")
             .borders(Borders::ALL)
-            .border_style(theme.border_style())
+            .border_style(border_style)
             .style(theme.normal_style());
 
         let agg_inner = agg_block.inner(area);
@@ -298,9 +443,16 @@ impl FindAllResultsDialog {
             height: agg_inner.height,
         };
 
-        // For now, show all rows (in future, implement viewport scrolling if needed)
-        // Create table rows for the aggregations
-        let agg_rows: Vec<Row> = sorted_counts
+        // Clamp scroll position
+        let max_scroll = sorted_counts.len().saturating_sub(available_height);
+        self.column_counts_scroll = self.column_counts_scroll.min(max_scroll);
+
+        // Calculate visible range
+        let visible_end = (self.column_counts_scroll + available_height).min(sorted_counts.len());
+        let visible_counts = &sorted_counts[self.column_counts_scroll..visible_end];
+
+        // Create table rows for visible aggregations only
+        let agg_rows: Vec<Row> = visible_counts
             .iter()
             .map(|(column, count)| Row::new(vec![column.clone(), format!("{}", count)]))
             .collect();
@@ -324,7 +476,8 @@ impl FindAllResultsDialog {
                 .begin_symbol(Some("↑"))
                 .end_symbol(Some("↓"));
 
-            let mut scrollbar_state = ScrollbarState::new(sorted_counts.len()).position(0);
+            let mut scrollbar_state =
+                ScrollbarState::new(sorted_counts.len()).position(self.column_counts_scroll);
 
             // Scrollbar area is on the right edge of the aggregation block (on the border)
             let scrollbar_area = Rect {
@@ -346,20 +499,61 @@ impl Component for FindAllResultsDialog {
 
     fn handle_action(&mut self, action: Action) -> Result<bool> {
         match action {
+            Action::NextTab => {
+                // Tab key toggles between Results and Column Counts panels
+                self.panel_focus = match self.panel_focus {
+                    PanelFocus::Results => PanelFocus::ColumnCounts,
+                    PanelFocus::ColumnCounts => PanelFocus::Results,
+                };
+                Ok(true)
+            }
             Action::MoveUp => {
-                self.select_previous();
+                match self.panel_focus {
+                    PanelFocus::Results => self.select_previous(),
+                    PanelFocus::ColumnCounts => {
+                        self.column_counts_scroll = self.column_counts_scroll.saturating_sub(1);
+                    }
+                }
                 Ok(true)
             }
             Action::MoveDown => {
-                self.select_next();
+                match self.panel_focus {
+                    PanelFocus::Results => self.select_next(),
+                    PanelFocus::ColumnCounts => {
+                        // Scroll down (will be clamped during render)
+                        self.column_counts_scroll += 1;
+                    }
+                }
                 Ok(true)
             }
             Action::PageUp => {
-                self.page_up();
+                match self.panel_focus {
+                    PanelFocus::Results => self.page_up(),
+                    PanelFocus::ColumnCounts => {
+                        // Page up in column counts
+                        self.column_counts_scroll = self.column_counts_scroll.saturating_sub(10);
+                    }
+                }
                 Ok(true)
             }
             Action::PageDown => {
-                self.page_down();
+                match self.panel_focus {
+                    PanelFocus::Results => self.page_down(),
+                    PanelFocus::ColumnCounts => {
+                        // Page down in column counts
+                        self.column_counts_scroll += 10;
+                    }
+                }
+                Ok(true)
+            }
+            Action::MoveLeft => {
+                // Left/Right for tab switching
+                self.previous_tab();
+                Ok(true)
+            }
+            Action::MoveRight => {
+                // Left/Right for tab switching
+                self.next_tab();
                 Ok(true)
             }
             Action::Cancel => Ok(false), // Close dialog
@@ -398,26 +592,52 @@ impl Component for FindAllResultsDialog {
             frame.render_widget(Clear, dialog_area);
         }
 
-        // Create title
-        let title = if let Some(duration) = self.elapsed_time {
-            let elapsed_ms = duration.as_millis();
-            let elapsed_str = if elapsed_ms < 1000 {
-                format!("{}ms", elapsed_ms)
+        // Get active tab info
+        let (title, has_results) = if let Some(tab) = self.get_active_tab() {
+            let title_text = if let Some(duration) = tab.get_elapsed_time() {
+                let elapsed_ms = duration.as_millis();
+                let elapsed_str = if elapsed_ms < 1000 {
+                    format!("{}ms", elapsed_ms)
+                } else {
+                    format!("{:.2}s", duration.as_secs_f64())
+                };
+                if self.tabs.len() > 1 {
+                    format!(
+                        " Find All: \"{}\" ({} matches in {}) [Tab {}/{}] ",
+                        tab.pattern,
+                        tab.result_count(),
+                        elapsed_str,
+                        self.active_tab_index + 1,
+                        self.tabs.len()
+                    )
+                } else {
+                    format!(
+                        " Find All Results: \"{}\" ({} matches in {}) ",
+                        tab.pattern,
+                        tab.result_count(),
+                        elapsed_str
+                    )
+                }
             } else {
-                format!("{:.2}s", duration.as_secs_f64())
+                if self.tabs.len() > 1 {
+                    format!(
+                        " Find All: \"{}\" ({} matches) [Tab {}/{}] ",
+                        tab.pattern,
+                        tab.result_count(),
+                        self.active_tab_index + 1,
+                        self.tabs.len()
+                    )
+                } else {
+                    format!(
+                        " Find All Results: \"{}\" ({} matches) ",
+                        tab.pattern,
+                        tab.result_count()
+                    )
+                }
             };
-            format!(
-                " Find All Results: \"{}\" ({} matches in {}) ",
-                self.pattern,
-                self.results.len(),
-                elapsed_str
-            )
+            (title_text, !tab.results.is_empty())
         } else {
-            format!(
-                " Find All Results: \"{}\" ({} matches) ",
-                self.pattern,
-                self.results.len()
-            )
+            (" Find All Results ".to_string(), false)
         };
 
         let block = Block::default()
@@ -436,7 +656,7 @@ impl Component for FindAllResultsDialog {
         frame.render_widget(block, dialog_area);
 
         // Handle empty results
-        if self.results.is_empty() {
+        if !has_results {
             let empty_msg = Paragraph::new("No matches found")
                 .style(theme.normal_style())
                 .alignment(ratatui::layout::Alignment::Center);
@@ -444,14 +664,40 @@ impl Component for FindAllResultsDialog {
             return;
         }
 
-        // Split the inner area: 75% for results table, 25% for aggregations
-        let chunks = Layout::default()
+        // Split area for tab bar and content
+        let chunks = if self.tabs.len() > 1 {
+            // Reserve space for tab bar
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(0)])
+                .split(inner)
+        } else {
+            // No tab bar needed for single tab
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(0), Constraint::Min(0)])
+                .split(inner)
+        };
+
+        // Render tab bar if multiple tabs
+        if self.tabs.len() > 1 {
+            self.render_tab_bar(frame, chunks[0], &theme);
+        }
+
+        let content_area = if self.tabs.len() > 1 {
+            chunks[1]
+        } else {
+            inner
+        };
+
+        // Split the content area: 75% for results table, 25% for aggregations
+        let content_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(75), Constraint::Percentage(25)])
-            .split(inner);
+            .split(content_area);
 
-        let results_area = chunks[0];
-        let aggregation_area = chunks[1];
+        let results_area = content_chunks[0];
+        let aggregation_area = content_chunks[1];
 
         // ===== RENDER RESULTS TABLE (LEFT SIDE) =====
         self.render_results_table(frame, results_area, &theme);
@@ -462,8 +708,11 @@ impl Component for FindAllResultsDialog {
 
     fn supported_actions(&self) -> &[Action] {
         &[
+            Action::NextTab, // For panel switching
             Action::MoveUp,
             Action::MoveDown,
+            Action::MoveLeft,  // For tab navigation
+            Action::MoveRight, // For tab navigation
             Action::PageUp,
             Action::PageDown,
             Action::Confirm,

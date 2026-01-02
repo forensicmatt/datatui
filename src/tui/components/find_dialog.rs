@@ -230,14 +230,18 @@ impl Component for FindDialog {
             Action::Cancel => Ok(false), // Close dialog
 
             Action::Confirm => {
-                // Execute selected action
-                if self.search_pattern.is_empty() {
-                    self.set_error("Search pattern cannot be empty".to_string());
-                    return Ok(true);
+                // If on actions row, close dialog to trigger execution
+                if self.active_field == FindDialogField::ActionsRow {
+                    if self.search_pattern.is_empty() {
+                        self.set_error("Search pattern cannot be empty".to_string());
+                        return Ok(true);
+                    }
+                    // Close dialog - App will handle execution
+                    return Ok(false);
                 }
 
-                // Emit ExecuteFind action based on selected action
-                // This will be handled by App
+                // Otherwise, just move to next field (like Tab)
+                self.active_field = self.next_field();
                 Ok(true)
             }
 

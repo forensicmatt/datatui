@@ -79,35 +79,39 @@ impl App {
             return Ok(());
         }
 
-        // If find dialog is active, give it priority for character input
+        // If find dialog is active, give it priority for character input (only when Pattern field is active)
         if let Some(dialog) = &mut self.find_dialog {
-            // Handle character input for pattern field
-            if let KeyCode::Char(c) = key.code {
-                if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(KeyModifiers::ALT)
-                {
-                    // Insert character into pattern
-                    dialog
-                        .search_pattern
-                        .insert(dialog.search_pattern_cursor, c);
-                    dialog.search_pattern_cursor += 1;
+            // Only handle character/backspace/delete when Pattern field is active
+            if dialog.active_field == crate::tui::components::find_dialog::FindDialogField::Pattern
+            {
+                // Handle character input for pattern field
+                if let KeyCode::Char(c) = key.code {
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT)
+                    {
+                        // Insert character into pattern
+                        dialog
+                            .search_pattern
+                            .insert(dialog.search_pattern_cursor, c);
+                        dialog.search_pattern_cursor += 1;
+                        return Ok(());
+                    }
+                } else if key.code == KeyCode::Backspace {
+                    // Handle backspace in pattern field
+                    if dialog.search_pattern_cursor > 0 && !dialog.search_pattern.is_empty() {
+                        dialog
+                            .search_pattern
+                            .remove(dialog.search_pattern_cursor - 1);
+                        dialog.search_pattern_cursor -= 1;
+                    }
+                    return Ok(());
+                } else if key.code == KeyCode::Delete {
+                    // Handle delete in pattern field
+                    if dialog.search_pattern_cursor < dialog.search_pattern.len() {
+                        dialog.search_pattern.remove(dialog.search_pattern_cursor);
+                    }
                     return Ok(());
                 }
-            } else if key.code == KeyCode::Backspace {
-                // Handle backspace in pattern field
-                if dialog.search_pattern_cursor > 0 && !dialog.search_pattern.is_empty() {
-                    dialog
-                        .search_pattern
-                        .remove(dialog.search_pattern_cursor - 1);
-                    dialog.search_pattern_cursor -= 1;
-                }
-                return Ok(());
-            } else if key.code == KeyCode::Delete {
-                // Handle delete in pattern field
-                if dialog.search_pattern_cursor < dialog.search_pattern.len() {
-                    dialog.search_pattern.remove(dialog.search_pattern_cursor);
-                }
-                return Ok(());
             }
         }
 
@@ -262,18 +266,34 @@ impl App {
                                                 d.set_error("No matches found".to_string());
                                             }
                                         } else {
-                                            // Open FindAllResults dialog with results
                                             // Clone first result data before moving results
                                             let first_result =
                                                 results.first().map(|r| (r.row, r.column.clone()));
 
-                                            let mut dialog =
-                                                FindAllResultsDialog::new(results, pattern.clone());
-                                            // Set elapsed time
-                                            dialog.set_elapsed_time(elapsed);
-                                            // Give focus to the dialog initially
-                                            dialog.set_focused(true);
-                                            self.find_all_results_dialog = Some(dialog);
+                                            // Check if dialog already exists
+                                            if let Some(dialog) = &mut self.find_all_results_dialog
+                                            {
+                                                // Add new tab to existing dialog
+                                                dialog.add_tab_with_time(
+                                                    pattern.clone(),
+                                                    results,
+                                                    elapsed,
+                                                );
+                                            } else {
+                                                // Create new dialog with first tab
+                                                let mut dialog = FindAllResultsDialog::new(
+                                                    results,
+                                                    pattern.clone(),
+                                                );
+                                                // Set elapsed time
+                                                dialog.set_elapsed_time(elapsed);
+                                                // Give focus to the dialog initially
+                                                dialog.set_focused(true);
+                                                self.find_all_results_dialog = Some(dialog);
+
+                                                // Remove focus from table since dialog now has focus
+                                                table.set_focused(false);
+                                            }
 
                                             // Jump to first result
                                             if let Some((row, col)) = first_result {
