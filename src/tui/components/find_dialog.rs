@@ -42,6 +42,33 @@ pub enum FindActionSelected {
     FindAll,
 }
 
+/// Result returned by FindDialog after user action
+#[derive(Debug)]
+pub enum DialogResult {
+    /// Execute FindNext search starting from given position
+    ExecuteFindNext {
+        pattern: String,
+        options: FindOptions,
+        mode: SearchMode,
+        start_row: usize,
+        start_col: String,
+    },
+    /// Execute Count to count all matches
+    ExecuteCount {
+        pattern: String,
+        options: FindOptions,
+        mode: SearchMode,
+    },
+    /// Execute FindAll and return results
+    ExecuteFindAll {
+        pattern: String,
+        options: FindOptions,
+        mode: SearchMode,
+    },
+    /// Dialog was cancelled/closed
+    Close,
+}
+
 /// Find dialog component
 pub struct FindDialog {
     pub search_pattern: String,
@@ -51,6 +78,8 @@ pub struct FindDialog {
     pub active_field: FindDialogField,
     pub mode: FindDialogMode,
     pub action_selected: FindActionSelected,
+    /// Pending result to be retrieved by App
+    pending_result: Option<DialogResult>,
 }
 
 impl Default for FindDialog {
@@ -69,7 +98,13 @@ impl FindDialog {
             active_field: FindDialogField::Pattern,
             mode: FindDialogMode::Main,
             action_selected: FindActionSelected::FindNext,
+            pending_result: None,
         }
+    }
+
+    /// Take the pending dialog result if any
+    pub fn take_result(&mut self) -> Option<DialogResult> {
+        self.pending_result.take()
     }
 
     /// Get the next field in tab order
@@ -236,6 +271,33 @@ impl Component for FindDialog {
                         self.set_error("Search pattern cannot be empty".to_string());
                         return Ok(true);
                     }
+
+                    // Build the appropriate DialogResult based on selected action
+                    let pattern = self.search_pattern.clone();
+                    let options = self.options.clone();
+                    let mode = self.search_mode.clone();
+
+                    self.pending_result = Some(match self.action_selected {
+                        FindActionSelected::FindNext => DialogResult::ExecuteFindNext {
+                            pattern,
+                            options,
+                            mode,
+                            // App will provide these
+                            start_row: 0,
+                            start_col: String::new(),
+                        },
+                        FindActionSelected::Count => DialogResult::ExecuteCount {
+                            pattern,
+                            options,
+                            mode,
+                        },
+                        FindActionSelected::FindAll => DialogResult::ExecuteFindAll {
+                            pattern,
+                            options,
+                            mode,
+                        },
+                    });
+
                     // Close dialog - App will handle execution
                     return Ok(false);
                 }

@@ -72,6 +72,126 @@ impl App {
         Ok(())
     }
 
+    /// Handle a dialog result from FindDialog
+    fn handle_dialog_result(
+        &mut self,
+        result: crate::tui::components::find_dialog::DialogResult,
+    ) -> Result<()> {
+        use crate::tui::components::find_dialog::DialogResult;
+
+        match result {
+            DialogResult::ExecuteFindNext {
+                pattern,
+                options,
+                mode,
+                ..
+            } => {
+                // Get current cursor position from table
+                if let Some(table) = &mut self.data_table {
+                    let dataset = table.dataset();
+                    let (start_row, start_col) = table.get_cursor_position();
+
+                    match SearchService::find_next(
+                        dataset, &pattern, &options, &mode, start_row, start_col,
+                    ) {
+                        Ok(Some(result)) => {
+                            table.goto_cell(result.row, &result.column)?;
+                        }
+                        Ok(None) => {
+                            if let Some(d) = &mut self.find_dialog {
+                                d.set_error("No matches found".to_string());
+                            }
+                        }
+                        Err(e) => {
+                            if let Some(d) = &mut self.find_dialog {
+                                d.set_error(format!("Search error: {}", e));
+                            }
+                        }
+                    }
+                }
+            }
+
+            DialogResult::ExecuteCount {
+                pattern,
+                options,
+                mode,
+            } => {
+                if let Some(table) = &self.data_table {
+                    let dataset = table.dataset();
+
+                    match SearchService::count_matches(dataset, &pattern, &options, &mode) {
+                        Ok(count) => {
+                            if let Some(d) = &mut self.find_dialog {
+                                d.set_count(count);
+                            }
+                        }
+                        Err(e) => {
+                            if let Some(d) = &mut self.find_dialog {
+                                d.set_error(format!("Search error: {}", e));
+                            }
+                        }
+                    }
+                }
+            }
+
+            DialogResult::ExecuteFindAll {
+                pattern,
+                options,
+                mode,
+            } => {
+                if let Some(table) = &mut self.data_table {
+                    let dataset = table.dataset();
+
+                    let start = std::time::Instant::now();
+                    match SearchService::find_all(dataset, &pattern, &options, &mode, 30) {
+                        Ok(results) => {
+                            let elapsed = start.elapsed();
+
+                            if results.is_empty() {
+                                if let Some(d) = &mut self.find_dialog {
+                                    d.set_error("No matches found".to_string());
+                                }
+                            } else {
+                                let first_result =
+                                    results.first().map(|r| (r.row, r.column.clone()));
+
+                                // Check if dialog already exists
+                                if let Some(dialog) = &mut self.find_all_results_dialog {
+                                    dialog.add_tab_with_time(pattern.clone(), results, elapsed);
+                                } else {
+                                    let mut dialog =
+                                        FindAllResultsDialog::new(results, pattern.clone());
+                                    dialog.set_elapsed_time(elapsed);
+                                    dialog.set_focused(true);
+                                    self.find_all_results_dialog = Some(dialog);
+                                    table.set_focused(false);
+                                }
+
+                                if let Some((row, col)) = first_result {
+                                    table.goto_cell(row, &col)?;
+                                }
+
+                                // Close find dialog
+                                self.find_dialog = None;
+                            }
+                        }
+                        Err(e) => {
+                            if let Some(d) = &mut self.find_dialog {
+                                d.set_error(format!("Search error: {}", e));
+                            }
+                        }
+                    }
+                }
+            }
+
+            DialogResult::Close => {
+                // Just close, already handled
+            }
+        }
+
+        Ok(())
+    }
+
     /// Handle a key event
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<()> {
         // Only handle key press events, ignore release/repeat
@@ -337,6 +457,12 @@ impl App {
         // Route to find dialog if active
         if let Some(dialog) = &mut self.find_dialog {
             let keep_open = dialog.handle_action(action)?;
+
+            // Check if dialog has a pending result to process
+            if let Some(result) = dialog.take_result() {
+                self.handle_dialog_result(result)?;
+            }
+
             if !keep_open {
                 self.find_dialog = None;
             }
