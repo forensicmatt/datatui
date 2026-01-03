@@ -138,6 +138,84 @@ impl DataTable {
         })
     }
 
+    /// Get mutable reference to the dataset
+    pub fn dataset_mut(&mut self) -> &mut ManagedDataset {
+        &mut self.dataset
+    }
+
+    /// Get immutable reference to the dataset
+    pub fn dataset(&self) -> &ManagedDataset {
+        &self.dataset
+    }
+
+    /// Refresh layout from dataset's column configuration
+    pub fn refresh_layout(&mut self) -> Result<()> {
+        let config = self.dataset.get_column_config();
+
+        // Update column configs from dataset
+        for col_config in &mut self.column_configs {
+            // Update visibility
+            col_config.visible = config.is_column_visible(&col_config.name);
+
+            // Update width
+            if let Some(width) = config.get_effective_width(&col_config.name) {
+                col_config.fixed_width = Some(width);
+                col_config.auto_size = false;
+            } else {
+                col_config.fixed_width = None;
+                col_config.auto_size = true;
+            }
+        }
+
+        // Update viewport config
+        self.viewport_config.auto_expand = config.auto_expand;
+
+        // Reorder columns
+        if !config.column_order.is_empty() {
+            let mut reordered = Vec::new();
+            for col_name in &config.column_order {
+                if let Some(col) = self.column_configs.iter().find(|c| &c.name == col_name) {
+                    reordered.push(col.clone());
+                }
+            }
+            // Add any columns not in the order list
+            for col in &self.column_configs {
+                if !config.column_order.contains(&col.name) {
+                    reordered.push(col.clone());
+                }
+            }
+            if !reordered.is_empty() {
+                self.column_configs = reordered;
+            }
+        }
+
+        // Invalidate cache
+        self.cache_valid = false;
+
+        Ok(())
+    }
+
+    /// Get calculated widths for all columns (for dialog display)
+    pub fn get_calculated_widths(&mut self) -> Result<std::collections::HashMap<String, u16>> {
+        use std::collections::HashMap;
+
+        let widths = self.get_or_calculate_widths()?;
+        let mut map = HashMap::new();
+
+        for (idx, col_config) in self.column_configs.iter().enumerate() {
+            if let Some(&width) = widths.get(idx) {
+                map.insert(col_config.name.clone(), width);
+            }
+        }
+
+        Ok(map)
+    }
+
+    /// Get all column names in current order
+    pub fn get_all_columns(&self) -> Vec<String> {
+        self.column_configs.iter().map(|c| c.name.clone()).collect()
+    }
+
     /// Get total row count from dataset
     fn row_count(&self) -> Result<usize> {
         self.dataset.row_count()
@@ -210,6 +288,11 @@ impl DataTable {
         Ok(())
     }
 
+    /// Get count of visible columns
+    fn visible_column_count(&self) -> usize {
+        self.column_configs.iter().filter(|c| c.visible).count()
+    }
+
     /// Move cursor left
     fn move_left(&mut self) {
         if self.cursor.col > 0 {
@@ -220,8 +303,8 @@ impl DataTable {
 
     /// Move cursor right
     fn move_right(&mut self) -> Result<()> {
-        let col_count = self.column_count()?;
-        if col_count > 0 && self.cursor.col < col_count - 1 {
+        let visible_col_count = self.visible_column_count();
+        if visible_col_count > 0 && self.cursor.col < visible_col_count - 1 {
             self.cursor.col += 1;
             self.ensure_cursor_visible();
         }
@@ -268,9 +351,9 @@ impl DataTable {
 
     /// Go to end of row
     fn go_end(&mut self) -> Result<()> {
-        let col_count = self.column_count()?;
-        if col_count > 0 {
-            self.cursor.col = col_count - 1;
+        let visible_col_count = self.visible_column_count();
+        if visible_col_count > 0 {
+            self.cursor.col = visible_col_count - 1;
             self.ensure_cursor_visible();
         }
         Ok(())
@@ -319,14 +402,9 @@ impl DataTable {
         Ok(())
     }
 
-    /// Get current cursor posit (row, col_index)
+    /// Get current cursor position (row, col_index)
     pub fn get_cursor_position(&self) -> (usize, usize) {
         (self.cursor.row, self.cursor.col)
-    }
-
-    /// Get reference to dataset (for search operations)
-    pub fn dataset(&self) -> &crate::core::ManagedDataset {
-        &self.dataset
     }
 
     // Column Width Management
@@ -589,18 +667,20 @@ impl Component for DataTable {
         let end_col = (self.viewport.left_col + self.viewport.visible_cols).min(all_widths.len());
         let visible_widths = &all_widths[self.viewport.left_col..end_col];
 
-        // Fetch column names for visible range
-        let all_columns = match self.dataset.column_names() {
-            Ok(names) => names,
-            Err(_) => vec!["Error".to_string()],
-        };
-        // Ensure end_col doesn't exceed actual column count
-        let safe_end_col = end_col.min(all_columns.len());
-        let visible_columns =
-            &all_columns[self.viewport.left_col.min(all_columns.len())..safe_end_col];
+        // Build list of visible column configs
+        let visible_configs: Vec<&ColumnConfig> =
+            self.column_configs.iter().filter(|c| c.visible).collect();
+
+        // Get visible column names for header
+        let visible_column_names: Vec<String> = visible_configs
+            .iter()
+            .skip(self.viewport.left_col)
+            .take(self.viewport.visible_cols)
+            .map(|c| c.name.clone())
+            .collect();
 
         // Create header from visible columns
-        let header_cells: Vec<Cell> = visible_columns
+        let header_cells: Vec<Cell> = visible_column_names
             .iter()
             .map(|name| Cell::from(name.as_str()))
             .collect();
@@ -617,31 +697,46 @@ impl Component for DataTable {
                 // Get number of rows in this batch
                 let num_rows = batch.num_rows();
 
+                // Get all dataset column names to map visible config names to batch indices
+                let all_dataset_columns = match self.dataset.column_names() {
+                    Ok(names) => names,
+                    Err(_) => vec![],
+                };
+
                 // For each row
                 for row_idx in 0..num_rows {
                     let mut cells = Vec::new();
 
                     // Only render visible columns
                     for col_offset in 0..self.viewport.visible_cols {
-                        let actual_col_idx = self.viewport.left_col + col_offset;
-                        if actual_col_idx >= batch.num_columns() {
-                            break;
+                        let visible_config_idx = self.viewport.left_col + col_offset;
+
+                        // Get the column config
+                        if let Some(config) = visible_configs.get(visible_config_idx) {
+                            // Find the actual column index in the dataset batch
+                            if let Some(actual_col_idx) = all_dataset_columns
+                                .iter()
+                                .position(|name| name == &config.name)
+                            {
+                                if actual_col_idx < batch.num_columns() {
+                                    let column = batch.column(actual_col_idx);
+                                    let value = self.format_cell_value(column, row_idx);
+
+                                    // Check if this is the currently selected cell
+                                    let is_selected_cell = self.viewport.top + row_idx
+                                        == self.cursor.row
+                                        && visible_config_idx == self.cursor.col;
+
+                                    let cell = if is_selected_cell {
+                                        Cell::from(value).style(theme.selected_cell_style())
+                                    } else {
+                                        Cell::from(value)
+                                    };
+
+                                    cells.push(cell);
+                                }
+                            }
                         }
-
-                        let column = batch.column(actual_col_idx);
-                        let value = self.format_cell_value(column, row_idx);
-
-                        // Check if this is the currently selected cell
-                        let is_selected_cell = self.viewport.top + row_idx == self.cursor.row
-                            && actual_col_idx == self.cursor.col;
-
-                        let cell = if is_selected_cell {
-                            Cell::from(value).style(theme.selected_cell_style())
-                        } else {
-                            Cell::from(value)
-                        };
-
-                        cells.push(cell);
                     }
 
                     // Highlight selected row
@@ -683,14 +778,14 @@ impl Component for DataTable {
         let table_block = Block::default()
             .borders(Borders::ALL)
             .title(
-                if self.viewport.left_col > 0 || end_col < all_columns.len() {
+                if self.viewport.left_col > 0 || end_col < visible_configs.len() {
                     format!(
                         "Data Table [{}/{}] ← Cols {}-{} of {} →",
                         self.cursor.row + 1,
                         self.row_count().unwrap_or(0),
                         self.viewport.left_col + 1,
                         end_col,
-                        all_columns.len()
+                        visible_configs.len()
                     )
                 } else {
                     format!(

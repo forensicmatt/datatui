@@ -1,7 +1,9 @@
 use crate::core::DatasetId;
 use crate::services::search_service::{FindOptions, SearchMode};
 use crate::services::{DataService, SearchService};
-use crate::tui::components::{CellViewer, DataTable, FindAllResultsDialog, FindDialog};
+use crate::tui::components::{
+    CellViewer, ColumnWidthDialog, DataTable, FindAllResultsDialog, FindDialog,
+};
 use crate::tui::{Action, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -30,6 +32,9 @@ pub struct App {
     /// Find All results dialog (when active)
     find_all_results_dialog: Option<FindAllResultsDialog>,
 
+    /// Column width dialog (when active)
+    column_width_dialog: Option<ColumnWidthDialog>,
+
     /// Last search parameters (for F3 repeat search)
     last_search: Option<(String, FindOptions, SearchMode)>,
 
@@ -56,6 +61,7 @@ impl App {
             cell_viewer: CellViewer::new(),
             find_dialog: None,
             find_all_results_dialog: None,
+            column_width_dialog: None,
             last_search: None,
             keybindings,
             theme,
@@ -192,11 +198,66 @@ impl App {
         Ok(())
     }
 
+    /// Handle a column width dialog result
+    fn handle_column_dialog_result(
+        &mut self,
+        result: crate::tui::components::column_width_dialog::DialogResult,
+    ) -> Result<()> {
+        use crate::tui::components::column_width_dialog::DialogResult as ColDialogResult;
+
+        match result {
+            ColDialogResult::ApplyConfig(config) => {
+                if let Some(table) = &mut self.data_table {
+                    table.dataset_mut().set_column_config(config)?;
+                    table.refresh_layout()?;
+                }
+            }
+            ColDialogResult::ReorderColumns(order) => {
+                if let Some(table) = &mut self.data_table {
+                    table.dataset_mut().reorder_columns(order)?;
+                    table.refresh_layout()?;
+                }
+            }
+            ColDialogResult::Close => {
+                // Just close, already handled
+            }
+        }
+
+        Ok(())
+    }
+
     /// Handle a key event
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<()> {
         // Only handle key press events, ignore release/repeat
         if key.kind != KeyEventKind::Press {
             return Ok(());
+        }
+
+        // If column width dialog is active and editing, handle character input
+        if let Some(dialog) = &mut self.column_width_dialog {
+            if dialog.input_mode
+                == crate::tui::components::column_width_dialog::InputMode::EditingWidth
+            {
+                // Handle character input for width editing
+                if let KeyCode::Char(c) = key.code {
+                    if c.is_ascii_digit()
+                        && !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT)
+                    {
+                        // Only allow digits for width input
+                        dialog.input_buffer.push(c);
+                        return Ok(());
+                    }
+                } else if key.code == KeyCode::Backspace {
+                    // Handle backspace
+                    dialog.input_buffer.pop();
+                    return Ok(());
+                } else if key.code == KeyCode::Delete {
+                    // Clear the entire buffer
+                    dialog.input_buffer.clear();
+                    return Ok(());
+                }
+            }
         }
 
         // If find dialog is active, give it priority for character input (only when Pattern field is active)
@@ -278,6 +339,22 @@ impl App {
                 self.find_dialog = Some(dialog);
                 return Ok(());
             }
+
+            Action::OpenColumnWidthDialog => {
+                if let Some(table) = &mut self.data_table {
+                    let columns = table.get_all_columns();
+                    let config = table.dataset().get_column_config().clone();
+                    let widths = table.get_calculated_widths()?;
+
+                    let mut dialog = ColumnWidthDialog::new(columns);
+                    dialog.set_config(config);
+                    dialog.set_calculated_widths(widths);
+
+                    self.column_width_dialog = Some(dialog);
+                }
+                return Ok(());
+            }
+
             Action::Cancel => {
                 // Close find all results dialog if active
                 if self.find_all_results_dialog.is_some() {
@@ -454,6 +531,21 @@ impl App {
             _ => {}
         }
 
+        // Route to column width dialog if active (MODAL - highest priority)
+        if let Some(dialog) = &mut self.column_width_dialog {
+            let keep_open = dialog.handle_action(action)?;
+
+            // Check if dialog has a pending result to process
+            if let Some(result) = dialog.take_result() {
+                self.handle_column_dialog_result(result)?;
+            }
+
+            if !keep_open {
+                self.column_width_dialog = None;
+            }
+            return Ok(());
+        }
+
         // Route to find dialog if active
         if let Some(dialog) = &mut self.find_dialog {
             let keep_open = dialog.handle_action(action)?;
@@ -567,6 +659,12 @@ impl App {
             let dialog_area = Self::centered_rect(60, 50, area);
             dialog.render(frame, dialog_area);
         }
+
+        // Render column width dialog overlay if active
+        if let Some(dialog) = &mut self.column_width_dialog {
+            let dialog_area = Self::centered_rect(70, 70, area);
+            dialog.render(frame, dialog_area);
+        }
     }
 
     /// Helper to create centered rectangle
@@ -653,6 +751,7 @@ mod tests {
             cell_viewer: CellViewer::new(),
             find_dialog: None,
             find_all_results_dialog: None,
+            column_width_dialog: None,
             last_search: None,
             keybindings,
             theme,
@@ -680,6 +779,7 @@ mod tests {
             cell_viewer: CellViewer::new(),
             find_dialog: None,
             find_all_results_dialog: None,
+            column_width_dialog: None,
             last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),
@@ -738,6 +838,7 @@ mod tests {
             cell_viewer: CellViewer::new(),
             find_dialog: None,
             find_all_results_dialog: None,
+            column_width_dialog: None,
             last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),
@@ -763,6 +864,7 @@ mod tests {
             cell_viewer: CellViewer::new(),
             find_dialog: None,
             find_all_results_dialog: None,
+            column_width_dialog: None,
             last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),

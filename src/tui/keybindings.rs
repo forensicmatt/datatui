@@ -63,6 +63,7 @@ impl KeyBindings {
             // Help
             KeyBinding::new("?", Action::ToggleHelp),
             KeyBinding::new("F1", Action::ToggleHelp),
+            KeyBinding::new("Ctrl+i", Action::ToggleHelp),
             // Data operations
             KeyBinding::new("s", Action::Sort),
             KeyBinding::new("f", Action::Filter),
@@ -83,6 +84,10 @@ impl KeyBindings {
             // Import/Export
             KeyBinding::new("o", Action::Import),
             KeyBinding::new("e", Action::Export),
+            // Column operations
+            KeyBinding::new("Ctrl+w", Action::OpenColumnWidthDialog),
+            KeyBinding::new("t", Action::ToggleVisibility),
+            KeyBinding::new("Space", Action::EditWidth),
         ];
 
         let bindings_map = Self::build_map(&bindings_list);

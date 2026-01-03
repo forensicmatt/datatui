@@ -50,6 +50,12 @@ pub enum Action {
     ResizeColumn,
     HideColumn,
     ShowAllColumns,
+    OpenColumnWidthDialog,
+    ToggleVisibility,
+    MoveColumnUp,
+    MoveColumnDown,
+    EditWidth,
+    Escape,
 }
 
 impl Action {
@@ -86,6 +92,12 @@ impl Action {
             Action::ResizeColumn => "Resize column",
             Action::HideColumn => "Hide column",
             Action::ShowAllColumns => "Show all columns",
+            Action::OpenColumnWidthDialog => "Open column width dialog",
+            Action::ToggleVisibility => "Toggle column visibility",
+            Action::MoveColumnUp => "Move column up",
+            Action::MoveColumnDown => "Move column down",
+            Action::EditWidth => "Edit column width",
+            Action::Escape => "Escape/Cancel",
         }
     }
 
@@ -117,9 +129,16 @@ impl Action {
 
             Action::Copy | Action::CopyWithHeaders => ActionCategory::Clipboard,
 
-            Action::ResizeColumn | Action::HideColumn | Action::ShowAllColumns => {
-                ActionCategory::Columns
-            }
+            Action::ResizeColumn
+            | Action::HideColumn
+            | Action::ShowAllColumns
+            | Action::OpenColumnWidthDialog
+            | Action::ToggleVisibility
+            | Action::MoveColumnUp
+            | Action::MoveColumnDown
+            | Action::EditWidth => ActionCategory::Columns,
+
+            Action::Escape => ActionCategory::Application,
         }
     }
 
@@ -156,6 +175,12 @@ impl Action {
             Action::ResizeColumn,
             Action::HideColumn,
             Action::ShowAllColumns,
+            Action::OpenColumnWidthDialog,
+            Action::ToggleVisibility,
+            Action::MoveColumnUp,
+            Action::MoveColumnDown,
+            Action::EditWidth,
+            Action::Escape,
         ]
     }
 }

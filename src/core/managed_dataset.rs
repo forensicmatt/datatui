@@ -1,7 +1,9 @@
+use crate::core::column_config::ColumnWidthConfig;
 use crate::core::types::DatasetId;
 use color_eyre::Result;
 use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::Connection;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -15,6 +17,7 @@ pub struct ManagedDataset {
     pub id: DatasetId,
     pub table_name: String,
     pub parquet_path: PathBuf,
+    column_config: ColumnWidthConfig,
 }
 
 impl ManagedDataset {
@@ -36,12 +39,25 @@ impl ManagedDataset {
             [],
         )?;
 
+        // Initialize column configuration
+        let columns = Self::get_columns_from_parquet(&conn, &table_name)?;
+        let column_config = ColumnWidthConfig::from_columns(columns);
+
         Ok(Self {
             conn,
             id,
             table_name,
             parquet_path,
+            column_config,
         })
+    }
+
+    /// Helper to get column names from a parquet view
+    fn get_columns_from_parquet(conn: &Connection, table_name: &str) -> Result<Vec<String>> {
+        let query = format!("DESCRIBE {}", table_name);
+        let mut stmt = conn.prepare(&query)?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     /// Get a page of data for display
@@ -168,6 +184,193 @@ impl ManagedDataset {
         let query = query_template.replace("{table}", &self.table_name);
         self.query_sql_with_params(&query, params)
     }
+
+    // ========================================
+    // Column Configuration API
+    // ========================================
+
+    /// Get the current column configuration
+    pub fn get_column_config(&self) -> &ColumnWidthConfig {
+        &self.column_config
+    }
+
+    /// Set the entire column configuration
+    pub fn set_column_config(&mut self, config: ColumnWidthConfig) -> Result<()> {
+        let columns = self.column_names()?;
+
+        // Validate config against current columns
+        if !config.validate(&columns) {
+            return Err(color_eyre::eyre::eyre!("Invalid column configuration"));
+        }
+
+        self.column_config = config;
+        Ok(())
+    }
+
+    /// Reset column configuration to default
+    pub fn reset_column_config(&mut self) {
+        if let Ok(columns) = self.column_names() {
+            self.column_config = ColumnWidthConfig::from_columns(columns);
+        }
+    }
+
+    /// Set width for a column (None = auto)
+    pub fn set_column_width(&mut self, column: &str, width: Option<u16>) -> Result<()> {
+        // Validate column exists
+        let columns = self.column_names()?;
+        if !columns.contains(&column.to_string()) {
+            return Err(color_eyre::eyre::eyre!(
+                "Column '{}' does not exist",
+                column
+            ));
+        }
+
+        // Validate width range
+        if let Some(w) = width {
+            if !(4..=255).contains(&w) {
+                return Err(color_eyre::eyre::eyre!("Width must be between 4 and 255"));
+            }
+        }
+
+        // Set or remove width
+        if let Some(w) = width {
+            self.column_config
+                .manual_widths
+                .insert(column.to_string(), w);
+        } else {
+            self.column_config.manual_widths.remove(column);
+        }
+
+        Ok(())
+    }
+
+    /// Get width for a column
+    pub fn get_column_width(&self, column: &str) -> Option<u16> {
+        self.column_config.get_effective_width(column)
+    }
+
+    /// Set auto-expand mode
+    pub fn set_auto_expand(&mut self, enabled: bool) {
+        self.column_config.auto_expand = enabled;
+    }
+
+    /// Get auto-expand mode
+    pub fn get_auto_expand(&self) -> bool {
+        self.column_config.auto_expand
+    }
+
+    /// Lock all columns to specific widths (used when disabling auto-expand)
+    pub fn lock_all_column_widths(&mut self, current_widths: HashMap<String, u16>) {
+        for (col, width) in current_widths {
+            if !self.column_config.manual_widths.contains_key(&col) {
+                self.column_config.manual_widths.insert(col, width);
+            }
+        }
+    }
+
+    /// Set column visibility
+    pub fn set_column_visible(&mut self, column: &str, visible: bool) -> Result<()> {
+        // Validate column exists
+        let columns = self.column_names()?;
+        if !columns.contains(&column.to_string()) {
+            return Err(color_eyre::eyre::eyre!(
+                "Column '{}' does not exist",
+                column
+            ));
+        }
+
+        // Check if hiding this column would hide all columns
+        if !visible {
+            let would_be_visible: Vec<_> = columns
+                .iter()
+                .filter(|c| {
+                    if *c == column {
+                        false
+                    } else {
+                        self.column_config.is_column_visible(c)
+                    }
+                })
+                .collect();
+
+            if would_be_visible.is_empty() {
+                return Err(color_eyre::eyre::eyre!(
+                    "Cannot hide all columns. At least one must be visible."
+                ));
+            }
+        }
+
+        self.column_config
+            .hidden_columns
+            .insert(column.to_string(), !visible);
+        Ok(())
+    }
+
+    /// Check if column is visible
+    pub fn is_column_visible(&self, column: &str) -> bool {
+        self.column_config.is_column_visible(column)
+    }
+
+    /// Get list of visible columns in display order
+    pub fn get_visible_columns(&self) -> Vec<String> {
+        self.column_config.get_visible_columns()
+    }
+
+    /// Get list of hidden columns
+    pub fn get_hidden_columns(&self) -> Vec<String> {
+        self.column_config.get_hidden_columns()
+    }
+
+    /// Reorder columns
+    pub fn reorder_columns(&mut self, new_order: Vec<String>) -> Result<()> {
+        let columns = self.column_names()?;
+
+        // Validate: new_order must contain exactly the same columns
+        if new_order.len() != columns.len() {
+            return Err(color_eyre::eyre::eyre!(
+                "Column count mismatch: expected {}, got {}",
+                columns.len(),
+                new_order.len()
+            ));
+        }
+
+        for col in &columns {
+            if !new_order.contains(col) {
+                return Err(color_eyre::eyre::eyre!(
+                    "Missing column '{}' in new order",
+                    col
+                ));
+            }
+        }
+
+        self.column_config.column_order = new_order;
+        Ok(())
+    }
+
+    /// Move a column to a new position
+    pub fn move_column(&mut self, column: &str, new_index: usize) -> Result<()> {
+        let current_order = &mut self.column_config.column_order;
+
+        // Find current position
+        let current_pos = current_order
+            .iter()
+            .position(|c| c == column)
+            .ok_or_else(|| color_eyre::eyre::eyre!("Column '{}' not found", column))?;
+
+        // Validate new index
+        if new_index >= current_order.len() {
+            return Err(color_eyre::eyre::eyre!(
+                "Invalid index {}: must be < {}",
+                new_index,
+                current_order.len()
+            ));
+        }
+
+        // Remove and reinsert
+        let col_name = current_order.remove(current_pos);
+        current_order.insert(new_index, col_name);
+
+        Ok(())
+    }
 }
 
 // Clone implementation for sharing datasets across threads
@@ -178,6 +381,7 @@ impl Clone for ManagedDataset {
             id: self.id.clone(),
             table_name: self.table_name.clone(),
             parquet_path: self.parquet_path.clone(),
+            column_config: self.column_config.clone(),
         }
     }
 }
