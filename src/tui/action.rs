@@ -56,6 +56,12 @@ pub enum Action {
     MoveColumnDown,
     EditWidth,
     Escape,
+
+    // Sort Operations
+    OpenSortDialog,
+    AddSortColumn,
+    RemoveSortColumn,
+    ToggleSortDirection,
 }
 
 impl Action {
@@ -98,6 +104,10 @@ impl Action {
             Action::MoveColumnDown => "Move column down",
             Action::EditWidth => "Edit column width",
             Action::Escape => "Escape/Cancel",
+            Action::OpenSortDialog => "Open sort dialog",
+            Action::AddSortColumn => "Add column to sort",
+            Action::RemoveSortColumn => "Remove column from sort",
+            Action::ToggleSortDirection => "Toggle sort direction",
         }
     }
 
@@ -137,6 +147,11 @@ impl Action {
             | Action::MoveColumnUp
             | Action::MoveColumnDown
             | Action::EditWidth => ActionCategory::Columns,
+
+            Action::OpenSortDialog
+            | Action::AddSortColumn
+            | Action::RemoveSortColumn
+            | Action::ToggleSortDirection => ActionCategory::DataOps,
 
             Action::Escape => ActionCategory::Application,
         }
@@ -181,6 +196,10 @@ impl Action {
             Action::MoveColumnDown,
             Action::EditWidth,
             Action::Escape,
+            Action::OpenSortDialog,
+            Action::AddSortColumn,
+            Action::RemoveSortColumn,
+            Action::ToggleSortDirection,
         ]
     }
 }

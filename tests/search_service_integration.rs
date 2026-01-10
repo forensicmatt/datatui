@@ -4,40 +4,35 @@ use datatui::core::{types::DatasetId, ManagedDataset};
 use datatui::services::search_service::{FindOptions, SearchMode};
 use datatui::services::SearchService;
 use duckdb::Connection;
-use std::path::PathBuf;
 use std::sync::Arc;
-use tempfile::TempDir;
 
-fn create_test_dataset() -> (TempDir, PathBuf) {
-    let dir = TempDir::new().unwrap();
-    let parquet_path = dir.path().join("test_search.parquet");
-
+fn create_test_dataset(conn: &Connection, table_name: &str) {
     // Create a dataset with searchable content
-    let conn = Connection::open_in_memory().unwrap();
     conn.execute(
         &format!(
-            "COPY (SELECT * FROM (VALUES 
+            "CREATE TABLE {} AS SELECT * FROM (VALUES 
                 (1, 'Alice Smith', 'alice@example.com'),
                 (2, 'Bob Johnson', 'bob@test.com'),
                 (3, 'Charlie Brown', 'charlie@example.com'),
                 (4, 'David Wilson', 'david@test.com'),
                 (5, 'Alice Cooper', 'acooper@music.com'),
                 (6, 'Test User', 'test@alice.com')
-            ) AS t(id, name, email)) TO '{}' (FORMAT PARQUET)",
-            parquet_path.display()
+            ) AS t(id, name, email)",
+            table_name
         ),
         [],
     )
     .unwrap();
-
-    (dir, parquet_path)
 }
 
 #[test]
 fn test_search_service_count_matches() {
-    let (_dir, parquet_path) = create_test_dataset();
     let conn = Arc::new(Connection::open_in_memory().unwrap());
-    let dataset = ManagedDataset::new(conn, DatasetId::new(), parquet_path).unwrap();
+    let id = DatasetId::new();
+    let table_name = format!("dataset_{}", id.as_str().replace("-", "_"));
+
+    create_test_dataset(&conn, &table_name);
+    let dataset = ManagedDataset::new(conn, id, table_name).unwrap();
 
     // Search for "alice" case-insensitive
     let options = FindOptions::default();
@@ -54,9 +49,12 @@ fn test_search_service_count_matches() {
 
 #[test]
 fn test_search_service_find_all() {
-    let (_dir, parquet_path) = create_test_dataset();
     let conn = Arc::new(Connection::open_in_memory().unwrap());
-    let dataset = ManagedDataset::new(conn, DatasetId::new(), parquet_path).unwrap();
+    let id = DatasetId::new();
+    let table_name = format!("dataset_{}", id.as_str().replace("-", "_"));
+
+    create_test_dataset(&conn, &table_name);
+    let dataset = ManagedDataset::new(conn, id, table_name).unwrap();
 
     // Search for "test" case-insensitive
     let options = FindOptions::default();
@@ -98,9 +96,12 @@ fn test_search_service_find_all() {
 
 #[test]
 fn test_search_service_case_sensitive() {
-    let (_dir, parquet_path) = create_test_dataset();
     let conn = Arc::new(Connection::open_in_memory().unwrap());
-    let dataset = ManagedDataset::new(conn, DatasetId::new(), parquet_path).unwrap();
+    let id = DatasetId::new();
+    let table_name = format!("dataset_{}", id.as_str().replace("-", "_"));
+
+    create_test_dataset(&conn, &table_name);
+    let dataset = ManagedDataset::new(conn, id, table_name).unwrap();
 
     // Case-sensitive search for "Alice" (capital A)
     let options = FindOptions {
@@ -120,9 +121,12 @@ fn test_search_service_case_sensitive() {
 
 #[test]
 fn test_search_service_regex() {
-    let (_dir, parquet_path) = create_test_dataset();
     let conn = Arc::new(Connection::open_in_memory().unwrap());
-    let dataset = ManagedDataset::new(conn, DatasetId::new(), parquet_path).unwrap();
+    let id = DatasetId::new();
+    let table_name = format!("dataset_{}", id.as_str().replace("-", "_"));
+
+    create_test_dataset(&conn, &table_name);
+    let dataset = ManagedDataset::new(conn, id, table_name).unwrap();
 
     // Regex search for email pattern
     let options = FindOptions::default();

@@ -615,9 +615,12 @@ impl Component for DataTable {
         let theme = Theme::default();
 
         // Calculate column widths
+        // Calculate column widths
         let all_widths = match self.get_or_calculate_widths() {
             Ok(w) => w,
-            Err(_) => {
+            Err(e) => {
+                tracing::error!("Failed to calculate column widths: {}", e);
+                tracing::error!("Error context: {:?}", e);
                 let error_block = Block::default().borders(Borders::ALL).title("Error");
                 frame.render_widget(error_block, area);
                 return;

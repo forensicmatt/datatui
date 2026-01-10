@@ -88,6 +88,11 @@ impl KeyBindings {
             KeyBinding::new("Ctrl+w", Action::OpenColumnWidthDialog),
             KeyBinding::new("t", Action::ToggleVisibility),
             KeyBinding::new("Space", Action::EditWidth),
+            // Sort operations
+            KeyBinding::new("s", Action::Sort),
+            KeyBinding::new("a", Action::AddSortColumn),
+            KeyBinding::new("d", Action::RemoveSortColumn),
+            KeyBinding::new("t", Action::ToggleSortDirection),
         ];
 
         let bindings_map = Self::build_map(&bindings_list);

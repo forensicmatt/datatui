@@ -1,59 +1,59 @@
 use crate::core::column_config::ColumnWidthConfig;
 use crate::core::types::DatasetId;
+use crate::tui::components::SortColumn;
 use color_eyre::Result;
 use duckdb::arrow::record_batch::RecordBatch;
 use duckdb::Connection;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Managed dataset backed by DuckDB
 ///
-/// This struct represents a dataset stored as a Parquet file and queried via DuckDB.
+/// This struct represents a dataset stored as a table in the session database.
 /// It provides methods for pagination, querying, and metadata access without loading
 /// the entire dataset into memory.
 pub struct ManagedDataset {
     conn: Arc<Connection>,
     pub id: DatasetId,
     pub table_name: String,
-    pub parquet_path: PathBuf,
     column_config: ColumnWidthConfig,
+    sort_order: Vec<SortColumn>,
 }
 
 impl ManagedDataset {
     /// Create a new managed dataset
     ///
-    /// Registers the Parquet file as a table in DuckDB for querying
-    pub fn new(conn: Arc<Connection>, id: DatasetId, parquet_path: PathBuf) -> Result<Self> {
-        // Create a valid table name from the dataset ID (replace hyphens with underscores)
-        let table_name = format!("dataset_{}", id.as_str().replace("-", "_"));
+    /// The table must already exist in the database
+    pub fn new(conn: Arc<Connection>, id: DatasetId, table_name: String) -> Result<Self> {
+        // Validate that the table exists
+        let table_check = format!(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{}'",
+            table_name
+        );
+        let table_exists: i64 = conn.query_row(&table_check, [], |row| row.get(0))?;
 
-        // Register Parquet file as a view in DuckDB
-        // Using a view means we don't copy data, just query the file directly
-        conn.execute(
-            &format!(
-                "CREATE OR REPLACE VIEW {} AS SELECT * FROM read_parquet('{}')",
-                table_name,
-                parquet_path.display()
-            ),
-            [],
-        )?;
+        if table_exists == 0 {
+            return Err(color_eyre::eyre::eyre!(
+                "Table '{}' does not exist in database",
+                table_name
+            ));
+        }
 
         // Initialize column configuration
-        let columns = Self::get_columns_from_parquet(&conn, &table_name)?;
+        let columns = Self::get_columns_from_table(&conn, &table_name)?;
         let column_config = ColumnWidthConfig::from_columns(columns);
 
         Ok(Self {
             conn,
             id,
             table_name,
-            parquet_path,
             column_config,
+            sort_order: Vec::new(),
         })
     }
 
-    /// Helper to get column names from a parquet view
-    fn get_columns_from_parquet(conn: &Connection, table_name: &str) -> Result<Vec<String>> {
+    /// Helper to get column names from a table
+    fn get_columns_from_table(conn: &Connection, table_name: &str) -> Result<Vec<String>> {
         let query = format!("DESCRIBE {}", table_name);
         let mut stmt = conn.prepare(&query)?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
@@ -64,9 +64,10 @@ impl ManagedDataset {
     ///
     /// Uses LIMIT/OFFSET for efficient pagination without loading full dataset
     pub fn get_page(&self, offset: usize, limit: usize) -> Result<RecordBatch> {
+        let order_by = self.build_order_by_clause();
         let query = format!(
-            "SELECT * FROM {} LIMIT {} OFFSET {}",
-            self.table_name, limit, offset
+            "SELECT * FROM {} {} LIMIT {} OFFSET {}",
+            self.table_name, order_by, limit, offset
         );
 
         let mut stmt = self.conn.prepare(&query)?;
@@ -371,6 +372,61 @@ impl ManagedDataset {
 
         Ok(())
     }
+
+    // ========================================
+    // Sorting API
+    // ========================================
+
+    /// Set sort order for the dataset
+    pub fn set_sort_order(&mut self, columns: Vec<SortColumn>) -> Result<()> {
+        // Validate that all columns exist
+        let available_cols = self.column_names()?;
+        for sort_col in &columns {
+            if !available_cols.contains(&sort_col.name) {
+                return Err(color_eyre::eyre::eyre!(
+                    "Column '{}' does not exist",
+                    sort_col.name
+                ));
+            }
+        }
+
+        self.sort_order = columns;
+        Ok(())
+    }
+
+    /// Get current sort order
+    pub fn get_sort_order(&self) -> Result<Vec<SortColumn>> {
+        Ok(self.sort_order.clone())
+    }
+
+    /// Clear all sorting
+    pub fn clear_sort(&mut self) {
+        self.sort_order.clear();
+    }
+
+    /// Build ORDER BY clause from sort configuration
+    ///
+    /// Appends rowid as tie-breaker for stable, deterministic sorting
+    fn build_order_by_clause(&self) -> String {
+        if self.sort_order.is_empty() {
+            return String::new();
+        }
+
+        let mut clauses: Vec<String> = self
+            .sort_order
+            .iter()
+            .map(|sc| {
+                let direction = if sc.ascending { "ASC" } else { "DESC" };
+                format!("\"{}\" {}", sc.name, direction)
+            })
+            .collect();
+
+        // Always append rowid for deterministic ordering
+        // (DuckDB parallelizes sorts, causing non-deterministic results without a tie-breaker)
+        clauses.push("rowid ASC".to_string());
+
+        format!("ORDER BY {}", clauses.join(", "))
+    }
 }
 
 // Clone implementation for sharing datasets across threads
@@ -380,8 +436,8 @@ impl Clone for ManagedDataset {
             conn: self.conn.clone(),
             id: self.id.clone(),
             table_name: self.table_name.clone(),
-            parquet_path: self.parquet_path.clone(),
             column_config: self.column_config.clone(),
+            sort_order: self.sort_order.clone(),
         }
     }
 }
@@ -389,44 +445,38 @@ impl Clone for ManagedDataset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
-    fn create_test_parquet() -> (TempDir, PathBuf) {
-        let dir = TempDir::new().unwrap();
-        let parquet_path = dir.path().join("test.parquet");
-
-        // Create a simple parquet file using DuckDB
-        let conn = Connection::open_in_memory().unwrap();
+    fn create_test_table(conn: &Connection, table_name: &str) {
+        // Create a simple table using DuckDB
         conn.execute(
             &format!(
-                "COPY (SELECT * FROM (VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie')) AS t(id, name))
-                 TO '{}' (FORMAT PARQUET)",
-                parquet_path.display()
+                "CREATE TABLE {} AS SELECT * FROM (VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie')) AS t(id, name)",
+                table_name
             ),
             []
         ).unwrap();
-
-        (dir, parquet_path)
     }
 
     #[test]
     fn test_managed_dataset_creation() {
-        let (_dir, parquet_path) = create_test_parquet();
         let conn = Arc::new(Connection::open_in_memory().unwrap());
         let id = DatasetId::new();
+        let table_name = format!("dataset_{}", id.as_str().replace("-", "_"));
 
-        let dataset = ManagedDataset::new(conn, id, parquet_path).unwrap();
+        create_test_table(&conn, &table_name);
+        let dataset = ManagedDataset::new(conn, id, table_name.clone()).unwrap();
 
-        assert!(dataset.table_name.starts_with("dataset_"));
+        assert_eq!(dataset.table_name, table_name);
     }
 
     #[test]
     fn test_managed_dataset_row_count() {
-        let (_dir, parquet_path) = create_test_parquet();
         let conn = Arc::new(Connection::open_in_memory().unwrap());
         let id = DatasetId::new();
+        let table_name = format!("dataset_{}", id.as_str().replace("-", "_"));
 
-        let dataset = ManagedDataset::new(conn, id, parquet_path).unwrap();
+        create_test_table(&conn, &table_name);
+        let dataset = ManagedDataset::new(conn, id, table_name).unwrap();
         let count = dataset.row_count().unwrap();
 
         assert_eq!(count, 3);
@@ -434,11 +484,12 @@ mod tests {
 
     #[test]
     fn test_managed_dataset_column_names() {
-        let (_dir, parquet_path) = create_test_parquet();
         let conn = Arc::new(Connection::open_in_memory().unwrap());
         let id = DatasetId::new();
+        let table_name = format!("dataset_{}", id.as_str().replace("-", "_"));
 
-        let dataset = ManagedDataset::new(conn, id, parquet_path).unwrap();
+        create_test_table(&conn, &table_name);
+        let dataset = ManagedDataset::new(conn, id, table_name).unwrap();
         let columns = dataset.column_names().unwrap();
 
         assert_eq!(columns, vec!["id", "name"]);
@@ -446,11 +497,12 @@ mod tests {
 
     #[test]
     fn test_managed_dataset_get_page() {
-        let (_dir, parquet_path) = create_test_parquet();
         let conn = Arc::new(Connection::open_in_memory().unwrap());
         let id = DatasetId::new();
+        let table_name = format!("dataset_{}", id.as_str().replace("-", "_"));
 
-        let dataset = ManagedDataset::new(conn, id, parquet_path).unwrap();
+        create_test_table(&conn, &table_name);
+        let dataset = ManagedDataset::new(conn, id, table_name).unwrap();
         let page = dataset.get_page(0, 2).unwrap();
 
         assert_eq!(page.num_rows(), 2);
@@ -459,11 +511,12 @@ mod tests {
 
     #[test]
     fn test_managed_dataset_pagination() {
-        let (_dir, parquet_path) = create_test_parquet();
         let conn = Arc::new(Connection::open_in_memory().unwrap());
         let id = DatasetId::new();
+        let table_name = format!("dataset_{}", id.as_str().replace("-", "_"));
 
-        let dataset = ManagedDataset::new(conn, id, parquet_path).unwrap();
+        create_test_table(&conn, &table_name);
+        let dataset = ManagedDataset::new(conn, id, table_name).unwrap();
 
         // First page
         let page1 = dataset.get_page(0, 2).unwrap();

@@ -1,8 +1,8 @@
-use duckdb::Connection;
 use color_eyre::Result;
+use duckdb::Connection;
 
 /// Initialize the global database schema
-/// 
+///
 /// This database stores user-level configuration and history
 pub fn init_global_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
@@ -54,16 +54,16 @@ pub fn init_global_schema(conn: &Connection) -> Result<()> {
             modifiers TEXT,
             FOREIGN KEY (style_set_id) REFERENCES style_sets(id)
         );
-        "#
+        "#,
     )?;
-    
+
     Ok(())
 }
 
-/// Initialize the workspace database schema
-/// 
-/// This database stores workspace-specific data and state
-pub fn init_workspace_schema(conn: &Connection) -> Result<()> {
+/// Initialize the session database schema
+///
+/// This database stores session-specific metadata and data tables for all imported datasets
+pub fn init_session_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS datasets (
@@ -71,7 +71,6 @@ pub fn init_workspace_schema(conn: &Connection) -> Result<()> {
             name TEXT NOT NULL,
             source_type TEXT NOT NULL,
             source_path TEXT,
-            parquet_path TEXT NOT NULL,
             created_at BIGINT NOT NULL,
             last_modified BIGINT NOT NULL,
             row_count BIGINT,
@@ -101,43 +100,47 @@ pub fn init_workspace_schema(conn: &Connection) -> Result<()> {
             active BOOLEAN DEFAULT 0,
             FOREIGN KEY (dataset_id) REFERENCES datasets(id)
         );
-        "#
+        "#,
     )?;
-    
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_global_schema_initialization() {
         let conn = Connection::open_in_memory().unwrap();
         init_global_schema(&conn).unwrap();
-        
+
         // Verify tables exist
-        let table_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
-            [],
-            |row| row.get(0)
-        ).unwrap();
-        
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
         assert!(table_count >= 4, "Expected at least 4 tables");
     }
-    
+
     #[test]
-    fn test_workspace_schema_initialization() {
+    fn test_session_schema_initialization() {
         let conn = Connection::open_in_memory().unwrap();
-        init_workspace_schema(&conn).unwrap();
-        
+        init_session_schema(&conn).unwrap();
+
         // Verify datasets table exists
-        let exists: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='datasets'",
-            [],
-            |row| row.get(0)
-        ).unwrap();
-        
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='datasets'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
         assert_eq!(exists, 1);
     }
 }

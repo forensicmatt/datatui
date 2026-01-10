@@ -1,6 +1,6 @@
 use crate::core::{
-    schema::{init_global_schema, init_workspace_schema},
-    types::{CsvImportOptions, DatasetId, ParquetImportOptions, SourceType},
+    schema::{init_global_schema, init_session_schema},
+    types::{CsvImportOptions, DatasetId, SourceType},
     DatasetRecord, ManagedDataset,
 };
 use color_eyre::Result;
@@ -9,37 +9,40 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// DataService manages dataset imports and workspace database
+/// DataService manages dataset imports and session database
 ///
 /// This service is responsible for:
-/// - Importing CSV/Parquet files into the workspace
-/// - Converting data to Parquet format via DuckDB
-/// - Managing workspace and global databases
+/// - Importing CSV/Parquet files into the session database
+/// - Loading data directly into database tables
+/// - Managing session and global databases
 /// - Providing access to datasets
 pub struct DataService {
     /// Global DuckDB connection for user-level config/history
     global_conn: Arc<Connection>,
 
-    /// Workspace DuckDB connection for dataset metadata
-    workspace_conn: Arc<Connection>,
+    /// Session DuckDB connection for dataset metadata and data tables
+    session_conn: Arc<Connection>,
 
-    /// Path to the workspace directory
-    workspace_path: PathBuf,
+    /// Unique session identifier
+    session_id: String,
+
+    /// Path to the session directory
+    session_path: PathBuf,
 
     /// In-memory cache of loaded datasets
     datasets: Arc<Mutex<HashMap<DatasetId, ManagedDataset>>>,
 }
 
 impl DataService {
-    /// Create a new DataService for the given workspace
+    /// Create a new DataService for the given session
     ///
-    /// Create a new DataService for the given workspace
-    pub fn new(workspace_path: impl AsRef<Path>) -> Result<Self> {
-        Self::new_impl(workspace_path.as_ref(), None)
+    /// Create a new DataService for the given session
+    pub fn new(session_path: impl AsRef<Path>) -> Result<Self> {
+        Self::new_impl(session_path.as_ref(), None)
     }
 
     /// Internal constructor with optional global DB path (for testing)
-    pub(crate) fn new_impl(workspace_path: &Path, global_db_path: Option<PathBuf>) -> Result<Self> {
+    pub(crate) fn new_impl(session_path: &Path, global_db_path: Option<PathBuf>) -> Result<Self> {
         // Open global DuckDB database
         let global_db_path = global_db_path.unwrap_or_else(|| {
             directories::BaseDirs::new()
@@ -56,30 +59,33 @@ impl DataService {
         let global_conn = Arc::new(Connection::open(&global_db_path)?);
         init_global_schema(&global_conn)?;
 
-        // Open workspace DuckDB database
-        let workspace_db_path = workspace_path.join(".datatui").join("workspace.duckdb");
-        if let Some(parent) = workspace_db_path.parent() {
+        // Generate unique session ID to prevent conflicts between multiple instances
+        let session_id = uuid::Uuid::new_v4().to_string();
+
+        // Open session DuckDB database with unique name
+        let session_db_path = session_path
+            .join(".datatui")
+            .join(format!("session_{}.duckdb", session_id));
+        if let Some(parent) = session_db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let workspace_conn = Arc::new(Connection::open(&workspace_db_path)?);
-        init_workspace_schema(&workspace_conn)?;
-
-        // Create data directory for Parquet files
-        std::fs::create_dir_all(workspace_path.join(".datatui").join("data"))?;
+        let session_conn = Arc::new(Connection::open(&session_db_path)?);
+        init_session_schema(&session_conn)?;
 
         Ok(Self {
             global_conn,
-            workspace_conn,
-            workspace_path: workspace_path.to_owned(),
+            session_conn,
+            session_id,
+            session_path: session_path.to_owned(),
             datasets: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
-    /// Import a CSV file into the workspace
+    /// Import a CSV file into the session database
     ///
     /// This method:
-    /// 1. Uses DuckDB to read the CSV and convert to Parquet (streaming, memory-efficient)
-    /// 2. Stores metadata in workspace database
+    /// 1. Uses DuckDB to read the CSV and load directly into a table
+    /// 2. Stores metadata in session database
     /// 3. Creates a ManagedDataset for querying
     pub fn import_csv(&self, path: PathBuf, options: CsvImportOptions) -> Result<DatasetId> {
         let dataset_id = DatasetId::new();
@@ -89,14 +95,10 @@ impl DataService {
             .unwrap_or("unnamed")
             .to_string();
 
-        // Create Parquet file path
-        let parquet_path = self
-            .workspace_path
-            .join(".datatui")
-            .join("data")
-            .join(format!("{}.parquet", dataset_id.as_str()));
+        // Create table name from dataset ID
+        let table_name = format!("dataset_{}", dataset_id.as_str().replace("-", "_"));
 
-        // Use DuckDB to convert CSV to Parquet (streaming, memory-efficient)
+        // Use DuckDB to load CSV directly into a table
         let delimiter = if options.delimiter == '\t' {
             "\\t".to_string()
         } else {
@@ -109,37 +111,33 @@ impl DataService {
             .unwrap_or_default();
 
         let query = format!(
-            "COPY (SELECT * FROM read_csv('{}', header = {}, delim = '{}'{}))\n             TO '{}' (FORMAT PARQUET, COMPRESSION ZSTD)",
+            "CREATE TABLE {} AS SELECT * FROM read_csv('{}', header = {}, delim = '{}'{}) ",
+            table_name,
             path.display(),
             options.has_header,
             delimiter,
-            quote,
-            parquet_path.display()
+            quote
         );
 
-        self.workspace_conn.execute(&query, [])?;
+        self.session_conn.execute(&query, [])?;
 
-        // Get row and column counts
-        let (row_count, col_count) = self.get_parquet_stats(&parquet_path)?;
+        // Get row and column counts from the table
+        let (row_count, col_count) = self.get_table_stats(&table_name)?;
 
-        // Create and store metadata
+        // Create and store metadata (no parquet_path needed)
         let mut record = DatasetRecord::new(
             dataset_id.clone(),
             dataset_name,
             SourceType::Csv,
             Some(path.to_string_lossy().to_string()),
-            parquet_path.to_string_lossy().to_string(),
         );
         record.row_count = Some(row_count);
         record.column_count = Some(col_count);
-        record.insert(&self.workspace_conn)?;
+        record.insert(&self.session_conn)?;
 
         // Create managed dataset
-        let dataset = ManagedDataset::new(
-            self.workspace_conn.clone(),
-            dataset_id.clone(),
-            parquet_path,
-        )?;
+        let dataset =
+            ManagedDataset::new(self.session_conn.clone(), dataset_id.clone(), table_name)?;
 
         // Cache it
         self.datasets
@@ -150,9 +148,9 @@ impl DataService {
         Ok(dataset_id)
     }
 
-    /// Import a Parquet file into the workspace
+    /// Import a Parquet file into the session database
     ///
-    /// Since the file is already Parquet, this just copies it and creates metadata
+    /// Loads the Parquet file directly into a table in the session database
     pub fn import_parquet(&self, path: PathBuf) -> Result<DatasetId> {
         let dataset_id = DatasetId::new();
         let dataset_name = path
@@ -161,37 +159,34 @@ impl DataService {
             .unwrap_or("unnamed")
             .to_string();
 
-        // Create Parquet file path in workspace
-        let parquet_path = self
-            .workspace_path
-            .join(".datatui")
-            .join("data")
-            .join(format!("{}.parquet", dataset_id.as_str()));
+        // Create table name from dataset ID
+        let table_name = format!("dataset_{}", dataset_id.as_str().replace("-", "_"));
 
-        // Copy the Parquet file
-        std::fs::copy(&path, &parquet_path)?;
+        // Use DuckDB to load Parquet directly into a table
+        let query = format!(
+            "CREATE TABLE {} AS SELECT * FROM read_parquet('{}')",
+            table_name,
+            path.display()
+        );
+        self.session_conn.execute(&query, [])?;
 
-        // Get row and column counts
-        let (row_count, col_count) = self.get_parquet_stats(&parquet_path)?;
+        // Get row and column counts from the table
+        let (row_count, col_count) = self.get_table_stats(&table_name)?;
 
-        // Create and store metadata
+        // Create and store metadata (no parquet_path needed)
         let mut record = DatasetRecord::new(
             dataset_id.clone(),
             dataset_name,
             SourceType::Parquet,
             Some(path.to_string_lossy().to_string()),
-            parquet_path.to_string_lossy().to_string(),
         );
         record.row_count = Some(row_count);
         record.column_count = Some(col_count);
-        record.insert(&self.workspace_conn)?;
+        record.insert(&self.session_conn)?;
 
         // Create managed dataset
-        let dataset = ManagedDataset::new(
-            self.workspace_conn.clone(),
-            dataset_id.clone(),
-            parquet_path,
-        )?;
+        let dataset =
+            ManagedDataset::new(self.session_conn.clone(), dataset_id.clone(), table_name)?;
 
         // Cache it
         self.datasets
@@ -202,23 +197,17 @@ impl DataService {
         Ok(dataset_id)
     }
 
-    /// Get statistics (row count, column count) from a Parquet file
-    fn get_parquet_stats(&self, parquet_path: &Path) -> Result<(u64, u32)> {
+    /// Get statistics (row count, column count) from a table
+    fn get_table_stats(&self, table_name: &str) -> Result<(u64, u32)> {
         // Get row count
-        let count_query = format!(
-            "SELECT COUNT(*) FROM read_parquet('{}')",
-            parquet_path.display()
-        );
+        let count_query = format!("SELECT COUNT(*) FROM {}", table_name);
         let row_count: i64 = self
-            .workspace_conn
+            .session_conn
             .query_row(&count_query, [], |row| row.get(0))?;
 
         // Get column count
-        let cols_query = format!(
-            "DESCRIBE (SELECT * FROM read_parquet('{}'))",
-            parquet_path.display()
-        );
-        let mut stmt = self.workspace_conn.prepare(&cols_query)?;
+        let cols_query = format!("DESCRIBE {}", table_name);
+        let mut stmt = self.session_conn.prepare(&cols_query)?;
         let col_count = stmt.query_map([], |_| Ok(()))?.count();
 
         Ok((row_count as u64, col_count as u32))
@@ -226,7 +215,7 @@ impl DataService {
 
     /// Get a dataset by ID
     ///
-    /// Returns a cached dataset if available, otherwise loads from workspace
+    /// Returns a cached dataset if available, otherwise loads from session database
     pub fn get_dataset(&self, id: &DatasetId) -> Result<ManagedDataset> {
         // Check cache first
         {
@@ -240,12 +229,12 @@ impl DataService {
         }
 
         // Load from database
-        let record = DatasetRecord::load(&self.workspace_conn, &id.as_str())?;
-        let dataset = ManagedDataset::new(
-            self.workspace_conn.clone(),
-            record.id.clone(),
-            PathBuf::from(&record.parquet_path),
-        )?;
+        let _record = DatasetRecord::load(&self.session_conn, &id.as_str())?;
+
+        // Create table name from dataset ID
+        let table_name = format!("dataset_{}", id.as_str().replace("-", "_"));
+
+        let dataset = ManagedDataset::new(self.session_conn.clone(), id.clone(), table_name)?;
 
         // Cache it
         self.datasets
@@ -256,24 +245,22 @@ impl DataService {
         Ok(dataset)
     }
 
-    /// List all datasets in the workspace
+    /// List all datasets in the session
     pub fn list_datasets(&self) -> Result<Vec<DatasetRecord>> {
-        DatasetRecord::load_all(&self.workspace_conn)
+        DatasetRecord::load_all(&self.session_conn)
     }
 
-    /// Delete a dataset from the workspace
+    /// Delete a dataset from the session
     pub fn delete_dataset(&self, id: &DatasetId) -> Result<()> {
-        // Load record to get parquet path
-        let record = DatasetRecord::load(&self.workspace_conn, &id.as_str())?;
+        // Create table name from dataset ID
+        let table_name = format!("dataset_{}", id.as_str().replace("-", "_"));
 
-        // Delete Parquet file
-        let parquet_path = PathBuf::from(&record.parquet_path);
-        if parquet_path.exists() {
-            std::fs::remove_file(parquet_path)?;
-        }
+        // Drop the table
+        self.session_conn
+            .execute(&format!("DROP TABLE IF EXISTS {}", table_name), [])?;
 
-        // Delete from database
-        self.workspace_conn
+        // Delete metadata from database
+        self.session_conn
             .execute("DELETE FROM datasets WHERE id = ?", [id.as_str()])?;
 
         // Remove from cache
@@ -285,9 +272,40 @@ impl DataService {
         Ok(())
     }
 
-    /// Get the workspace path
-    pub fn workspace_path(&self) -> &Path {
-        &self.workspace_path
+    /// Get the session path
+    pub fn session_path(&self) -> &Path {
+        &self.session_path
+    }
+
+    /// Get the unique session ID
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+}
+
+// Clean up session database when DataService is dropped
+impl Drop for DataService {
+    fn drop(&mut self) {
+        // Close the connection first by dropping the Arc
+        // (connection will be closed when all Arc references are dropped)
+        drop(self.session_conn.clone());
+
+        // Delete the session database file
+        let session_db_path = self
+            .session_path
+            .join(".datatui")
+            .join(format!("session_{}.duckdb", self.session_id));
+
+        if session_db_path.exists() {
+            // Best effort cleanup - ignore errors
+            let _ = std::fs::remove_file(&session_db_path);
+
+            // Also try to remove .wal file if it exists (DuckDB write-ahead log)
+            let wal_path = session_db_path.with_extension("duckdb.wal");
+            if wal_path.exists() {
+                let _ = std::fs::remove_file(&wal_path);
+            }
+        }
     }
 }
 
@@ -308,10 +326,10 @@ mod tests {
     }
 
     /// Create a test DataService with isolated global database
-    fn create_test_service(workspace_path: &Path) -> DataService {
-        // Use unique global DB in workspace to avoid file locking between tests
-        let global_db = workspace_path.join("test_global.duckdb");
-        DataService::new_impl(workspace_path, Some(global_db)).unwrap()
+    fn create_test_service(session_path: &Path) -> DataService {
+        // Use unique global DB in session to avoid file locking between tests
+        let global_db = session_path.join("test_global.duckdb");
+        DataService::new_impl(session_path, Some(global_db)).unwrap()
     }
 
     #[test]
@@ -319,7 +337,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let service = create_test_service(temp_dir.path());
 
-        assert_eq!(service.workspace_path(), temp_dir.path());
+        assert_eq!(service.session_path(), temp_dir.path());
     }
 
     #[test]

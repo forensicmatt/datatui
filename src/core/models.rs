@@ -5,14 +5,13 @@ use duckdb::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-/// Represents a dataset record in the workspace database
+/// Represents a dataset record in the session database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetRecord {
     pub id: DatasetId,
     pub name: String,
     pub source_type: SourceType,
     pub source_path: Option<String>,
-    pub parquet_path: String,
     pub created_at: DateTime<Utc>,
     pub last_modified: DateTime<Utc>,
     pub row_count: Option<u64>,
@@ -26,7 +25,6 @@ impl DatasetRecord {
         name: String,
         source_type: SourceType,
         source_path: Option<String>,
-        parquet_path: String,
     ) -> Self {
         let now = Utc::now();
         Self {
@@ -34,7 +32,6 @@ impl DatasetRecord {
             name,
             source_type,
             source_path,
-            parquet_path,
             created_at: now,
             last_modified: now,
             row_count: None,
@@ -45,14 +42,13 @@ impl DatasetRecord {
     /// Insert this record into the database
     pub fn insert(&self, conn: &Connection) -> Result<()> {
         conn.execute(
-            "INSERT INTO datasets (id, name, source_type, source_path, parquet_path, created_at, last_modified, row_count, column_count)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO datasets (id, name, source_type, source_path, created_at, last_modified, row_count, column_count)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 self.id.as_str(),
                 &self.name,
                 &self.source_type.to_string(),
                 &self.source_path,
-                &self.parquet_path,
                 self.created_at.timestamp(),
                 self.last_modified.timestamp(),
                 self.row_count.map(|n| n as i64),
@@ -65,7 +61,7 @@ impl DatasetRecord {
     /// Load a dataset record by ID
     pub fn load(conn: &Connection, id: &str) -> Result<Self> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, source_type, source_path, parquet_path, created_at, last_modified, row_count, column_count
+            "SELECT id, name, source_type, source_path, created_at, last_modified, row_count, column_count
              FROM datasets WHERE id = ?"
         )?;
 
@@ -87,23 +83,22 @@ impl DatasetRecord {
                     )
                 })?,
                 source_path: row.get(3)?,
-                parquet_path: row.get(4)?,
-                created_at: DateTime::from_timestamp(row.get(5)?, 0).ok_or_else(|| {
+                created_at: DateTime::from_timestamp(row.get(4)?, 0).ok_or_else(|| {
                     duckdb::Error::InvalidColumnType(
-                        5,
+                        4,
                         "created_at".to_string(),
                         duckdb::types::Type::Null,
                     )
                 })?,
-                last_modified: DateTime::from_timestamp(row.get(6)?, 0).ok_or_else(|| {
+                last_modified: DateTime::from_timestamp(row.get(5)?, 0).ok_or_else(|| {
                     duckdb::Error::InvalidColumnType(
-                        6,
+                        5,
                         "last_modified".to_string(),
                         duckdb::types::Type::Null,
                     )
                 })?,
-                row_count: row.get::<_, Option<i64>>(7)?.map(|n| n as u64),
-                column_count: row.get::<_, Option<i32>>(8)?.map(|n| n as u32),
+                row_count: row.get::<_, Option<i64>>(6)?.map(|n| n as u64),
+                column_count: row.get::<_, Option<i32>>(7)?.map(|n| n as u32),
             })
         })?;
 
@@ -113,7 +108,7 @@ impl DatasetRecord {
     /// Load all dataset records
     pub fn load_all(conn: &Connection) -> Result<Vec<Self>> {
         let mut stmt = conn.prepare(
-            "SELECT id, name, source_type, source_path, parquet_path, created_at, last_modified, row_count, column_count
+            "SELECT id, name, source_type, source_path, created_at, last_modified, row_count, column_count
              FROM datasets ORDER BY created_at DESC"
         )?;
 
@@ -135,23 +130,22 @@ impl DatasetRecord {
                     )
                 })?,
                 source_path: row.get(3)?,
-                parquet_path: row.get(4)?,
-                created_at: DateTime::from_timestamp(row.get(5)?, 0).ok_or_else(|| {
+                created_at: DateTime::from_timestamp(row.get(4)?, 0).ok_or_else(|| {
                     duckdb::Error::InvalidColumnType(
-                        5,
+                        4,
                         "created_at".to_string(),
                         duckdb::types::Type::Null,
                     )
                 })?,
-                last_modified: DateTime::from_timestamp(row.get(6)?, 0).ok_or_else(|| {
+                last_modified: DateTime::from_timestamp(row.get(5)?, 0).ok_or_else(|| {
                     duckdb::Error::InvalidColumnType(
-                        6,
+                        5,
                         "last_modified".to_string(),
                         duckdb::types::Type::Null,
                     )
                 })?,
-                row_count: row.get::<_, Option<i64>>(7)?.map(|n| n as u64),
-                column_count: row.get::<_, Option<i32>>(8)?.map(|n| n as u32),
+                row_count: row.get::<_, Option<i64>>(6)?.map(|n| n as u64),
+                column_count: row.get::<_, Option<i32>>(7)?.map(|n| n as u32),
             })
         })?;
 
@@ -180,12 +174,12 @@ impl DatasetRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::schema::init_workspace_schema;
+    use crate::core::schema::init_session_schema;
 
     #[test]
     fn test_dataset_record_insert_and_load() {
         let conn = Connection::open_in_memory().unwrap();
-        init_workspace_schema(&conn).unwrap();
+        init_session_schema(&conn).unwrap();
 
         let id = DatasetId::new();
         let record = DatasetRecord::new(
@@ -193,7 +187,6 @@ mod tests {
             "Test Dataset".to_string(),
             SourceType::Csv,
             Some("/path/to/test.csv".to_string()),
-            "/path/to/test.parquet".to_string(),
         );
 
         record.insert(&conn).unwrap();
@@ -206,16 +199,10 @@ mod tests {
     #[test]
     fn test_dataset_record_update_stats() {
         let conn = Connection::open_in_memory().unwrap();
-        init_workspace_schema(&conn).unwrap();
+        init_session_schema(&conn).unwrap();
 
         let id = DatasetId::new();
-        let mut record = DatasetRecord::new(
-            id.clone(),
-            "Test".to_string(),
-            SourceType::Csv,
-            None,
-            "/test.parquet".to_string(),
-        );
+        let mut record = DatasetRecord::new(id.clone(), "Test".to_string(), SourceType::Csv, None);
 
         record.insert(&conn).unwrap();
         record.update_stats(&conn, 1000, 10).unwrap();

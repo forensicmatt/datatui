@@ -2,7 +2,7 @@ use crate::core::DatasetId;
 use crate::services::search_service::{FindOptions, SearchMode};
 use crate::services::{DataService, SearchService};
 use crate::tui::components::{
-    CellViewer, ColumnWidthDialog, DataTable, FindAllResultsDialog, FindDialog,
+    CellViewer, ColumnWidthDialog, DataTable, FindAllResultsDialog, FindDialog, SortDialog,
 };
 use crate::tui::{Action, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
@@ -35,6 +35,9 @@ pub struct App {
     /// Column width dialog (when active)
     column_width_dialog: Option<ColumnWidthDialog>,
 
+    /// Sort dialog(when active)
+    sort_dialog: Option<SortDialog>,
+
     /// Last search parameters (for F3 repeat search)
     last_search: Option<(String, FindOptions, SearchMode)>,
 
@@ -62,6 +65,7 @@ impl App {
             find_dialog: None,
             find_all_results_dialog: None,
             column_width_dialog: None,
+            sort_dialog: None,
             last_search: None,
             keybindings,
             theme,
@@ -226,6 +230,36 @@ impl App {
         Ok(())
     }
 
+    /// Handle a sort dialog result
+    fn handle_sort_dialog_result(
+        &mut self,
+        result: crate::tui::components::sort_dialog::DialogResult,
+    ) -> Result<()> {
+        use crate::tui::components::sort_dialog::DialogResult as SortDialogResult;
+
+        match result {
+            SortDialogResult::ApplySort(sort_columns) => {
+                if let Some(table) = &mut self.data_table {
+                    if let Err(e) = table.dataset_mut().set_sort_order(sort_columns.clone()) {
+                        tracing::error!("Failed to set sort order: {}", e);
+                        tracing::error!("Sort columns: {:?}", sort_columns);
+                        return Err(e);
+                    }
+                    if let Err(e) = table.refresh_layout() {
+                        tracing::error!("Failed to refresh layout after sort: {}", e);
+                        return Err(e);
+                    }
+                    tracing::debug!("Sort applied successfully: {:?}", sort_columns);
+                }
+            }
+            SortDialogResult::Close => {
+                // Just close, already handled
+            }
+        }
+
+        Ok(())
+    }
+
     /// Handle a key event
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<()> {
         // Only handle key press events, ignore release/repeat
@@ -351,6 +385,28 @@ impl App {
                     dialog.set_calculated_widths(widths);
 
                     self.column_width_dialog = Some(dialog);
+                }
+                return Ok(());
+            }
+
+            Action::Sort => {
+                if let Some(table) = &mut self.data_table {
+                    let columns = table.get_all_columns();
+                    let (_row, col_idx) = table.get_cursor_position();
+
+                    let mut dialog = SortDialog::new(columns.clone());
+
+                    // Set current column hint for better UX
+                    if col_idx < columns.len() {
+                        dialog.set_current_column(Some(columns[col_idx].clone()));
+                    }
+
+                    if let Ok(sort_order) = table.dataset().get_sort_order() {
+                        dialog.set_sort_columns(sort_order);
+                    }
+                    // }
+
+                    self.sort_dialog = Some(dialog);
                 }
                 return Ok(());
             }
@@ -546,6 +602,21 @@ impl App {
             return Ok(());
         }
 
+        // Route to sort dialog if active (MODAL)
+        if let Some(dialog) = &mut self.sort_dialog {
+            let keep_open = dialog.handle_action(action)?;
+
+            // Check if dialog has a pending result to process
+            if let Some(result) = dialog.take_result() {
+                self.handle_sort_dialog_result(result)?;
+            }
+
+            if !keep_open {
+                self.sort_dialog = None;
+            }
+            return Ok(());
+        }
+
         // Route to find dialog if active
         if let Some(dialog) = &mut self.find_dialog {
             let keep_open = dialog.handle_action(action)?;
@@ -665,6 +736,12 @@ impl App {
             let dialog_area = Self::centered_rect(70, 70, area);
             dialog.render(frame, dialog_area);
         }
+
+        // Render sort dialog overlay if active
+        if let Some(dialog) = &mut self.sort_dialog {
+            let dialog_area = Self::centered_rect(60, 60, area);
+            dialog.render(frame, dialog_area);
+        }
     }
 
     /// Helper to create centered rectangle
@@ -752,6 +829,7 @@ mod tests {
             find_dialog: None,
             find_all_results_dialog: None,
             column_width_dialog: None,
+            sort_dialog: None,
             last_search: None,
             keybindings,
             theme,
@@ -780,6 +858,7 @@ mod tests {
             find_dialog: None,
             find_all_results_dialog: None,
             column_width_dialog: None,
+            sort_dialog: None,
             last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),
@@ -839,6 +918,7 @@ mod tests {
             find_dialog: None,
             find_all_results_dialog: None,
             column_width_dialog: None,
+            sort_dialog: None,
             last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),
@@ -865,6 +945,7 @@ mod tests {
             find_dialog: None,
             find_all_results_dialog: None,
             column_width_dialog: None,
+            sort_dialog: None,
             last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),
