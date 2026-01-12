@@ -17,6 +17,7 @@ color-eyre = "0.6.5"
 crossterm = "0.28"
 directories = "6.0"
 duckdb = {version = "1.4.3", features = ["bundled"]}
+glob = "0.3"
 lazy_static = "1.4"
 ratatui = "0.29"
 rayon = "1.10"
