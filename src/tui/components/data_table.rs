@@ -528,7 +528,54 @@ impl DataTable {
 
     /// Format a cell value from an Arrow array
     fn format_cell_value(&self, column: &dyn Array, row_idx: usize) -> String {
+        use chrono::{DateTime, NaiveDateTime, Utc};
+        use duckdb::arrow::array::*;
+        use duckdb::arrow::datatypes::TimeUnit;
+
         match column.data_type() {
+            // String types
+            DataType::Utf8 => {
+                let array = column.as_any().downcast_ref::<StringArray>().unwrap();
+                if array.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    array.value(row_idx).to_string()
+                }
+            }
+            DataType::LargeUtf8 => {
+                let array = column.as_any().downcast_ref::<LargeStringArray>().unwrap();
+                if array.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    array.value(row_idx).to_string()
+                }
+            }
+
+            // Signed integer types
+            DataType::Int8 => {
+                let array = column.as_any().downcast_ref::<Int8Array>().unwrap();
+                if array.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    array.value(row_idx).to_string()
+                }
+            }
+            DataType::Int16 => {
+                let array = column.as_any().downcast_ref::<Int16Array>().unwrap();
+                if array.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    array.value(row_idx).to_string()
+                }
+            }
+            DataType::Int32 => {
+                let array = column.as_any().downcast_ref::<Int32Array>().unwrap();
+                if array.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    array.value(row_idx).to_string()
+                }
+            }
             DataType::Int64 => {
                 let array = column.as_any().downcast_ref::<Int64Array>().unwrap();
                 if array.is_null(row_idx) {
@@ -537,8 +584,44 @@ impl DataTable {
                     array.value(row_idx).to_string()
                 }
             }
-            DataType::Utf8 => {
-                let array = column.as_any().downcast_ref::<StringArray>().unwrap();
+
+            // Unsigned integer types
+            DataType::UInt8 => {
+                let array = column.as_any().downcast_ref::<UInt8Array>().unwrap();
+                if array.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    array.value(row_idx).to_string()
+                }
+            }
+            DataType::UInt16 => {
+                let array = column.as_any().downcast_ref::<UInt16Array>().unwrap();
+                if array.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    array.value(row_idx).to_string()
+                }
+            }
+            DataType::UInt32 => {
+                let array = column.as_any().downcast_ref::<UInt32Array>().unwrap();
+                if array.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    array.value(row_idx).to_string()
+                }
+            }
+            DataType::UInt64 => {
+                let array = column.as_any().downcast_ref::<UInt64Array>().unwrap();
+                if array.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    array.value(row_idx).to_string()
+                }
+            }
+
+            // Floating point types
+            DataType::Float32 => {
+                let array = column.as_any().downcast_ref::<Float32Array>().unwrap();
                 if array.is_null(row_idx) {
                     "NULL".to_string()
                 } else {
@@ -553,11 +636,237 @@ impl DataTable {
                     array.value(row_idx).to_string()
                 }
             }
+
+            // Boolean type
+            DataType::Boolean => {
+                let array = column.as_any().downcast_ref::<BooleanArray>().unwrap();
+                if array.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    array.value(row_idx).to_string()
+                }
+            }
+
+            // Timestamp types - format as ISO 8601
+            DataType::Timestamp(unit, tz) => {
+                let array = column
+                    .as_any()
+                    .downcast_ref::<TimestampSecondArray>()
+                    .or_else(|| {
+                        column
+                            .as_any()
+                            .downcast_ref::<TimestampMillisecondArray>()
+                            .map(|a| a as &dyn Array)
+                            .and_then(|a| a.as_any().downcast_ref())
+                    })
+                    .or_else(|| {
+                        column
+                            .as_any()
+                            .downcast_ref::<TimestampMicrosecondArray>()
+                            .map(|a| a as &dyn Array)
+                            .and_then(|a| a.as_any().downcast_ref())
+                    })
+                    .or_else(|| {
+                        column
+                            .as_any()
+                            .downcast_ref::<TimestampNanosecondArray>()
+                            .map(|a| a as &dyn Array)
+                            .and_then(|a| a.as_any().downcast_ref())
+                    });
+
+                if column.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    // Get the timestamp value based on the unit
+                    let timestamp_value = match unit {
+                        TimeUnit::Second => {
+                            let arr = column
+                                .as_any()
+                                .downcast_ref::<TimestampSecondArray>()
+                                .unwrap();
+                            arr.value(row_idx)
+                        }
+                        TimeUnit::Millisecond => {
+                            let arr = column
+                                .as_any()
+                                .downcast_ref::<TimestampMillisecondArray>()
+                                .unwrap();
+                            arr.value(row_idx) / 1000
+                        }
+                        TimeUnit::Microsecond => {
+                            let arr = column
+                                .as_any()
+                                .downcast_ref::<TimestampMicrosecondArray>()
+                                .unwrap();
+                            arr.value(row_idx) / 1_000_000
+                        }
+                        TimeUnit::Nanosecond => {
+                            let arr = column
+                                .as_any()
+                                .downcast_ref::<TimestampNanosecondArray>()
+                                .unwrap();
+                            arr.value(row_idx) / 1_000_000_000
+                        }
+                    };
+
+                    // Convert to DateTime and format as ISO 8601
+                    if let Some(dt) = NaiveDateTime::from_timestamp_opt(timestamp_value, 0) {
+                        let utc_dt: DateTime<Utc> = DateTime::from_naive_utc_and_offset(dt, Utc);
+                        if tz.is_some() {
+                            utc_dt.to_rfc3339()
+                        } else {
+                            utc_dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+                        }
+                    } else {
+                        format!("Invalid timestamp: {}", timestamp_value)
+                    }
+                }
+            }
+
+            // Date and Time types
+            DataType::Date32 => {
+                let array = column.as_any().downcast_ref::<Date32Array>().unwrap();
+                if array.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    // Days since Unix epoch
+                    let days = array.value(row_idx);
+                    if let Some(dt) = NaiveDateTime::from_timestamp_opt(days as i64 * 86400, 0) {
+                        dt.format("%Y-%m-%d").to_string()
+                    } else {
+                        format!("Invalid date: {}", days)
+                    }
+                }
+            }
+            DataType::Date64 => {
+                let array = column.as_any().downcast_ref::<Date64Array>().unwrap();
+                if array.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    // Milliseconds since Unix epoch
+                    let ms = array.value(row_idx);
+                    if let Some(dt) = NaiveDateTime::from_timestamp_opt(
+                        ms / 1000,
+                        ((ms % 1000) * 1_000_000) as u32,
+                    ) {
+                        dt.format("%Y-%m-%d").to_string()
+                    } else {
+                        format!("Invalid date: {}", ms)
+                    }
+                }
+            }
+
+            // Complex types (already implemented)
+            DataType::Map(_, _) => {
+                if column.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    self.array_to_json_string(column, row_idx)
+                        .unwrap_or_else(|| format!("{:?}", column.slice(row_idx, 1)))
+                }
+            }
+            DataType::Struct(_) => {
+                if column.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    self.array_to_json_string(column, row_idx)
+                        .unwrap_or_else(|| format!("{:?}", column.slice(row_idx, 1)))
+                }
+            }
+            DataType::List(_) => {
+                if column.is_null(row_idx) {
+                    "NULL".to_string()
+                } else {
+                    self.array_to_json_string(column, row_idx)
+                        .unwrap_or_else(|| format!("{:?}", column.slice(row_idx, 1)))
+                }
+            }
+
+            // Fallback for other types
             _ => {
-                // Fallback for other types
                 format!("{:?}", column.slice(row_idx, 1))
             }
         }
+    }
+
+    /// Convert an Arrow array element to a JSON string
+    fn array_to_json_string(&self, array: &dyn Array, row_idx: usize) -> Option<String> {
+        use duckdb::arrow::array::*;
+        use serde_json::{json, Map, Value};
+
+        fn array_element_to_json(array: &dyn Array, idx: usize) -> Option<Value> {
+            if array.is_null(idx) {
+                return Some(Value::Null);
+            }
+
+            match array.data_type() {
+                DataType::Utf8 => {
+                    let arr = array.as_any().downcast_ref::<StringArray>()?;
+                    Some(Value::String(arr.value(idx).to_string()))
+                }
+                DataType::Int64 => {
+                    let arr = array.as_any().downcast_ref::<Int64Array>()?;
+                    Some(json!(arr.value(idx)))
+                }
+                DataType::Float64 => {
+                    let arr = array.as_any().downcast_ref::<Float64Array>()?;
+                    Some(json!(arr.value(idx)))
+                }
+                DataType::Boolean => {
+                    let arr = array.as_any().downcast_ref::<BooleanArray>()?;
+                    Some(Value::Bool(arr.value(idx)))
+                }
+                DataType::Struct(fields) => {
+                    let arr = array.as_any().downcast_ref::<StructArray>()?;
+                    let mut map = Map::new();
+                    for (field_idx, field) in fields.iter().enumerate() {
+                        let field_array = arr.column(field_idx);
+                        if let Some(value) = array_element_to_json(field_array.as_ref(), idx) {
+                            map.insert(field.name().clone(), value);
+                        }
+                    }
+                    Some(Value::Object(map))
+                }
+                DataType::List(_) => {
+                    let arr = array.as_any().downcast_ref::<ListArray>()?;
+                    let value_array = arr.value(idx);
+                    let mut values = Vec::new();
+                    for i in 0..value_array.len() {
+                        if let Some(v) = array_element_to_json(value_array.as_ref(), i) {
+                            values.push(v);
+                        }
+                    }
+                    Some(Value::Array(values))
+                }
+                DataType::Map(_, _) => {
+                    let arr = array.as_any().downcast_ref::<MapArray>()?;
+                    let keys_values = arr.value(idx);
+                    let struct_arr = keys_values.as_any().downcast_ref::<StructArray>()?;
+
+                    if struct_arr.num_columns() >= 2 {
+                        let keys = struct_arr.column(0);
+                        let values = struct_arr.column(1);
+
+                        let mut map = Map::new();
+                        for i in 0..keys.len() {
+                            if let Some(key_val) = array_element_to_json(keys.as_ref(), i) {
+                                if let Some(key_str) = key_val.as_str() {
+                                    if let Some(value) = array_element_to_json(values.as_ref(), i) {
+                                        map.insert(key_str.to_string(), value);
+                                    }
+                                }
+                            }
+                        }
+                        Some(Value::Object(map))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+
+        array_element_to_json(array, row_idx).and_then(|v| serde_json::to_string(&v).ok())
     }
 }
 

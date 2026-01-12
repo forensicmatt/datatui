@@ -1,10 +1,11 @@
 use crate::core::{
     schema::{init_global_schema, init_session_schema},
     types::{CsvImportOptions, DatasetId, SourceType},
-    DatasetRecord, ManagedDataset,
+    DatasetRecord, JsonImportOptions, ManagedDataset,
 };
 use color_eyre::Result;
 use duckdb::Connection;
+use glob::glob;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -87,7 +88,14 @@ impl DataService {
     /// 1. Uses DuckDB to read the CSV and load directly into a table
     /// 2. Stores metadata in session database
     /// 3. Creates a ManagedDataset for querying
+    /// 4. Supports glob patterns for loading multiple files (e.g., "data/*.csv")
     pub fn import_csv(&self, path: PathBuf, options: CsvImportOptions) -> Result<DatasetId> {
+        // Check if path contains glob patterns
+        let path_str = path.to_string_lossy();
+        if path_str.contains('*') || path_str.contains('?') || path_str.contains('[') {
+            return self.import_csv_glob(&path_str, options);
+        }
+
         let dataset_id = DatasetId::new();
         let dataset_name = path
             .file_name()
@@ -281,6 +289,350 @@ impl DataService {
     pub fn session_id(&self) -> &str {
         &self.session_id
     }
+
+    /// Import a JSON file into the session database
+    ///
+    /// This method supports:
+    /// - Standard JSON arrays or objects
+    /// - NDJSON (newline-delimited JSON)
+    /// - Custom record extraction using JMESPath-like syntax
+    /// - Glob patterns for loading multiple files
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - File path or glob pattern (e.g., "data/*.json")
+    /// * `options` - JSON import options (format, record expression)
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use datatui::core::JsonImportOptions;
+    /// # use std::path::PathBuf;
+    /// # let service = unimplemented!();
+    /// // Load NDJSON file
+    /// let opts = JsonImportOptions::ndjson();
+    /// service.import_json(PathBuf::from("data.ndjson"), opts)?;
+    ///
+    /// // Load JSON with nested records
+    /// let opts = JsonImportOptions::with_records_expr("data.items");
+    /// service.import_json(PathBuf::from("api_response.json"), opts)?;
+    ///
+    /// // Load multiple JSON files
+    /// let opts = JsonImportOptions::default();
+    /// service.import_json(PathBuf::from("data/*.json"), opts)?;
+    /// # Ok::<(), color_eyre::Report>(())
+    /// ```
+    pub fn import_json(&self, path: PathBuf, options: JsonImportOptions) -> Result<DatasetId> {
+        // Check if path contains glob patterns
+        let path_str = path.to_string_lossy();
+        if path_str.contains('*') || path_str.contains('?') || path_str.contains('[') {
+            self.import_json_glob(&path_str, options)
+        } else {
+            self.import_json_single(path, options)
+        }
+    }
+
+    /// Import a single JSON file
+    fn import_json_single(&self, path: PathBuf, options: JsonImportOptions) -> Result<DatasetId> {
+        let dataset_id = DatasetId::new();
+        let dataset_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unnamed")
+            .to_string();
+
+        let table_name = format!("dataset_{}", dataset_id.as_str().replace("-", "_"));
+
+        // Build the DuckDB read_json or read_ndjson query
+        let query = if options.ndjson {
+            // For NDJSON, each line is a separate record
+            // Get file size and add 20% buffer
+            let file_size = std::fs::metadata(&path)
+                .map(|m| m.len())
+                .unwrap_or(268435456);
+            let max_size = (file_size as f64 * 1.2) as u64;
+
+            format!(
+                "CREATE TABLE {} AS SELECT * FROM read_json_auto('{}', format='newline_delimited', maximum_object_size={})",
+                table_name,
+                path.display(),
+                max_size
+            )
+        } else {
+            // For regular JSON, check if we need to extract from a nested path
+            if options.records_expr == "@" {
+                // Direct read - assumes root is an array of records
+                // Get file size and add 20% buffer
+                let file_size = std::fs::metadata(&path)
+                    .map(|m| m.len())
+                    .unwrap_or(268435456);
+                let max_size = (file_size as f64 * 1.2) as u64;
+
+                format!(
+                    "CREATE TABLE {} AS SELECT * FROM read_json_auto('{}', maximum_object_size={})",
+                    table_name,
+                    path.display(),
+                    max_size
+                )
+            } else {
+                // For nested paths like "Records", use DuckDB's struct field access
+                let field_name = options.records_expr.clone();
+
+                // Get file size and add 20% buffer for DuckDB's internal overhead
+                let file_size = std::fs::metadata(&path)
+                    .map(|m| m.len())
+                    .unwrap_or(268435456); // Fallback to 256MB if we can't read size
+                let max_size = (file_size as f64 * 1.2) as u64;
+
+                format!(
+                    "CREATE TABLE {} AS
+                    WITH json_data AS (
+                        SELECT * FROM read_json_auto('{}', maximum_object_size={})
+                    )
+                    SELECT item.* FROM (
+                        SELECT unnest(\"{}\") as item
+                        FROM json_data
+                    )",
+                    table_name,
+                    path.display(),
+                    max_size,
+                    field_name
+                )
+            }
+        };
+
+        self.session_conn.execute(&query, [])?;
+
+        // Get row and column counts from the table
+        let (row_count, col_count) = self.get_table_stats(&table_name)?;
+
+        // Create and store metadata
+        let mut record = DatasetRecord::new(
+            dataset_id.clone(),
+            dataset_name,
+            SourceType::Json,
+            Some(path.to_string_lossy().to_string()),
+        );
+        record.row_count = Some(row_count);
+        record.column_count = Some(col_count);
+        record.insert(&self.session_conn)?;
+
+        // Create managed dataset
+        let dataset =
+            ManagedDataset::new(self.session_conn.clone(), dataset_id.clone(), table_name)?;
+
+        // Cache it
+        self.datasets
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to acquire dataset lock: {}", e))?
+            .insert(dataset_id.clone(), dataset.clone());
+
+        Ok(dataset_id)
+    }
+
+    /// Import multiple JSON files using a glob pattern
+    fn import_json_glob(&self, pattern: &str, options: JsonImportOptions) -> Result<DatasetId> {
+        // Expand glob pattern to get list of files
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for entry in glob(pattern)? {
+            match entry {
+                Ok(path) => paths.push(path),
+                Err(e) => {
+                    tracing::warn!("Error reading glob entry: {}", e);
+                }
+            }
+        }
+
+        if paths.is_empty() {
+            return Err(color_eyre::eyre::eyre!(
+                "No files matched pattern: {}",
+                pattern
+            ));
+        }
+
+        let dataset_id = DatasetId::new();
+        let dataset_name = format!("{} files", paths.len());
+        let table_name = format!("dataset_{}", dataset_id.as_str().replace("-", "_"));
+
+        // Build UNION ALL query to combine all files
+        if options.ndjson {
+            // For NDJSON, read all files
+            let file_list: Vec<String> =
+                paths.iter().map(|p| format!("'{}'", p.display())).collect();
+
+            // Find the largest file size and add 20% buffer
+            let max_file_size = paths
+                .iter()
+                .filter_map(|p| std::fs::metadata(p).ok())
+                .map(|m| m.len())
+                .max()
+                .unwrap_or(268435456);
+            let max_size = (max_file_size as f64 * 1.2) as u64;
+
+            let query = format!(
+                "CREATE TABLE {} AS SELECT * FROM read_json_auto([{}], format='newline_delimited', maximum_object_size={})",
+                table_name,
+                file_list.join(", "),
+                max_size
+            );
+            self.session_conn.execute(&query, [])?;
+        } else {
+            // For regular JSON with multiple files
+            let file_list: Vec<String> =
+                paths.iter().map(|p| format!("'{}'", p.display())).collect();
+
+            let query = if options.records_expr == "@" {
+                // Root level arrays
+                // Find the largest file size and add 20% buffer
+                let max_file_size = paths
+                    .iter()
+                    .filter_map(|p| std::fs::metadata(p).ok())
+                    .map(|m| m.len())
+                    .max()
+                    .unwrap_or(268435456);
+                let max_size = (max_file_size as f64 * 1.2) as u64;
+
+                format!(
+                    "CREATE TABLE {} AS SELECT * FROM read_json_auto([{}], maximum_object_size={})",
+                    table_name,
+                    file_list.join(", "),
+                    max_size
+                )
+            } else {
+                // Nested path extraction from multiple files
+                let field_name = options.records_expr.clone();
+
+                // Find the largest file size and add 20% buffer
+                let max_file_size = paths
+                    .iter()
+                    .filter_map(|p| std::fs::metadata(p).ok())
+                    .map(|m| m.len())
+                    .max()
+                    .unwrap_or(268435456); // Fallback to 256MB if we can't read any sizes
+                let max_size = (max_file_size as f64 * 1.2) as u64;
+
+                format!(
+                    "CREATE TABLE {} AS
+                    WITH json_data AS (
+                        SELECT * FROM read_json_auto([{}], maximum_object_size={})
+                    )
+                    SELECT item.* FROM (
+                        SELECT unnest(\"{}\") as item
+                        FROM json_data
+                    )",
+                    table_name,
+                    file_list.join(", "),
+                    max_size,
+                    field_name
+                )
+            };
+            self.session_conn.execute(&query, [])?;
+        }
+
+        // Get row and column counts
+        let (row_count, col_count) = self.get_table_stats(&table_name)?;
+
+        // Create metadata
+        let mut record = DatasetRecord::new(
+            dataset_id.clone(),
+            dataset_name,
+            SourceType::Json,
+            Some(pattern.to_string()),
+        );
+        record.row_count = Some(row_count);
+        record.column_count = Some(col_count);
+        record.insert(&self.session_conn)?;
+
+        // Create managed dataset
+        let dataset =
+            ManagedDataset::new(self.session_conn.clone(), dataset_id.clone(), table_name)?;
+
+        // Cache it
+        self.datasets
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to acquire dataset lock: {}", e))?
+            .insert(dataset_id.clone(), dataset.clone());
+
+        Ok(dataset_id)
+    }
+
+    /// Import CSV files using a glob pattern
+    ///
+    /// This allows loading multiple CSV files at once with patterns like "data/*.csv"
+    pub fn import_csv_glob(&self, pattern: &str, options: CsvImportOptions) -> Result<DatasetId> {
+        // Expand glob pattern
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for entry in glob(pattern)? {
+            match entry {
+                Ok(path) => paths.push(path),
+                Err(e) => {
+                    tracing::warn!("Error reading glob entry: {}", e);
+                }
+            }
+        }
+
+        if paths.is_empty() {
+            return Err(color_eyre::eyre::eyre!(
+                "No files matched pattern: {}",
+                pattern
+            ));
+        }
+
+        let dataset_id = DatasetId::new();
+        let dataset_name = format!("{} CSV files", paths.len());
+        let table_name = format!("dataset_{}", dataset_id.as_str().replace("-", "_"));
+
+        // Build query to read all CSV files
+        let delimiter = if options.delimiter == '\t' {
+            "\\t".to_string()
+        } else {
+            options.delimiter.to_string()
+        };
+
+        let quote = options
+            .quote_char
+            .map(|c| format!(", quote = '{}'", c))
+            .unwrap_or_default();
+
+        let file_list: Vec<String> = paths.iter().map(|p| format!("'{}'", p.display())).collect();
+
+        let query = format!(
+            "CREATE TABLE {} AS SELECT * FROM read_csv([{}], header = {}, delim = '{}'{}) ",
+            table_name,
+            file_list.join(", "),
+            options.has_header,
+            delimiter,
+            quote
+        );
+
+        self.session_conn.execute(&query, [])?;
+
+        // Get row and column counts
+        let (row_count, col_count) = self.get_table_stats(&table_name)?;
+
+        // Create metadata
+        let mut record = DatasetRecord::new(
+            dataset_id.clone(),
+            dataset_name,
+            SourceType::Csv,
+            Some(pattern.to_string()),
+        );
+        record.row_count = Some(row_count);
+        record.column_count = Some(col_count);
+        record.insert(&self.session_conn)?;
+
+        // Create managed dataset
+        let dataset =
+            ManagedDataset::new(self.session_conn.clone(), dataset_id.clone(), table_name)?;
+
+        // Cache it
+        self.datasets
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to acquire dataset lock: {}", e))?
+            .insert(dataset_id.clone(), dataset.clone());
+
+        Ok(dataset_id)
+    }
 }
 
 // Clean up session database when DataService is dropped
@@ -413,5 +765,174 @@ mod tests {
 
         assert_eq!(dataset.row_count().unwrap(), 2);
         assert_eq!(dataset.column_count().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_import_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("test.json");
+
+        let mut file = std::fs::File::create(&json_path).unwrap();
+        writeln!(
+            file,
+            r#"[{{"id": 1, "name": "Alice"}}, {{"id": 2, "name": "Bob"}}]"#
+        )
+        .unwrap();
+
+        let service = create_test_service(temp_dir.path());
+        let options = JsonImportOptions::default();
+
+        let dataset_id = service.import_json(json_path, options).unwrap();
+        let dataset = service.get_dataset(&dataset_id).unwrap();
+
+        assert_eq!(dataset.row_count().unwrap(), 2);
+        assert_eq!(dataset.column_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_import_ndjson() {
+        let temp_dir = TempDir::new().unwrap();
+        let ndjson_path = temp_dir.path().join("test.ndjson");
+
+        let mut file = std::fs::File::create(&ndjson_path).unwrap();
+        writeln!(file, r#"{{"id": 1, "name": "Alice"}}"#).unwrap();
+        writeln!(file, r#"{{"id": 2, "name": "Bob"}}"#).unwrap();
+        writeln!(file, r#"{{"id": 3, "name": "Charlie"}}"#).unwrap();
+
+        let service = create_test_service(temp_dir.path());
+        let options = JsonImportOptions::ndjson();
+
+        let dataset_id = service.import_json(ndjson_path, options).unwrap();
+        let dataset = service.get_dataset(&dataset_id).unwrap();
+
+        assert_eq!(dataset.row_count().unwrap(), 3);
+        assert_eq!(dataset.column_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_import_json_nested_single_level() {
+        let temp_dir = TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("nested.json");
+
+        let mut file = std::fs::File::create(&json_path).unwrap();
+        writeln!(
+            file,
+            r#"{{"data": [{{"id": 1, "value": 100}}, {{"id": 2, "value": 200}}]}}"#
+        )
+        .unwrap();
+
+        let service = create_test_service(temp_dir.path());
+        let options = JsonImportOptions::with_records_expr("data");
+
+        let dataset_id = service.import_json(json_path, options).unwrap();
+        let dataset = service.get_dataset(&dataset_id).unwrap();
+
+        assert_eq!(dataset.row_count().unwrap(), 2);
+        assert_eq!(dataset.column_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_import_json_nested_multi_level() {
+        let temp_dir = TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("deeply_nested.json");
+
+        let mut file = std::fs::File::create(&json_path).unwrap();
+        writeln!(
+            file,
+            r#"{{"response": {{"results": [{{"id": 1, "name": "Alice"}}, {{"id": 2, "name": "Bob"}}]}}}}"#
+        )
+        .unwrap();
+
+        let service = create_test_service(temp_dir.path());
+        let options = JsonImportOptions::with_records_expr("response.results");
+
+        let dataset_id = service.import_json(json_path, options).unwrap();
+        let dataset = service.get_dataset(&dataset_id).unwrap();
+
+        assert_eq!(dataset.row_count().unwrap(), 2);
+        assert_eq!(dataset.column_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_import_json_with_records_attribute() {
+        // This tests the user's specific use case: {"Records": [...]}
+        let temp_dir = TempDir::new().unwrap();
+        let json_path = temp_dir.path().join("records.json");
+
+        let mut file = std::fs::File::create(&json_path).unwrap();
+        writeln!(
+            file,
+            r#"{{"Records": [{{"id": 1, "name": "Alice", "email": "alice@example.com"}}, {{"id": 2, "name": "Bob", "email": "bob@example.com"}}]}}"#
+        )
+        .unwrap();
+
+        let service = create_test_service(temp_dir.path());
+        let options = JsonImportOptions::with_records_expr("Records");
+
+        let dataset_id = service.import_json(json_path, options).unwrap();
+        let dataset = service.get_dataset(&dataset_id).unwrap();
+
+        assert_eq!(dataset.row_count().unwrap(), 2);
+        assert_eq!(dataset.column_count().unwrap(), 3); // id, name, email
+    }
+
+    #[test]
+    fn test_import_csv_glob() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create first CSV file
+        let csv1 = temp_dir.path().join("data1.csv");
+        let mut file1 = std::fs::File::create(&csv1).unwrap();
+        writeln!(file1, "id,name").unwrap();
+        writeln!(file1, "1,Alice").unwrap();
+
+        // Create second CSV file
+        let csv2 = temp_dir.path().join("data2.csv");
+        let mut file2 = std::fs::File::create(&csv2).unwrap();
+        writeln!(file2, "id,name").unwrap();
+        writeln!(file2, "2,Bob").unwrap();
+
+        let service = create_test_service(temp_dir.path());
+        let options = CsvImportOptions::default();
+
+        let pattern = temp_dir
+            .path()
+            .join("data*.csv")
+            .to_string_lossy()
+            .to_string();
+        let dataset_id = service.import_csv_glob(&pattern, options).unwrap();
+        let dataset = service.get_dataset(&dataset_id).unwrap();
+
+        // Should have combined rows from both files
+        assert_eq!(dataset.row_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_import_json_glob() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create first JSON file
+        let json1 = temp_dir.path().join("data1.json");
+        let mut file1 = std::fs::File::create(&json1).unwrap();
+        writeln!(file1, r#"[{{"id": 1, "name": "Alice"}}]"#).unwrap();
+
+        // Create second JSON file
+        let json2 = temp_dir.path().join("data2.json");
+        let mut file2 = std::fs::File::create(&json2).unwrap();
+        writeln!(file2, r#"[{{"id": 2, "name": "Bob"}}]"#).unwrap();
+
+        let service = create_test_service(temp_dir.path());
+        let options = JsonImportOptions::default();
+
+        let pattern = temp_dir
+            .path()
+            .join("data*.json")
+            .to_string_lossy()
+            .to_string();
+        let dataset_id = service.import_json_glob(&pattern, options).unwrap();
+        let dataset = service.get_dataset(&dataset_id).unwrap();
+
+        // Should have combined rows from both files
+        assert_eq!(dataset.row_count().unwrap(), 2);
     }
 }

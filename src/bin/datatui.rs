@@ -5,7 +5,11 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use datatui::{core::CsvImportOptions, logging, tui::App};
+use datatui::{
+    core::{CsvImportOptions, JsonImportOptions},
+    logging,
+    tui::App,
+};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
@@ -19,7 +23,12 @@ struct Args {
     #[arg(long = "logging", value_enum)]
     logging: Option<LogLevel>,
 
-    /// CSV file to load on startup
+    /// For JSON files: specify which attribute contains the records array
+    /// Examples: "Records", "data", "response.items"
+    #[arg(long = "json-records", default_value = "@")]
+    json_records: String,
+
+    /// File or glob pattern to load on startup (e.g., data.json, data/*.csv)
     file_path: Option<PathBuf>,
 }
 
@@ -60,14 +69,41 @@ fn main() -> Result<()> {
 
     // If a file path is provided, import it
     if let Some(file_path) = args.file_path {
-        if file_path.extension().and_then(|s| s.to_str()) == Some("csv") {
-            // Import CSV file
-            let options = CsvImportOptions::default();
-            let dataset_id = app.data_service().import_csv(file_path, options)?;
-            app.load_dataset(&dataset_id)?;
-        } else {
-            eprintln!("Unsupported file type. Only CSV files are supported for now.");
-            return Ok(());
+        let extension = file_path.extension().and_then(|s| s.to_str());
+        match extension {
+            Some("csv") => {
+                // Import CSV file
+                let options = CsvImportOptions::default();
+                let dataset_id = app.data_service().import_csv(file_path, options)?;
+                app.load_dataset(&dataset_id)?;
+            }
+            Some("json") => {
+                // Import JSON file with custom records path
+                let options = if args.json_records == "@" {
+                    JsonImportOptions::default()
+                } else {
+                    JsonImportOptions::with_records_expr(&args.json_records)
+                };
+                let dataset_id = app.data_service().import_json(file_path, options)?;
+                app.load_dataset(&dataset_id)?;
+            }
+            Some("ndjson") | Some("jsonl") => {
+                // Import NDJSON file
+                let options = JsonImportOptions::ndjson();
+                let dataset_id = app.data_service().import_json(file_path, options)?;
+                app.load_dataset(&dataset_id)?;
+            }
+            Some("parquet") => {
+                // Import Parquet file
+                let dataset_id = app.data_service().import_parquet(file_path)?;
+                app.load_dataset(&dataset_id)?;
+            }
+            _ => {
+                eprintln!(
+                    "Unsupported file type. Supported formats: CSV, JSON, NDJSON/JSONL, Parquet"
+                );
+                return Ok(());
+            }
         }
     }
 
