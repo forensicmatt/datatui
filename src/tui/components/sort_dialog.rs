@@ -339,7 +339,7 @@ impl Component for SortDialog {
         frame.render_widget(content_block, content_area);
 
         // Calculate max visible rows
-        let max_rows = inner.height.saturating_sub(1) as usize;
+        let max_rows = inner.height.saturating_sub(0) as usize;
         let list_inner = inner.inner(Margin {
             vertical: 0,
             horizontal: 1,
