@@ -2355,10 +2355,16 @@ impl Component for DataTableContainer {
                     self.busy_progress = 0.0;
                 }
                 // Process next batch if an embeddings job is active
-                if let Some(done) = self.process_next_embeddings_batch()? {
-                    if done {
+                match self.process_next_embeddings_batch() {
+                    Ok(Some(done)) if done => {
                         // Finalize embeddings column
-                        self.finalize_embeddings_job()?;
+                        if let Err(e) = self.finalize_embeddings_job() {
+                            tracing::error!("Error finalizing embeddings job: {}", e);
+                            self.busy_active = false;
+                            self.busy_message.clear();
+                            self.busy_progress = 0.0;
+                            return Ok(None);
+                        }
                         self.busy_active = false;
                         self.busy_message.clear();
                         self.busy_progress = 0.0;
@@ -2377,9 +2383,21 @@ impl Component for DataTableContainer {
                             return Ok(None);
                         }
                         return Ok(Some(Action::SaveWorkspaceState));
-                    } else {
+                    }
+                    Ok(Some(_)) => {
                         // Continue on next render
                         return Ok(None);
+                    }
+                    Ok(None) => {
+                        // No embeddings job active
+                    }
+                    Err(e) => {
+                        // Error processing batch - clear busy state
+                        tracing::error!("Error processing embeddings batch: {}", e);
+                        self.in_progress_embeddings = None;
+                        self.busy_active = false;
+                        self.busy_message.clear();
+                        self.busy_progress = 0.0;
                     }
                 }
                 if let Some(p) = self.queued_pca.take() {
