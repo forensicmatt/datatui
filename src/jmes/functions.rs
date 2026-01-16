@@ -1,5 +1,5 @@
-use jmespath::{Context, Rcvar, Runtime};
 use jmespath::functions::{ArgumentType, CustomFunction, Signature};
+use jmespath::{Context, Rcvar, Runtime};
 
 /// Register all custom JMESPath functions available to the application.
 pub fn register_custom_functions(runtime: &mut Runtime) {
@@ -12,7 +12,7 @@ pub fn register_custom_functions(runtime: &mut Runtime) {
                     ArgumentType::String, // key-value separator
                     ArgumentType::String, // pair separator
                 ],
-                None
+                None,
             ),
             Box::new(|args: &[Rcvar], _ctx: &mut Context| {
                 // args[0]: input string
@@ -50,12 +50,45 @@ pub fn register_custom_functions(runtime: &mut Runtime) {
                     let key = split.next().unwrap_or("").trim();
                     let value = split.next().unwrap_or("").trim();
                     if !key.is_empty() {
-                        map.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+                        map.insert(
+                            key.to_string(),
+                            serde_json::Value::String(value.to_string()),
+                        );
                     }
                 }
 
                 let var = jmespath::Variable::try_from(serde_json::Value::Object(map))?;
                 Ok(Rcvar::new(var))
+            }),
+        )),
+    );
+
+    // json_to_object(string) -> object
+    // Parses a JSON string and returns it as a JSON object/value
+    runtime.register_function(
+        "json_to_object",
+        Box::new(CustomFunction::new(
+            Signature::new(vec![ArgumentType::String], None),
+            Box::new(|args: &[Rcvar], _ctx: &mut Context| {
+                // Get the input string
+                let json_str = args
+                    .first()
+                    .and_then(|v| v.as_string())
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+
+                // Try to parse the JSON string
+                match serde_json::from_str::<serde_json::Value>(json_str) {
+                    Ok(json_value) => {
+                        // Successfully parsed - convert to JMESPath variable
+                        let var = jmespath::Variable::try_from(json_value)?;
+                        Ok(Rcvar::new(var))
+                    }
+                    Err(_) => {
+                        // If parsing fails, return null
+                        Ok(Rcvar::new(jmespath::Variable::Null))
+                    }
+                }
             }),
         )),
     );
@@ -162,5 +195,3 @@ pub fn register_custom_functions(runtime: &mut Runtime) {
         )),
     );
 }
-
-
