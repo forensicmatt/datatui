@@ -16,6 +16,8 @@ pub enum Action {
     End,
     GoToTop,
     GoToBottom,
+    PageLeft,
+    PageRight,
 
     // Data Operations
     Sort,
@@ -78,6 +80,8 @@ impl Action {
             Action::End => "Go to end of row",
             Action::GoToTop => "Go to first row",
             Action::GoToBottom => "Go to last row",
+            Action::PageLeft => "Page left",
+            Action::PageRight => "Page right",
             Action::Sort => "Sort column",
             Action::Filter => "Filter data",
             Action::Find => "Find in data",
@@ -123,7 +127,9 @@ impl Action {
             | Action::Home
             | Action::End
             | Action::GoToTop
-            | Action::GoToBottom => ActionCategory::Navigation,
+            | Action::GoToBottom
+            | Action::PageLeft
+            | Action::PageRight => ActionCategory::Navigation,
 
             Action::Sort | Action::Filter | Action::Find | Action::Query => ActionCategory::DataOps,
 
@@ -170,6 +176,8 @@ impl Action {
             Action::End,
             Action::GoToTop,
             Action::GoToBottom,
+            Action::PageLeft,
+            Action::PageRight,
             Action::Sort,
             Action::Filter,
             Action::Find,

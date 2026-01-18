@@ -14,7 +14,9 @@
       "PageUp": "PageUp",
       "PageDown": "PageDown",
       "Home": "Home",
-      "End": "End"
+      "End": "End",
+      "Ctrl+Left": "PageLeft",
+      "Ctrl+Right": "PageRight"
     },
     "DataTable": {
       "k": "MoveUp",

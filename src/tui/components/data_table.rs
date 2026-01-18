@@ -359,6 +359,23 @@ impl DataTable {
         Ok(())
     }
 
+    /// Page left (horizontal)
+    fn page_left(&mut self) {
+        self.cursor.col = self.cursor.col.saturating_sub(self.viewport.visible_cols);
+        self.ensure_cursor_visible();
+    }
+
+    /// Page right (horizontal)
+    fn page_right(&mut self) -> Result<()> {
+        let visible_col_count = self.visible_column_count();
+        if visible_col_count > 0 {
+            self.cursor.col = (self.cursor.col + self.viewport.visible_cols)
+                .min(visible_col_count.saturating_sub(1));
+            self.ensure_cursor_visible();
+        }
+        Ok(())
+    }
+
     /// Get information about the currently selected cell
     pub fn get_current_cell_info(&self) -> Result<super::CellInfo> {
         let column_names = self.dataset.column_names()?;
@@ -911,6 +928,14 @@ impl Component for DataTable {
             }
             Action::End => {
                 self.go_end()?;
+                Ok(true)
+            }
+            Action::PageLeft => {
+                self.page_left();
+                Ok(true)
+            }
+            Action::PageRight => {
+                self.page_right()?;
                 Ok(true)
             }
             // Other actions not handled
