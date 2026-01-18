@@ -390,7 +390,7 @@ impl DataTable {
         let (value, data_type) = if self.cursor.col < batch.num_columns() {
             let column = batch.column(self.cursor.col);
             let value_str = self.format_cell_value(column, 0); // row 0 since we fetched just 1 row
-            let type_str = format!("{:?}", column.data_type());
+            let type_str = self.format_data_type(column.data_type());
             (value_str, Some(type_str))
         } else {
             ("Error: Column out of bounds".to_string(), None)
@@ -803,6 +803,50 @@ impl DataTable {
             _ => {
                 format!("{:?}", column.slice(row_idx, 1))
             }
+        }
+    }
+
+    /// Format a DataType for display (simplified for complex types)
+    fn format_data_type(&self, data_type: &DataType) -> String {
+        match data_type {
+            DataType::Null => "Null".to_string(),
+            DataType::Boolean => "Boolean".to_string(),
+            DataType::Int8 => "Int8".to_string(),
+            DataType::Int16 => "Int16".to_string(),
+            DataType::Int32 => "Int32".to_string(),
+            DataType::Int64 => "Int64".to_string(),
+            DataType::UInt8 => "UInt8".to_string(),
+            DataType::UInt16 => "UInt16".to_string(),
+            DataType::UInt32 => "UInt32".to_string(),
+            DataType::UInt64 => "UInt64".to_string(),
+            DataType::Float16 => "Float16".to_string(),
+            DataType::Float32 => "Float32".to_string(),
+            DataType::Float64 => "Float64".to_string(),
+            DataType::Decimal32(_, _) => "Decimal32".to_string(),
+            DataType::Decimal64(_, _) => "Decimal64".to_string(),
+            DataType::Decimal128(_, _) => "Decimal128".to_string(),
+            DataType::Decimal256(_, _) => "Decimal256".to_string(),
+            DataType::Timestamp(_, _) => "Timestamp".to_string(),
+            DataType::Date32 => "Date32".to_string(),
+            DataType::Date64 => "Date64".to_string(),
+            DataType::Time32(_) => "Time32".to_string(),
+            DataType::Time64(_) => "Time64".to_string(),
+            DataType::Interval(_) => "Interval".to_string(),
+            DataType::Binary => "Binary".to_string(),
+            DataType::LargeBinary => "LargeBinary".to_string(),
+            DataType::FixedSizeBinary(_) => "FixedSizeBinary".to_string(),
+            DataType::Utf8 => "Utf8".to_string(),
+            DataType::LargeUtf8 => "LargeUtf8".to_string(),
+            DataType::Struct(_) => "Struct".to_string(),
+            DataType::List(_) => "List".to_string(),
+            DataType::ListView(_) => "ListView".to_string(),
+            DataType::LargeList(_) => "LargeList".to_string(),
+            DataType::LargeListView(_) => "LargeListView".to_string(),
+            DataType::FixedSizeList(_, _) => "FixedSizeList".to_string(),
+            DataType::Map(_, _) => "Map".to_string(),
+            DataType::Union(_, _) => "Union".to_string(),
+            DataType::Dictionary(_, _) => "Dictionary".to_string(),
+            _ => format!("{}", data_type),
         }
     }
 
