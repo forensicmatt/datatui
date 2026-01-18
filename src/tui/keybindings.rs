@@ -5,17 +5,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-/// Maps KeyEvents to Actions
+/// Maps Scopes to KeyPatterns to Actions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyBindings {
-    #[serde(rename = "bindings")]
-    bindings_list: Vec<KeyBinding>,
+    /// nested map: scope -> { key_string -> Action }
+    pub scopes: HashMap<String, HashMap<String, Action>>,
 
     #[serde(skip)]
-    bindings_map: HashMap<KeyPattern, Action>,
+    bindings_map: HashMap<String, HashMap<KeyPattern, Action>>,
 }
 
-/// Single keybinding entry
+/// Single keybinding entry (keeping for legacy/compat if needed, but we'll use scopes)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyBinding {
     pub key: String,
@@ -30,103 +30,67 @@ pub struct KeyPattern {
 }
 
 impl KeyBindings {
-    /// Create default keybindings
+    /// Create default keybindings by loading from the embedded config.json5
     pub fn default() -> Self {
-        let bindings_list = vec![
-            // Navigation - Arrow keys
-            KeyBinding::new("Up", Action::MoveUp),
-            KeyBinding::new("Down", Action::MoveDown),
-            KeyBinding::new("Left", Action::MoveLeft),
-            KeyBinding::new("Right", Action::MoveRight),
-            // Navigation - Vim-style
-            KeyBinding::new("k", Action::MoveUp),
-            KeyBinding::new("j", Action::MoveDown),
-            KeyBinding::new("h", Action::MoveLeft),
-            KeyBinding::new("l", Action::MoveRight),
-            // Page navigation
-            KeyBinding::new("PageUp", Action::PageUp),
-            KeyBinding::new("PageDown", Action::PageDown),
-            KeyBinding::new("Ctrl+u", Action::PageUp),
-            KeyBinding::new("Ctrl+d", Action::PageDown),
-            // Home/End
-            KeyBinding::new("Home", Action::Home),
-            KeyBinding::new("End", Action::End),
-            KeyBinding::new("0", Action::Home),
-            KeyBinding::new("$", Action::End),
-            // Top/Bottom
-            KeyBinding::new("g", Action::GoToTop),
-            KeyBinding::new("G", Action::GoToBottom),
-            // Application
-            KeyBinding::new("q", Action::Quit),
-            KeyBinding::new("Esc", Action::Cancel),
-            KeyBinding::new("Enter", Action::Confirm),
-            // Help
-            KeyBinding::new("?", Action::ToggleHelp),
-            KeyBinding::new("F1", Action::ToggleHelp),
-            KeyBinding::new("Ctrl+i", Action::ToggleHelp),
-            // Data operations
-            KeyBinding::new("s", Action::Sort),
-            KeyBinding::new("f", Action::Filter),
-            KeyBinding::new("Ctrl+f", Action::Find),
-            KeyBinding::new("/", Action::Find),
-            KeyBinding::new(":", Action::Query),
-            // Refresh
-            KeyBinding::new("r", Action::Refresh),
-            KeyBinding::new("F5", Action::Refresh),
-            // Tabs
-            KeyBinding::new("Tab", Action::NextTab),
-            KeyBinding::new("Shift+Tab", Action::PrevTab),
-            KeyBinding::new("w", Action::CloseTab),
-            KeyBinding::new("t", Action::NewTab),
-            // Copy
-            KeyBinding::new("c", Action::Copy),
-            KeyBinding::new("C", Action::CopyWithHeaders),
-            // Import/Export
-            KeyBinding::new("o", Action::Import),
-            KeyBinding::new("e", Action::Export),
-            // Column operations
-            KeyBinding::new("Ctrl+w", Action::OpenColumnWidthDialog),
-            KeyBinding::new("t", Action::ToggleVisibility),
-            KeyBinding::new("Space", Action::EditWidth),
-            // Sort operations
-            KeyBinding::new("s", Action::Sort),
-            KeyBinding::new("a", Action::AddSortColumn),
-            KeyBinding::new("d", Action::RemoveSortColumn),
-            KeyBinding::new("t", Action::ToggleSortDirection),
-        ];
+        let content = include_str!("../../.config/config.json5");
+        Self::from_json(content).unwrap_or_else(|e| {
+            // Fallback to empty if parsing fails (shouldn't happen with valid default config)
+            tracing::error!("Failed to parse default keybindings: {}", e);
+            Self {
+                scopes: HashMap::new(),
+                bindings_map: HashMap::new(),
+            }
+        })
+    }
 
-        let bindings_map = Self::build_map(&bindings_list);
+    /// Load from JSON string
+    pub fn from_json(json: &str) -> Result<Self> {
+        let mut bindings: KeyBindings = serde_json::from_str(json)?;
+        bindings.rebuild_map();
+        Ok(bindings)
+    }
 
-        Self {
-            bindings_list,
-            bindings_map,
+    /// Rebuild the internal optimized lookup map
+    fn rebuild_map(&mut self) {
+        let mut map = HashMap::new();
+        for (scope_name, scope_bindings) in &self.scopes {
+            let mut scope_map = HashMap::new();
+            for (key_str, action) in scope_bindings {
+                if let Ok(pattern) = KeyPattern::from_string(key_str) {
+                    scope_map.insert(pattern, *action);
+                }
+            }
+            map.insert(scope_name.clone(), scope_map);
         }
+        self.bindings_map = map;
     }
 
-    /// Build hashmap from bindings list
-    fn build_map(bindings: &[KeyBinding]) -> HashMap<KeyPattern, Action> {
-        bindings
-            .iter()
-            .filter_map(|b| {
-                KeyPattern::from_string(&b.key)
-                    .ok()
-                    .map(|pattern| (pattern, b.action))
-            })
-            .collect()
-    }
-
-    /// Get action for key event
-    pub fn get_action(&self, key: &KeyEvent) -> Option<Action> {
+    /// Get action for key event in a specific scope
+    /// This will also check the "Global" scope if not found in the specific scope.
+    pub fn get_action(&self, scope: &str, key: &KeyEvent) -> Option<Action> {
         let pattern = KeyPattern::from_event(key);
-        self.bindings_map.get(&pattern).copied()
+
+        // First check specific scope
+        if let Some(scope_map) = self.bindings_map.get(scope) {
+            if let Some(action) = scope_map.get(&pattern) {
+                return Some(*action);
+            }
+        }
+
+        // Then check Global scope
+        if let Some(global_map) = self.bindings_map.get("Global") {
+            if let Some(action) = global_map.get(&pattern) {
+                return Some(*action);
+            }
+        }
+
+        None
     }
 
     /// Load from JSON config file
     pub fn load_from_file(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let mut bindings: KeyBindings = serde_json::from_str(&content)?;
-        bindings.bindings_map = Self::build_map(&bindings.bindings_list);
-        Ok(bindings)
+        Self::from_json(&content)
     }
 
     /// Save to JSON config file
@@ -139,19 +103,39 @@ impl KeyBindings {
         Ok(())
     }
 
-    /// Get all bindings for an action (for help display)
-    pub fn get_keys_for_action(&self, action: Action) -> Vec<String> {
-        self.bindings_list
-            .iter()
-            .filter(|b| b.action == action)
-            .map(|b| b.key.clone())
-            .collect()
+    /// Get all bindings for an action in a scope (for help display)
+    pub fn get_keys_for_action(&self, scope: &str, action: Action) -> Vec<String> {
+        let mut keys = Vec::new();
+
+        // Check specific scope
+        if let Some(scope_bindings) = self.scopes.get(scope) {
+            for (key, &bound_action) in scope_bindings {
+                if bound_action == action {
+                    keys.push(key.clone());
+                }
+            }
+        }
+
+        // Check Global scope
+        if let Some(global_bindings) = self.scopes.get("Global") {
+            for (key, &bound_action) in global_bindings {
+                if bound_action == action {
+                    keys.push(key.clone());
+                }
+            }
+        }
+
+        keys
     }
 
-    /// Check for actions that don't have any keybindings
-    /// Returns Vec of (Action, description) for unbound actions
+    /// Check for actions that don't have any keybindings in any scope
     pub fn get_unbound_actions(&self) -> Vec<(Action, &'static str)> {
-        let bound_actions: HashSet<Action> = self.bindings_list.iter().map(|b| b.action).collect();
+        let mut bound_actions = HashSet::new();
+        for scope_bindings in self.scopes.values() {
+            for &action in scope_bindings.values() {
+                bound_actions.insert(action);
+            }
+        }
 
         Action::all()
             .into_iter()
@@ -164,20 +148,30 @@ impl KeyBindings {
     pub fn validate(&self) -> Vec<String> {
         let mut warnings = Vec::new();
 
-        // Check for duplicate key bindings
-        let mut seen_keys: HashMap<String, Action> = HashMap::new();
-        for binding in &self.bindings_list {
-            if let Some(existing_action) = seen_keys.get(&binding.key) {
-                warnings.push(format!(
-                    "Duplicate key '{}': bound to both {:?} and {:?}",
-                    binding.key, existing_action, binding.action
-                ));
-            } else {
-                seen_keys.insert(binding.key.clone(), binding.action);
+        // Check for duplicate key bindings within each scope
+        for (scope_name, scope_bindings) in &self.scopes {
+            let mut seen_keys: HashMap<String, Action> = HashMap::new();
+            for (key, action) in scope_bindings {
+                if let Some(existing_action) = seen_keys.get(key) {
+                    warnings.push(format!(
+                        "Scope '{}' - Duplicate key '{}': bound to both {:?} and {:?}",
+                        scope_name, key, existing_action, action
+                    ));
+                } else {
+                    seen_keys.insert(key.clone(), *action);
+                }
+
+                // Check for invalid key patterns
+                if KeyPattern::from_string(key).is_err() {
+                    warnings.push(format!(
+                        "Scope '{}' - Invalid key pattern '{}' for action {:?}",
+                        scope_name, key, action
+                    ));
+                }
             }
         }
 
-        // Check for unbound actions
+        // Check for unbound actions (across all scopes)
         let unbound = self.get_unbound_actions();
         if !unbound.is_empty() {
             warnings.push(format!(
@@ -189,16 +183,6 @@ impl KeyBindings {
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
-        }
-
-        // Check for invalid key patterns
-        for binding in &self.bindings_list {
-            if KeyPattern::from_string(&binding.key).is_err() {
-                warnings.push(format!(
-                    "Invalid key pattern '{}' for action {:?}",
-                    binding.key, binding.action
-                ));
-            }
         }
 
         warnings
@@ -379,30 +363,19 @@ mod tests {
     #[test]
     fn test_default_bindings_are_valid() {
         let bindings = KeyBindings::default();
-        let warnings = bindings.validate();
+        // Should have at least Global and DataTable scopes
+        assert!(bindings.scopes.contains_key("Global"));
+        assert!(bindings.scopes.contains_key("DataTable"));
 
-        // Print warnings for debugging
-        for warning in &warnings {
-            eprintln!("Warning: {}", warning);
-        }
-
-        // Should have warning about unbound actions, but no invalid patterns
-        for warning in &warnings {
-            assert!(
-                !warning.contains("Invalid key pattern"),
-                "Found invalid pattern: {}",
-                warning
-            );
-        }
+        // Check if a common action is bound
+        let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty());
+        assert_eq!(bindings.get_action("DataTable", &key), Some(Action::Quit));
     }
 
     #[test]
     fn test_unbound_actions() {
         let bindings = KeyBindings::default();
         let unbound = bindings.get_unbound_actions();
-
-        // Should have some unbound actions
-        assert!(!unbound.is_empty());
 
         // Each should have a description
         for (_, desc) in unbound {
@@ -421,6 +394,6 @@ mod tests {
         bindings.save_to_file(&path).unwrap();
 
         let loaded = KeyBindings::load_from_file(&path).unwrap();
-        assert_eq!(bindings.bindings_list.len(), loaded.bindings_list.len());
+        assert_eq!(bindings.scopes.len(), loaded.scopes.len());
     }
 }

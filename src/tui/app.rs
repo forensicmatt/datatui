@@ -330,8 +330,25 @@ impl App {
             }
         }
 
-        // Translate key to action
-        if let Some(action) = self.keybindings.get_action(&key) {
+        // Determine search scope for keybindings
+        let scope = if self.column_width_dialog.is_some() {
+            "ColumnWidthDialog"
+        } else if self.sort_dialog.is_some() {
+            "SortDialog"
+        } else if self.find_dialog.is_some() {
+            "FindDialog"
+        } else if let Some(dialog) = &self.find_all_results_dialog {
+            if dialog.is_focused() {
+                "FindAllResults"
+            } else {
+                "DataTable"
+            }
+        } else {
+            "DataTable"
+        };
+
+        // Translate key to action using the determined scope
+        if let Some(action) = self.keybindings.get_action(scope, &key) {
             self.handle_action(action)?;
         }
 
