@@ -47,6 +47,7 @@ pub enum Action {
     // Clipboard
     Copy,
     CopyWithHeaders,
+    CopyAll,
 
     // Column Operations
     ResizeColumn,
@@ -106,6 +107,7 @@ impl Action {
             Action::Cancel => "Cancel action",
             Action::Copy => "Copy cell",
             Action::CopyWithHeaders => "Copy with headers",
+            Action::CopyAll => "Copy all entries",
             Action::ResizeColumn => "Resize column",
             Action::HideColumn => "Hide column",
             Action::ShowAllColumns => "Show all columns",
@@ -155,7 +157,7 @@ impl Action {
 
             Action::Quit | Action::Confirm | Action::Cancel => ActionCategory::Application,
 
-            Action::Copy | Action::CopyWithHeaders => ActionCategory::Clipboard,
+            Action::Copy | Action::CopyWithHeaders | Action::CopyAll => ActionCategory::Clipboard,
 
             Action::ResizeColumn
             | Action::HideColumn
@@ -213,6 +215,7 @@ impl Action {
             Action::Cancel,
             Action::Copy,
             Action::CopyWithHeaders,
+            Action::CopyAll,
             Action::ResizeColumn,
             Action::HideColumn,
             Action::ShowAllColumns,

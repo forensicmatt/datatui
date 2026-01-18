@@ -7,6 +7,7 @@
 //! - Scrolling support
 
 use crate::tui::{Action, Component, Focusable, Theme};
+use arboard::Clipboard;
 use color_eyre::Result;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -215,32 +216,59 @@ impl MapViewerDialog {
                 CopyMode::Both => format!("{}: {}", entry.key, entry.value),
             };
 
-            // Copy to clipboard (implementation would use clipboard crate)
-            // For now, show a message
-            self.copy_message = Some(format!(
-                "Copied {} to clipboard",
-                match mode {
-                    CopyMode::Key => "key",
-                    CopyMode::Value => "value",
-                    CopyMode::Both => "key:value",
+            // Copy to clipboard
+            match Clipboard::new().and_then(|mut clipboard| clipboard.set_text(&content)) {
+                Ok(_) => {
+                    self.copy_message = Some(format!(
+                        "Copied {} to clipboard",
+                        match mode {
+                            CopyMode::Key => "key",
+                            CopyMode::Value => "value",
+                            CopyMode::Both => "key:value",
+                        }
+                    ));
                 }
-            ));
+                Err(e) => {
+                    self.copy_message = Some(format!("Failed to copy to clipboard: {}", e));
+                }
+            }
             self.message_timer = 30; // Show for ~30 frames
         }
     }
 
-    /// Copy all entries
+    /// Copy all entries as JSON
     fn copy_all(&mut self) {
-        let content: Vec<String> = self
+        // Create a JSON object from entries
+        let map: serde_json::Map<String, serde_json::Value> = self
             .entries
             .iter()
-            .map(|e| format!("{}: {}", e.key, e.value))
+            .map(|e| (e.key.clone(), serde_json::Value::String(e.value.clone())))
             .collect();
 
-        self.copy_message = Some(format!(
-            "Copied {} entries to clipboard",
-            self.entries.len()
-        ));
+        let json_value = serde_json::Value::Object(map);
+
+        // Serialize to pretty-printed JSON
+        let content_str = match serde_json::to_string_pretty(&json_value) {
+            Ok(json) => json,
+            Err(e) => {
+                self.copy_message = Some(format!("Failed to serialize JSON: {}", e));
+                self.message_timer = 30;
+                return;
+            }
+        };
+
+        // Copy to clipboard
+        match Clipboard::new().and_then(|mut clipboard| clipboard.set_text(&content_str)) {
+            Ok(_) => {
+                self.copy_message = Some(format!(
+                    "Copied {} entries as JSON to clipboard",
+                    self.entries.len()
+                ));
+            }
+            Err(e) => {
+                self.copy_message = Some(format!("Failed to copy to clipboard: {}", e));
+            }
+        }
         self.message_timer = 30;
     }
 
@@ -507,6 +535,11 @@ impl Component for MapViewerDialog {
                 self.copy_selected(CopyMode::Both);
                 Ok(true)
             }
+            Action::CopyAll => {
+                // a = Copy all
+                self.copy_all();
+                Ok(true)
+            }
             Action::ToggleVisibility => {
                 // Space = Toggle collapse
                 self.toggle_collapse();
@@ -532,6 +565,7 @@ impl Component for MapViewerDialog {
             Action::Confirm,
             Action::Copy,
             Action::CopyWithHeaders,
+            Action::CopyAll,
             Action::ToggleVisibility,
             Action::Cancel,
         ]

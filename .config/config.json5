@@ -82,10 +82,9 @@
     },
     "MapViewerDialog": {
       "Space": "ToggleVisibility",
-      "+": "ToggleVisibility",
-      "-": "ToggleVisibility",
       "c": "Copy",
-      "C": "CopyWithHeaders"
+      "C": "CopyWithHeaders",
+      "a": "CopyAll"
     }
   }
 }
