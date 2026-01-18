@@ -64,6 +64,13 @@ pub enum Action {
     AddSortColumn,
     RemoveSortColumn,
     ToggleSortDirection,
+
+    // DataFrame Details Dialog
+    OpenDetailsDialog,
+    SwitchDetailsTabLeft,
+    SwitchDetailsTabRight,
+    ToggleDetailsSort,
+    OpenMapViewer,
 }
 
 impl Action {
@@ -112,6 +119,11 @@ impl Action {
             Action::AddSortColumn => "Add column to sort",
             Action::RemoveSortColumn => "Remove column from sort",
             Action::ToggleSortDirection => "Toggle sort direction",
+            Action::OpenDetailsDialog => "Open DataFrame details dialog",
+            Action::SwitchDetailsTabLeft => "Switch to previous details tab",
+            Action::SwitchDetailsTabRight => "Switch to next details tab",
+            Action::ToggleDetailsSort => "Toggle sort order in details",
+            Action::OpenMapViewer => "Open map viewer for selected value",
         }
     }
 
@@ -158,6 +170,12 @@ impl Action {
             | Action::AddSortColumn
             | Action::RemoveSortColumn
             | Action::ToggleSortDirection => ActionCategory::DataOps,
+
+            Action::OpenDetailsDialog
+            | Action::SwitchDetailsTabLeft
+            | Action::SwitchDetailsTabRight
+            | Action::ToggleDetailsSort
+            | Action::OpenMapViewer => ActionCategory::DataOps,
 
             Action::Escape => ActionCategory::Application,
         }
@@ -208,6 +226,11 @@ impl Action {
             Action::AddSortColumn,
             Action::RemoveSortColumn,
             Action::ToggleSortDirection,
+            Action::OpenDetailsDialog,
+            Action::SwitchDetailsTabLeft,
+            Action::SwitchDetailsTabRight,
+            Action::ToggleDetailsSort,
+            Action::OpenMapViewer,
         ]
     }
 }

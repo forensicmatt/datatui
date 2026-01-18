@@ -44,6 +44,7 @@
       "C": "CopyWithHeaders",
       "o": "Import",
       "e": "Export",
+      "d": "OpenDetailsDialog",
       "Ctrl+w": "OpenColumnWidthDialog"
     },
     "ColumnWidthDialog": {
@@ -68,6 +69,23 @@
     },
     "FindAllResults": {
       "Tab": "NextTab"
+    },
+    "DataFrameDetailsDialog": {
+      "Left": "SwitchDetailsTabLeft",
+      "Right": "SwitchDetailsTabRight",
+      "h": "SwitchDetailsTabLeft",
+      "l": "SwitchDetailsTabRight",
+      "k": "MoveUp",
+      "j": "MoveDown",
+      "s": "ToggleDetailsSort",
+      "m": "OpenMapViewer"
+    },
+    "MapViewerDialog": {
+      "Space": "ToggleVisibility",
+      "+": "ToggleVisibility",
+      "-": "ToggleVisibility",
+      "c": "Copy",
+      "C": "CopyWithHeaders"
     }
   }
 }

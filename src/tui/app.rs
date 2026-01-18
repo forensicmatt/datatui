@@ -2,7 +2,8 @@ use crate::core::DatasetId;
 use crate::services::search_service::{FindOptions, SearchMode};
 use crate::services::{DataService, SearchService};
 use crate::tui::components::{
-    CellViewer, ColumnWidthDialog, DataTable, FindAllResultsDialog, FindDialog, SortDialog,
+    CellViewer, ColumnWidthDialog, DataFrameDetailsDialog, DataTable, FindAllResultsDialog,
+    FindDialog, SortDialog,
 };
 use crate::tui::{Action, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
@@ -38,6 +39,9 @@ pub struct App {
     /// Sort dialog(when active)
     sort_dialog: Option<SortDialog>,
 
+    /// DataFrame details dialog (when active)
+    dataframe_details_dialog: Option<DataFrameDetailsDialog>,
+
     /// Last search parameters (for F3 repeat search)
     last_search: Option<(String, FindOptions, SearchMode)>,
 
@@ -66,6 +70,7 @@ impl App {
             find_all_results_dialog: None,
             column_width_dialog: None,
             sort_dialog: None,
+            dataframe_details_dialog: None,
             last_search: None,
             keybindings,
             theme,
@@ -335,6 +340,13 @@ impl App {
             "ColumnWidthDialog"
         } else if self.sort_dialog.is_some() {
             "SortDialog"
+        } else if let Some(ref details_dialog) = self.dataframe_details_dialog {
+            // Check if MapViewerDialog is active inside DataFrameDetailsDialog
+            if details_dialog.has_map_viewer() {
+                "MapViewerDialog"
+            } else {
+                "DataFrameDetailsDialog"
+            }
         } else if self.find_dialog.is_some() {
             "FindDialog"
         } else if let Some(dialog) = &self.find_all_results_dialog {
@@ -424,6 +436,20 @@ impl App {
                     // }
 
                     self.sort_dialog = Some(dialog);
+                }
+                return Ok(());
+            }
+
+            Action::OpenDetailsDialog => {
+                if let Some(table) = &mut self.data_table {
+                    let dataset = table.dataset().clone();
+                    let columns = table.get_all_columns();
+                    let (_row, col_idx) = table.get_cursor_position();
+
+                    let mut dialog = DataFrameDetailsDialog::new(dataset, columns, col_idx);
+                    dialog.set_focused(true);
+                    table.set_focused(false);
+                    self.dataframe_details_dialog = Some(dialog);
                 }
                 return Ok(());
             }
@@ -634,6 +660,19 @@ impl App {
             return Ok(());
         }
 
+        // Route to DataFrame details dialog if active (MODAL)
+        if let Some(dialog) = &mut self.dataframe_details_dialog {
+            let keep_open = dialog.handle_action(action)?;
+            if !keep_open {
+                // Restore focus to table
+                if let Some(table) = &mut self.data_table {
+                    table.set_focused(true);
+                }
+                self.dataframe_details_dialog = None;
+            }
+            return Ok(());
+        }
+
         // Route to find dialog if active
         if let Some(dialog) = &mut self.find_dialog {
             let keep_open = dialog.handle_action(action)?;
@@ -751,6 +790,12 @@ impl App {
         // Render column width dialog overlay if active
         if let Some(dialog) = &mut self.column_width_dialog {
             let dialog_area = Self::centered_rect(70, 70, area);
+            dialog.render(frame, dialog_area);
+        }
+
+        // Render DataFrame details dialog overlay if active
+        if let Some(dialog) = &mut self.dataframe_details_dialog {
+            let dialog_area = Self::centered_rect(85, 80, area);
             dialog.render(frame, dialog_area);
         }
 

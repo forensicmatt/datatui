@@ -427,6 +427,19 @@ impl ManagedDataset {
 
         format!("ORDER BY {}", clauses.join(", "))
     }
+
+    /// Get the table name for this dataset
+    pub fn table_name(&self) -> &str {
+        &self.table_name
+    }
+
+    /// Get a reference to the database connection
+    ///
+    /// This is provided for advanced use cases like dialog components that need
+    /// to execute custom queries for statistics and aggregations.
+    pub fn connection(&self) -> &Connection {
+        &self.conn
+    }
 }
 
 // Clone implementation for sharing datasets across threads
