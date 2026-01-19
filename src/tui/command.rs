@@ -21,6 +21,16 @@ pub enum Command {
     Help,
     /// Navigate to a specific row and optional column
     GotoRow { row: usize, column: Option<usize> },
+    /// Manage columns (set visibility, hide, width)
+    Columns(ColumnsCommand),
+}
+
+/// Subcommands for the columns command
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColumnsCommand {
+    Set(Vec<(String, Option<u16>)>),
+    Hide(Vec<String>),
+    Width(String, Option<u16>), // None = auto
 }
 
 /// Types of dialogs that can be opened
@@ -33,7 +43,9 @@ pub enum DialogType {
 impl Command {
     /// Get all available command names
     fn all_commands() -> &'static [&'static str] {
-        &["quit", "q", "find", "sort", "dialog", "help", "goto"]
+        &[
+            "quit", "q", "find", "sort", "dialog", "help", "goto", "columns",
+        ]
     }
 
     /// Find similar commands using simple string distance
@@ -138,6 +150,81 @@ impl Command {
 
             "help" => Ok(Command::Help),
 
+            "columns" => {
+                if parts.len() < 2 {
+                    return Err("Usage: columns <set|hide|width> ...".to_string());
+                }
+                let subcommand = parts[1];
+                let args_str = parts[2..].join(" ");
+
+                match subcommand {
+                    "set" => {
+                        if parts.len() < 3 {
+                            return Err(
+                                "Usage: columns set <col> [width] [, <col> [width]...]".to_string()
+                            );
+                        }
+                        // Re-join and split by comma to handle multiple columns
+                        let input = parts[2..].join(" ");
+                        let col_entries: Vec<&str> = input.split(',').collect();
+                        let mut columns = Vec::new();
+
+                        for entry in col_entries {
+                            let entry_parts: Vec<&str> = entry.trim().split_whitespace().collect();
+                            if entry_parts.is_empty() {
+                                continue;
+                            }
+                            let name = entry_parts[0].to_string();
+                            let width = if entry_parts.len() > 1 {
+                                entry_parts[1].parse::<u16>().ok()
+                            } else {
+                                None
+                            };
+                            columns.push((name, width));
+                        }
+                        if columns.is_empty() {
+                            return Err("No columns specified".to_string());
+                        }
+                        Ok(Command::Columns(ColumnsCommand::Set(columns)))
+                    }
+                    "hide" => {
+                        if parts.len() < 3 {
+                            return Err("Usage: columns hide <col> [, <col>...]".to_string());
+                        }
+                        let input = parts[2..].join(" ");
+                        let cols: Vec<String> = input
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+
+                        if cols.is_empty() {
+                            return Err("No columns specified".to_string());
+                        }
+                        Ok(Command::Columns(ColumnsCommand::Hide(cols)))
+                    }
+                    "width" => {
+                        if parts.len() < 4 {
+                            return Err("Usage: columns width <col> <width|auto>".to_string());
+                        }
+                        let col = parts[2].to_string();
+                        let width_arg = parts[3];
+                        let width = if width_arg == "auto" {
+                            None
+                        } else {
+                            match width_arg.parse::<u16>() {
+                                Ok(w) => Some(w),
+                                Err(_) => {
+                                    return Err("Width must be a number or 'auto'".to_string())
+                                }
+                            }
+                        };
+                        Ok(Command::Columns(ColumnsCommand::Width(col, width)))
+                    }
+                    _ => Err(format!("Unknown columns subcommand: {}", subcommand)),
+                }
+            }
+
             "goto" => {
                 // Check if subcommand is provided
                 if parts.len() < 2 {
@@ -208,7 +295,8 @@ impl Command {
             Command::Sort { .. } => "Sort data by columns",
             Command::Dialog { .. } => "Open a dialog",
             Command::Help => "Show command help",
-            Command::GotoRow { .. } => "Navigate to specific row/column",
+            Command::GotoRow { .. } => "Navigate to a specific row and column",
+            Command::Columns(_) => "Manage columns (set, hide, width)",
         }
     }
 }
@@ -338,6 +426,67 @@ impl Command {
                         .goto_cell(*row, &column_name)
                         .map_err(|e| format!("Navigation failed: {}", e))?;
                 }
+                Ok(())
+            }
+
+            Command::Columns(cmd) => {
+                let table = ctx.data_table.as_mut().ok_or("No active data table")?;
+                match cmd {
+                    ColumnsCommand::Set(columns) => {
+                        let available_cols =
+                            table.dataset().column_names().map_err(|e| e.to_string())?;
+
+                        // Create set of columns to be visible
+                        let visible_set: std::collections::HashSet<String> =
+                            columns.iter().map(|(n, _)| n.clone()).collect();
+
+                        // Validate existence
+                        for name in &visible_set {
+                            if !available_cols.contains(name) {
+                                return Err(format!("Column '{}' does not exist", name));
+                            }
+                        }
+
+                        // Apply visibility
+                        // Note: We iterate available cols to ensure we handle all of them
+                        for col in &available_cols {
+                            let should_be_visible = visible_set.contains(col);
+                            if let Err(e) = table
+                                .dataset_mut()
+                                .set_column_visible(col, should_be_visible)
+                            {
+                                return Err(format!(
+                                    "Failed to update visibility for '{}': {}",
+                                    col, e
+                                ));
+                            }
+                        }
+
+                        // Apply widths
+                        for (name, width) in columns {
+                            if let Err(e) = table.dataset_mut().set_column_width(name, *width) {
+                                return Err(format!("Failed to set width for '{}': {}", name, e));
+                            }
+                        }
+                    }
+                    ColumnsCommand::Hide(columns) => {
+                        for col in columns {
+                            let curr_vis = table.dataset().is_column_visible(col);
+                            if let Err(e) = table.dataset_mut().set_column_visible(col, !curr_vis) {
+                                return Err(format!(
+                                    "Failed to toggle visibility for '{}': {}",
+                                    col, e
+                                ));
+                            }
+                        }
+                    }
+                    ColumnsCommand::Width(col, width) => {
+                        if let Err(e) = table.dataset_mut().set_column_width(col, *width) {
+                            return Err(format!("Failed to set width for '{}': {}", col, e));
+                        }
+                    }
+                }
+                table.refresh_layout().map_err(|e| format!("{}", e))?;
                 Ok(())
             }
         }
@@ -518,6 +667,48 @@ mod tests {
             assert!(columns[2].ascending);
         } else {
             panic!("Expected Sort command");
+        }
+    }
+    #[test]
+    fn test_parse_columns() {
+        // Test Set
+        let cmd = Command::parse("columns set col1, col2 10").unwrap();
+        if let Command::Columns(ColumnsCommand::Set(cols)) = cmd {
+            assert_eq!(cols.len(), 2);
+            assert_eq!(cols[0].0, "col1");
+            assert_eq!(cols[0].1, None);
+            assert_eq!(cols[1].0, "col2");
+            assert_eq!(cols[1].1, Some(10));
+        } else {
+            panic!("Expected Columns Set");
+        }
+
+        // Test Hide
+        let cmd = Command::parse("columns hide col1, col2").unwrap();
+        if let Command::Columns(ColumnsCommand::Hide(cols)) = cmd {
+            assert_eq!(cols.len(), 2);
+            assert_eq!(cols[0], "col1");
+            assert_eq!(cols[1], "col2");
+        } else {
+            panic!("Expected Columns Hide");
+        }
+
+        // Test Width
+        let cmd = Command::parse("columns width col1 20").unwrap();
+        if let Command::Columns(ColumnsCommand::Width(col, width)) = cmd {
+            assert_eq!(col, "col1");
+            assert_eq!(width, Some(20));
+        } else {
+            panic!("Expected Columns Width");
+        }
+
+        // Test Width Auto
+        let cmd = Command::parse("columns width col1 auto").unwrap();
+        if let Command::Columns(ColumnsCommand::Width(col, width)) = cmd {
+            assert_eq!(col, "col1");
+            assert_eq!(width, None);
+        } else {
+            panic!("Expected Columns Width Auto");
         }
     }
 }

@@ -311,6 +311,9 @@ Available Commands:
   :dialog sort           Open sort dialog
   :dialog find           Open find dialog
   :help                  Show this help
+  :columns set <c> [w]   Show only specific columns
+  :columns hide <c>...   Toggle column visibility
+  :columns width <c> <w> Set column width (or auto)
   :goto row <N> [col]    Navigate to row N, optionally column col
 
 Examples:
