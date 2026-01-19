@@ -444,18 +444,52 @@ Press Esc or Enter to close this dialog.";
                 {
                     dialog.command.insert(dialog.cursor, c);
                     dialog.cursor += 1;
+
+                    // Update suggestions
+                    let columns = if let Some(table) = &self.data_table {
+                        table.get_all_columns()
+                    } else {
+                        Vec::new()
+                    };
+                    use crate::tui::command::Command;
+                    let suggestions = Command::get_suggestions(&dialog.command, &columns);
+                    dialog.set_suggestions(suggestions);
+
                     return Ok(());
                 }
             } else if key.code == KeyCode::Backspace {
                 if dialog.cursor > 0 && !dialog.command.is_empty() {
                     dialog.command.remove(dialog.cursor - 1);
                     dialog.cursor -= 1;
+
+                    // Update suggestions
+                    let columns = if let Some(table) = &self.data_table {
+                        table.get_all_columns()
+                    } else {
+                        Vec::new()
+                    };
+                    use crate::tui::command::Command;
+                    let suggestions = Command::get_suggestions(&dialog.command, &columns);
+                    dialog.set_suggestions(suggestions);
                 }
                 return Ok(());
             } else if key.code == KeyCode::Delete {
                 if dialog.cursor < dialog.command.len() {
                     dialog.command.remove(dialog.cursor);
+
+                    // Update suggestions
+                    let columns = if let Some(table) = &self.data_table {
+                        table.get_all_columns()
+                    } else {
+                        Vec::new()
+                    };
+                    use crate::tui::command::Command;
+                    let suggestions = Command::get_suggestions(&dialog.command, &columns);
+                    dialog.set_suggestions(suggestions);
                 }
+                return Ok(());
+            } else if key.code == KeyCode::Tab {
+                dialog.next_suggestion();
                 return Ok(());
             }
         }

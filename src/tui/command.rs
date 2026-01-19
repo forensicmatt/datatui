@@ -70,6 +70,109 @@ impl Command {
         matches.into_iter().take(3).map(|(cmd, _)| cmd).collect()
     }
 
+    /// Get autocomplete suggestions based on input and context
+    pub fn get_suggestions(input: &str, columns: &[String]) -> Vec<String> {
+        let parts: Vec<&str> = input.trim_start().split_whitespace().collect();
+        let is_ending_with_space = input.ends_with(' ');
+
+        // precise handling of "current word being typed"
+        let current_word = if is_ending_with_space {
+            ""
+        } else {
+            parts.last().unwrap_or(&"")
+        };
+
+        if parts.is_empty() {
+            return Self::all_commands()
+                .iter()
+                .map(|&s| s.to_string())
+                .collect();
+        }
+
+        // Top level command completion
+        if parts.len() == 1 && !is_ending_with_space {
+            return Self::all_commands()
+                .iter()
+                .filter(|&&cmd| cmd.starts_with(parts[0]))
+                .map(|&s| s.to_string())
+                .collect();
+        }
+
+        let cmd = parts[0];
+
+        match cmd {
+            "columns" => {
+                let subcommands = ["set", "hide", "width"];
+                if parts.len() == 1 && is_ending_with_space {
+                    return subcommands.iter().map(|&s| s.to_string()).collect();
+                }
+                if parts.len() == 2 && !is_ending_with_space {
+                    return subcommands
+                        .iter()
+                        .filter(|&&sub| sub.starts_with(parts[1]))
+                        .map(|&s| s.to_string())
+                        .collect();
+                }
+
+                // If we have a subcommand, suggest columns
+                if parts.len() >= 2 {
+                    let sub = parts[1];
+                    if ["set", "hide", "width"].contains(&sub) {
+                        // Suggest columns
+                        // Check if we are typing a column name
+                        let last_token = if is_ending_with_space {
+                            ""
+                        } else {
+                            parts.last().unwrap_or(&"")
+                        };
+
+                        // If previous token was a comma (not split by whitespace well if dense), logic is complex.
+                        // But split_whitespace handles "col1," as "col1,".
+                        // For now simplified logic: suggest columns matching last token
+                        let last_token_clean = last_token.trim_end_matches(',');
+
+                        return columns
+                            .iter()
+                            .filter(|c| c.starts_with(last_token_clean))
+                            .map(|c| c.to_string())
+                            .collect();
+                    }
+                }
+            }
+            "sort" => {
+                // Suggest columns
+                let last_token = if is_ending_with_space {
+                    ""
+                } else {
+                    parts.last().unwrap_or(&"")
+                };
+                let last_token_clean = last_token
+                    .trim_end_matches(',')
+                    .trim_end_matches(" desc")
+                    .trim_end_matches(" asc"); // basic cleanup
+
+                return columns
+                    .iter()
+                    .filter(|c| c.starts_with(last_token_clean))
+                    .map(|c| c.to_string())
+                    .collect();
+            }
+            "goto" => {
+                if parts.len() == 1 && is_ending_with_space {
+                    return vec!["row".to_string()];
+                }
+                if parts.len() == 2 && !is_ending_with_space {
+                    if "row".starts_with(parts[1]) {
+                        return vec!["row".to_string()];
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        Vec::new()
+    }
+
     /// Parse a command string into a Command
     pub fn parse(input: &str) -> Result<Self, String> {
         let parts: Vec<&str> = input.trim().split_whitespace().collect();
@@ -710,5 +813,41 @@ mod tests {
         } else {
             panic!("Expected Columns Width Auto");
         }
+    }
+
+    #[test]
+    fn test_get_suggestions() {
+        let columns = vec!["name".to_string(), "age".to_string(), "city".to_string()];
+
+        // Top level commands
+        assert_eq!(Command::get_suggestions("so", &columns), vec!["sort"]);
+        assert_eq!(Command::get_suggestions("q", &columns), vec!["quit", "q"]);
+
+        // Command subcommands (columns)
+        assert_eq!(
+            Command::get_suggestions("columns ", &columns),
+            vec!["set", "hide", "width"]
+        );
+        assert_eq!(Command::get_suggestions("columns s", &columns), vec!["set"]);
+
+        // Sort columns
+        assert_eq!(
+            Command::get_suggestions("sort ", &columns),
+            vec!["name", "age", "city"]
+        );
+        assert_eq!(Command::get_suggestions("sort n", &columns), vec!["name"]);
+
+        // Columns subcommands arguments
+        assert_eq!(
+            Command::get_suggestions("columns set ", &columns),
+            vec!["name", "age", "city"]
+        );
+        assert_eq!(
+            Command::get_suggestions("columns set n", &columns),
+            vec!["name"]
+        );
+
+        // Goto
+        assert_eq!(Command::get_suggestions("goto ", &columns), vec!["row"]);
     }
 }

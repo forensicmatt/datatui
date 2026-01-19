@@ -6,7 +6,7 @@ use crate::tui::{Action, Component, Theme};
 use color_eyre::Result;
 use ratatui::{
     layout::Rect,
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -129,6 +129,78 @@ impl CommandBarDialog {
         }
     }
 
+    pub fn pending_result(&self) -> &Option<DialogResult> {
+        &self.pending_result
+    }
+
+    /// Set suggestions and reset selection
+    pub fn set_suggestions(&mut self, suggestions: Vec<String>) {
+        self.suggestions = suggestions;
+        if self.suggestions.is_empty() {
+            self.selected_suggestion = None;
+        } else {
+            // Auto-select first suggestion if configured?
+            // For now, let's keep it None until user cycles
+            self.selected_suggestion = None;
+        }
+    }
+
+    /// Cycle to the next suggestion
+    pub fn next_suggestion(&mut self) {
+        if self.suggestions.is_empty() {
+            return;
+        }
+
+        self.selected_suggestion = match self.selected_suggestion {
+            None => Some(0),
+            Some(i) => {
+                if i + 1 < self.suggestions.len() {
+                    Some(i + 1)
+                } else {
+                    Some(0) // Wrap around
+                }
+            }
+        };
+    }
+
+    /// Accept the currently selected suggestion
+    pub fn accept_suggestion(&mut self) {
+        if let Some(idx) = self.selected_suggestion {
+            if let Some(suggestion) = self.suggestions.get(idx) {
+                // Determine what part of the command we are replacing
+                // Simple strategy: replace the last word or the whole command depending on context
+                // For now, let's assume we are appending/replacing current token
+
+                let parts: Vec<&str> = self.command.split_whitespace().collect();
+                if parts.is_empty() {
+                    self.command = suggestion.clone();
+                } else {
+                    // Check if last part is being typed
+                    if self.command.ends_with(' ') {
+                        self.command.push_str(suggestion);
+                    } else {
+                        // Replace last part
+                        // Find the start of the last token
+                        if let Some(last_space) = self.command.rfind(' ') {
+                            self.command.truncate(last_space + 1);
+                            self.command.push_str(suggestion);
+                        } else {
+                            // Only one word
+                            self.command = suggestion.clone();
+                        }
+                    }
+                }
+                // Add a space for convenience
+                self.command.push(' ');
+                self.cursor = self.command.len();
+
+                // Clear suggestions after acceptance
+                self.suggestions.clear();
+                self.selected_suggestion = None;
+            }
+        }
+    }
+
     /// Execute the command
     fn execute_command(&mut self) {
         let cmd = self.command.trim().to_string();
@@ -230,6 +302,38 @@ impl Component for CommandBarDialog {
         let paragraph = Paragraph::new(content)
             .style(theme.normal_style())
             .block(Block::default());
+
+        // Render suggestions popup if active
+        if !self.suggestions.is_empty() {
+            let suggestions_height = self.suggestions.len().min(5) as u16 + 2; // +2 for borders
+            let popup_area = Rect {
+                x: area.x,
+                y: area.y.saturating_sub(suggestions_height),
+                width: 40, // Fixed width for now, or dynamic based on content
+                height: suggestions_height,
+            };
+
+            frame.render_widget(Clear, popup_area);
+
+            let items: Vec<ListItem> = self
+                .suggestions
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let mut style = theme.normal_style();
+                    if Some(i) == self.selected_suggestion {
+                        style = theme.focused_border_style(); // Highlight style
+                    }
+                    ListItem::new(s.clone()).style(style)
+                })
+                .collect();
+
+            let list = List::new(items)
+                .block(Block::default().borders(Borders::ALL).title("Suggestions"))
+                .style(theme.normal_style());
+
+            frame.render_widget(list, popup_area);
+        }
 
         frame.render_widget(paragraph, inner_area);
     }
