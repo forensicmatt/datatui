@@ -405,6 +405,27 @@ impl DataTable {
         ))
     }
 
+    /// Get the current row as a list of key-value pairs (preserving order)
+    pub fn get_current_row_as_pairs(&self) -> Result<Vec<(String, String)>> {
+        let column_names = self.dataset.column_names()?;
+
+        // Fetch the data for the current row
+        let batch = self.dataset.get_page(self.cursor.row, 1)?;
+
+        let mut pairs = Vec::with_capacity(column_names.len());
+
+        for (i, name) in column_names.iter().enumerate() {
+            if i < batch.num_columns() {
+                let column = batch.column(i);
+                // row_idx is 0 because we fetched a single row page
+                let value_str = self.format_cell_value(column, 0);
+                pairs.push((name.clone(), value_str));
+            }
+        }
+
+        Ok(pairs)
+    }
+
     /// Navigate to a specific cell by row and column name
     pub fn goto_cell(&mut self, row: usize, column_name: &str) -> Result<()> {
         let column_names = self.dataset.column_names()?;

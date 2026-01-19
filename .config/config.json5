@@ -45,7 +45,8 @@
       "o": "Import",
       "e": "Export",
       "d": "OpenDetailsDialog",
-      "Ctrl+w": "OpenColumnWidthDialog"
+      "Ctrl+w": "OpenColumnWidthDialog",
+      "m": "OpenMapViewer"
     },
     "ColumnWidthDialog": {
       "t": "ToggleVisibility",
@@ -82,6 +83,7 @@
     },
     "MapViewerDialog": {
       "Space": "ToggleVisibility",
+      "Shift+Space": "ToggleCollapseAll",
       "c": "Copy",
       "C": "CopyWithHeaders",
       "a": "CopyAll"

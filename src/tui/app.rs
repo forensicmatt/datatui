@@ -3,7 +3,7 @@ use crate::services::search_service::{FindOptions, SearchMode};
 use crate::services::{DataService, SearchService};
 use crate::tui::components::{
     CellViewer, ColumnWidthDialog, DataFrameDetailsDialog, DataTable, FindAllResultsDialog,
-    FindDialog, SortDialog,
+    FindDialog, MapViewerDialog, SortDialog,
 };
 use crate::tui::{Action, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
@@ -42,6 +42,9 @@ pub struct App {
     /// DataFrame details dialog (when active)
     dataframe_details_dialog: Option<DataFrameDetailsDialog>,
 
+    /// Map viewer dialog (when active)
+    map_viewer_dialog: Option<MapViewerDialog>,
+
     /// Last search parameters (for F3 repeat search)
     last_search: Option<(String, FindOptions, SearchMode)>,
 
@@ -71,6 +74,7 @@ impl App {
             column_width_dialog: None,
             sort_dialog: None,
             dataframe_details_dialog: None,
+            map_viewer_dialog: None,
             last_search: None,
             keybindings,
             theme,
@@ -347,6 +351,8 @@ impl App {
             } else {
                 "DataFrameDetailsDialog"
             }
+        } else if self.map_viewer_dialog.is_some() {
+            "MapViewerDialog"
         } else if self.find_dialog.is_some() {
             "FindDialog"
         } else if let Some(dialog) = &self.find_all_results_dialog {
@@ -450,6 +456,21 @@ impl App {
                     dialog.set_focused(true);
                     table.set_focused(false);
                     self.dataframe_details_dialog = Some(dialog);
+                }
+                return Ok(());
+            }
+
+            Action::OpenMapViewer => {
+                if let Some(table) = &mut self.data_table {
+                    // Create map viewer from current row
+                    if let Ok(pairs) = table.get_current_row_as_pairs() {
+                        let row_idx = table.get_cursor_position().0;
+                        let title = format!("Row {}", row_idx + 1); // 1-based index for display
+                        let mut dialog = MapViewerDialog::from_pairs(title, pairs);
+                        dialog.set_focused(true);
+                        table.set_focused(false);
+                        self.map_viewer_dialog = Some(dialog);
+                    }
                 }
                 return Ok(());
             }
@@ -673,6 +694,19 @@ impl App {
             return Ok(());
         }
 
+        // Route to Map Viewer dialog if active (MODAL)
+        if let Some(dialog) = &mut self.map_viewer_dialog {
+            let keep_open = dialog.handle_action(action)?;
+            if !keep_open {
+                // Restore focus to table
+                if let Some(table) = &mut self.data_table {
+                    table.set_focused(true);
+                }
+                self.map_viewer_dialog = None;
+            }
+            return Ok(());
+        }
+
         // Route to find dialog if active
         if let Some(dialog) = &mut self.find_dialog {
             let keep_open = dialog.handle_action(action)?;
@@ -799,6 +833,12 @@ impl App {
             dialog.render(frame, dialog_area);
         }
 
+        // Render Map Viewer dialog overlay if active
+        if let Some(dialog) = &mut self.map_viewer_dialog {
+            let dialog_area = Self::centered_rect(60, 60, area);
+            dialog.render(frame, dialog_area);
+        }
+
         // Render sort dialog overlay if active
         if let Some(dialog) = &mut self.sort_dialog {
             let dialog_area = Self::centered_rect(60, 60, area);
@@ -892,6 +932,8 @@ mod tests {
             find_all_results_dialog: None,
             column_width_dialog: None,
             sort_dialog: None,
+            dataframe_details_dialog: None,
+            map_viewer_dialog: None,
             last_search: None,
             keybindings,
             theme,
@@ -921,6 +963,8 @@ mod tests {
             find_all_results_dialog: None,
             column_width_dialog: None,
             sort_dialog: None,
+            dataframe_details_dialog: None,
+            map_viewer_dialog: None,
             last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),
@@ -981,6 +1025,8 @@ mod tests {
             find_all_results_dialog: None,
             column_width_dialog: None,
             sort_dialog: None,
+            dataframe_details_dialog: None,
+            map_viewer_dialog: None,
             last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),

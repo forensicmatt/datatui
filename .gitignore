@@ -31,3 +31,4 @@ target
 *.sw?
 .DS_Store
 *.log
+.datatui

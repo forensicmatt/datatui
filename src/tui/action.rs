@@ -55,6 +55,7 @@ pub enum Action {
     ShowAllColumns,
     OpenColumnWidthDialog,
     ToggleVisibility,
+    ToggleCollapseAll,
     MoveColumnUp,
     MoveColumnDown,
     EditWidth,
@@ -113,6 +114,7 @@ impl Action {
             Action::ShowAllColumns => "Show all columns",
             Action::OpenColumnWidthDialog => "Open column width dialog",
             Action::ToggleVisibility => "Toggle column visibility",
+            Action::ToggleCollapseAll => "Toggle collapse all",
             Action::MoveColumnUp => "Move column up",
             Action::MoveColumnDown => "Move column down",
             Action::EditWidth => "Edit column width",
@@ -147,7 +149,9 @@ impl Action {
 
             Action::Sort | Action::Filter | Action::Find | Action::Query => ActionCategory::DataOps,
 
-            Action::ToggleHelp | Action::Refresh => ActionCategory::View,
+            Action::ToggleHelp | Action::Refresh | Action::ToggleCollapseAll => {
+                ActionCategory::View
+            }
 
             Action::NextTab | Action::PrevTab | Action::CloseTab | Action::NewTab => {
                 ActionCategory::Tabs
@@ -221,6 +225,7 @@ impl Action {
             Action::ShowAllColumns,
             Action::OpenColumnWidthDialog,
             Action::ToggleVisibility,
+            Action::ToggleCollapseAll,
             Action::MoveColumnUp,
             Action::MoveColumnDown,
             Action::EditWidth,

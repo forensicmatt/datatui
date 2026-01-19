@@ -171,7 +171,7 @@ impl MapViewerDialog {
             .collect();
 
         // Sort by key
-        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        // entries.sort_by(|a, b| a.key.cmp(&b.key));
 
         Self {
             title,
@@ -540,6 +540,15 @@ impl Component for MapViewerDialog {
                 self.copy_all();
                 Ok(true)
             }
+            Action::ToggleCollapseAll => {
+                let any_expanded = self.entries.iter().any(|e| !e.collapsed);
+                if any_expanded {
+                    self.collapse_all();
+                } else {
+                    self.expand_all();
+                }
+                Ok(true)
+            }
             Action::ToggleVisibility => {
                 // Space = Toggle collapse
                 self.toggle_collapse();
@@ -567,6 +576,7 @@ impl Component for MapViewerDialog {
             Action::CopyWithHeaders,
             Action::CopyAll,
             Action::ToggleVisibility,
+            Action::ToggleCollapseAll,
             Action::Cancel,
         ]
     }
