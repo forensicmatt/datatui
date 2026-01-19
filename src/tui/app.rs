@@ -3,7 +3,7 @@ use crate::services::search_service::{FindOptions, SearchMode};
 use crate::services::{DataService, SearchService};
 use crate::tui::components::{
     CellViewer, ColumnWidthDialog, CommandBarDialog, DataFrameDetailsDialog, DataTable,
-    FindAllResultsDialog, FindDialog, MapViewerDialog, SortDialog,
+    ErrorDialog, FindAllResultsDialog, FindDialog, MapViewerDialog, SortDialog,
 };
 use crate::tui::{Action, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
@@ -48,6 +48,9 @@ pub struct App {
     /// Command bar dialog (when active)
     command_bar_dialog: Option<CommandBarDialog>,
 
+    /// Error dialog (when active)
+    error_dialog: Option<ErrorDialog>,
+
     /// Last search parameters (for F3 repeat search)
     last_search: Option<(String, FindOptions, SearchMode)>,
 
@@ -79,6 +82,7 @@ impl App {
             dataframe_details_dialog: None,
             map_viewer_dialog: None,
             command_bar_dialog: None,
+            error_dialog: None,
             last_search: None,
             keybindings,
             theme,
@@ -278,42 +282,77 @@ impl App {
         &mut self,
         result: crate::tui::components::command_bar_dialog::DialogResult,
     ) -> Result<()> {
+        use crate::tui::command::{Command, CommandContext};
         use crate::tui::components::command_bar_dialog::DialogResult;
 
         match result {
-            DialogResult::ExecuteCommand(cmd) => {
-                // Parse and execute command
-                let parts: Vec<&str> = cmd.trim().split_whitespace().collect();
-                if parts.is_empty() {
+            DialogResult::ExecuteCommand(cmd_str) => {
+                // Parse the command
+                let command = match Command::parse(&cmd_str) {
+                    Ok(cmd) => cmd,
+                    Err(err) => {
+                        // Show error in popup dialog
+                        self.error_dialog = Some(ErrorDialog::with_title(
+                            format!("Command: {}\n\n{}", cmd_str, err),
+                            "Invalid Command".to_string(),
+                        ));
+                        return Ok(());
+                    }
+                };
+
+                // Handle help command specially - show help dialog
+                if matches!(command, Command::Help) {
+                    let help_text = "\
+Available Commands:
+
+  :quit, :q              Quit the application
+  :find <pattern>        Search for a pattern
+  :sort <col> [desc]...  Sort by columns (comma separated)
+  :dialog sort           Open sort dialog
+  :dialog find           Open find dialog
+  :help                  Show this help
+  :goto row <N> [col]    Navigate to row N, optionally column col
+
+Examples:
+  :quit                  Exit application
+  :find test             Search for 'test'
+  :sort name             Sort by 'name' asc
+  :sort age desc, name   Sort by 'age' desc, then 'name' asc
+  :dialog sort           Open interactive sort dialog
+  :dialog find           Open interactive find dialog
+  :goto row 10           Go to row 10
+  :goto row 5 2          Go to row 5, column 2
+
+Press Esc or Enter to close this dialog.";
+
+                    self.error_dialog = Some(ErrorDialog::with_title(
+                        help_text.to_string(),
+                        "Command Help".to_string(),
+                    ));
                     return Ok(());
                 }
 
-                match parts[0] {
-                    "q" | "quit" => {
-                        self.should_quit = true;
-                    }
-                    "find" => {
-                        // Open find dialog with optional pattern
-                        let mut dialog = FindDialog::new();
-                        if parts.len() > 1 {
-                            let pattern = parts[1..].join(" ");
-                            dialog.search_pattern = pattern.clone();
-                            dialog.search_pattern_cursor = pattern.len();
-                        }
-                        self.find_dialog = Some(dialog);
-                    }
-                    "sort" => {
-                        self.handle_action(Action::Sort)?;
-                    }
-                    "help" => {
-                        self.handle_action(Action::ToggleHelp)?;
-                    }
-                    _ => {
-                        // Unknown command - show error by reopening command bar with error
-                        let mut dialog = CommandBarDialog::new();
-                        dialog.set_error(format!("Unknown command: {}", parts[0]));
-                        self.command_bar_dialog = Some(dialog);
-                    }
+                // Create execution context
+                let mut ctx = CommandContext {
+                    should_quit: &mut self.should_quit,
+                    find_dialog: &mut self.find_dialog,
+                    sort_dialog: &mut self.sort_dialog,
+                    data_table: &mut self.data_table,
+                };
+
+                // Execute the command
+                if let Err(err) = command.execute(&mut ctx) {
+                    // Show error in popup dialog
+                    self.error_dialog = Some(ErrorDialog::with_title(
+                        format!("Command: {}\n\n{}", cmd_str, err),
+                        "Command Error".to_string(),
+                    ));
+                    return Ok(());
+                }
+
+                // Handle commands that require actions
+                if let Some(action) = command.requires_action() {
+                    self.handle_action(action)?;
                 }
             }
             DialogResult::Close => {
@@ -793,18 +832,33 @@ impl App {
             return Ok(());
         }
 
+        // Route to error dialog if active (highest priority - modal)
+        if let Some(dialog) = &mut self.error_dialog {
+            let keep_open = dialog.handle_action(action)?;
+            if !keep_open {
+                self.error_dialog = None;
+            }
+            return Ok(());
+        }
+
         // Route to command bar dialog if active
-        if let Some(dialog) = &mut self.command_bar_dialog {
+        if self.command_bar_dialog.is_some() {
+            // Take ownership to avoid borrow issues
+            let mut dialog = self.command_bar_dialog.take().unwrap();
             let keep_open = dialog.handle_action(action)?;
 
             // Check if dialog has a pending result to process
             if let Some(result) = dialog.take_result() {
+                // Process the result (this might create a new dialog with error)
                 self.handle_command_bar_result(result)?;
+                // If a new dialog was created, it's already in self.command_bar_dialog
+                // If not, and we should close, leave it as None
+            } else if keep_open {
+                // Put the dialog back
+                self.command_bar_dialog = Some(dialog);
             }
+            // If !keep_open and no result, dialog stays None (closed)
 
-            if !keep_open {
-                self.command_bar_dialog = None;
-            }
             return Ok(());
         }
 
@@ -956,6 +1010,12 @@ impl App {
             };
             dialog.render(frame, bar_area);
         }
+
+        // Render error dialog if active (centered overlay, highest priority)
+        if let Some(dialog) = &mut self.error_dialog {
+            let dialog_area = Self::centered_rect(50, 30, area);
+            dialog.render(frame, dialog_area);
+        }
     }
 
     /// Helper to create centered rectangle
@@ -1046,6 +1106,8 @@ mod tests {
             sort_dialog: None,
             dataframe_details_dialog: None,
             map_viewer_dialog: None,
+            command_bar_dialog: None,
+            error_dialog: None,
             last_search: None,
             keybindings,
             theme,
@@ -1077,6 +1139,8 @@ mod tests {
             sort_dialog: None,
             dataframe_details_dialog: None,
             map_viewer_dialog: None,
+            command_bar_dialog: None,
+            error_dialog: None,
             last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),
@@ -1139,6 +1203,8 @@ mod tests {
             sort_dialog: None,
             dataframe_details_dialog: None,
             map_viewer_dialog: None,
+            command_bar_dialog: None,
+            error_dialog: None,
             last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),
@@ -1166,6 +1232,10 @@ mod tests {
             find_all_results_dialog: None,
             column_width_dialog: None,
             sort_dialog: None,
+            dataframe_details_dialog: None,
+            map_viewer_dialog: None,
+            command_bar_dialog: None,
+            error_dialog: None,
             last_search: None,
             keybindings: KeyBindings::default(),
             theme: Theme::default(),
@@ -1175,6 +1245,11 @@ mod tests {
         let custom_bindings = KeyBindings::default();
         app.set_keybindings(custom_bindings);
 
-        assert!(app.keybindings().get_keys_for_action(Action::Quit).len() > 0);
+        assert!(
+            app.keybindings()
+                .get_keys_for_action("Global", Action::Quit)
+                .len()
+                > 0
+        );
     }
 }

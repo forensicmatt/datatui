@@ -1,4 +1,5 @@
 use crate::core::ManagedDataset;
+use crate::tui::components::SortColumn;
 use crate::tui::{Action, Component, Focusable, Theme};
 use color_eyre::Result;
 use duckdb::arrow::array::Array;
@@ -9,6 +10,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table},
     Frame,
 };
+use std::collections::HashMap;
 
 /// Per-column configuration
 #[derive(Debug, Clone)]
@@ -1082,9 +1084,24 @@ impl Component for DataTable {
             .collect();
 
         // Create header from visible columns
+        // Get current sort order to display indicators
+        let sort_order = self.dataset.get_sort_order().unwrap_or_default();
+        let sort_map: HashMap<&String, &SortColumn> =
+            sort_order.iter().map(|s| (&s.name, s)).collect();
+
         let header_cells: Vec<Cell> = visible_column_names
             .iter()
-            .map(|name| Cell::from(name.as_str()))
+            .map(|name| {
+                let mut display_name = name.clone();
+                if let Some(sort_col) = sort_map.get(name) {
+                    if sort_col.ascending {
+                        display_name.push_str(" ▲");
+                    } else {
+                        display_name.push_str(" ▼");
+                    }
+                }
+                Cell::from(display_name)
+            })
             .collect();
         let header = Row::new(header_cells).style(theme.header_style());
 
