@@ -146,6 +146,24 @@ impl CommandBarDialog {
 
         self.pending_result = Some(DialogResult::ExecuteCommand(cmd));
     }
+
+    /// Helper to format content with visual cursor
+    fn format_content_with_cursor(&self, error: Option<&str>) -> String {
+        let prompt = ":";
+        let mut content = format!("{} {}", prompt, self.command);
+
+        // Add cursor indicator
+        // prompt (1) + space (1) + cursor index
+        let cursor_pos = prompt.len() + 1 + self.cursor;
+        content.insert(cursor_pos, '|');
+
+        // Add error message if present
+        if let Some(msg) = error {
+            format!("{}\n{}", content, msg)
+        } else {
+            content
+        }
+    }
 }
 
 impl Component for CommandBarDialog {
@@ -206,24 +224,8 @@ impl Component for CommandBarDialog {
         let inner_area = block.inner(area);
         frame.render_widget(block, area);
 
-        // Render command input with prompt
-        let prompt = ":";
-        let mut content = format!("{} {}", prompt, self.command);
-
-        // Add cursor indicator
-        let cursor_pos = prompt.len() + 1 + self.cursor;
-        if self.cursor < self.command.len() {
-            // Cursor is on a character
-            content.insert(cursor_pos + 1, '|');
-        } else {
-            // Cursor is at the end
-            content.push('|');
-        }
-
-        // Add error message if present
-        if let Some(ref error) = self.error {
-            content = format!("{}\n{}", content, error);
-        }
+        // Content with cursor
+        let content = self.format_content_with_cursor(self.error.as_deref());
 
         let paragraph = Paragraph::new(content)
             .style(theme.normal_style())
@@ -299,5 +301,46 @@ mod tests {
 
         dialog.history_down();
         assert_eq!(dialog.command, "cmd2");
+    }
+
+    #[test]
+    fn test_render_cursor_position() {
+        let mut bar = CommandBarDialog::new();
+
+        // Empty state
+        // Command: ""
+        // Cursor: 0
+        // Expected: ": |"
+        assert_eq!(bar.format_content_with_cursor(None), ": |");
+
+        // Type 'a'
+        bar.command.push('a');
+        bar.cursor += 1;
+        // Command: "a"
+        // Cursor: 1 (after 'a')
+        // Expected: ": a|"
+        assert_eq!(bar.format_content_with_cursor(None), ": a|");
+
+        // Type 'b'
+        bar.command.push('b');
+        bar.cursor += 1;
+        // Command: "ab"
+        // Cursor: 2 (after 'b')
+        // Expected: ": ab|"
+        assert_eq!(bar.format_content_with_cursor(None), ": ab|");
+
+        // Move left
+        bar.cursor_left();
+        // Command: "ab"
+        // Cursor: 1 (between 'a' and 'b')
+        // Expected: ": a|b"
+        assert_eq!(bar.format_content_with_cursor(None), ": a|b");
+
+        // Move left again
+        bar.cursor_left();
+        // Command: "ab"
+        // Cursor: 0 (before 'a')
+        // Expected: ": |ab"
+        assert_eq!(bar.format_content_with_cursor(None), ": |ab");
     }
 }
