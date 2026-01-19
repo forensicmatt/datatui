@@ -33,7 +33,7 @@
       "f": "Filter",
       "Ctrl+f": "Find",
       "/": "Find",
-      ":": "Query",
+      ":": "OpenCommandBar",
       "r": "Refresh",
       "F5": "Refresh",
       "Tab": "NextTab",
@@ -87,6 +87,12 @@
       "c": "Copy",
       "C": "CopyWithHeaders",
       "a": "CopyAll"
+    },
+    "CommandBarDialog": {
+      "Up": "MoveUp",
+      "Down": "MoveDown",
+      "Left": "MoveLeft",
+      "Right": "MoveRight"
     }
   }
 }

@@ -1,5 +1,6 @@
 pub mod cell_viewer;
 pub mod column_width_dialog;
+pub mod command_bar_dialog;
 pub mod data_table;
 pub mod dataframe_details_dialog;
 pub mod find_all_results_dialog;
@@ -11,6 +12,7 @@ pub mod value_viewer_dialog;
 
 pub use cell_viewer::{CellInfo, CellViewer, HeightMode, ViewerConfig};
 pub use column_width_dialog::ColumnWidthDialog;
+pub use command_bar_dialog::CommandBarDialog;
 pub use data_table::DataTable;
 pub use dataframe_details_dialog::DataFrameDetailsDialog;
 pub use find_all_results_dialog::FindAllResultsDialog;

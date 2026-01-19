@@ -73,6 +73,9 @@ pub enum Action {
     SwitchDetailsTabRight,
     ToggleDetailsSort,
     OpenMapViewer,
+
+    // Command Bar
+    OpenCommandBar,
 }
 
 impl Action {
@@ -128,6 +131,7 @@ impl Action {
             Action::SwitchDetailsTabRight => "Switch to next details tab",
             Action::ToggleDetailsSort => "Toggle sort order in details",
             Action::OpenMapViewer => "Open map viewer for selected value",
+            Action::OpenCommandBar => "Open command bar",
         }
     }
 
@@ -182,6 +186,8 @@ impl Action {
             | Action::SwitchDetailsTabRight
             | Action::ToggleDetailsSort
             | Action::OpenMapViewer => ActionCategory::DataOps,
+
+            Action::OpenCommandBar => ActionCategory::Application,
 
             Action::Escape => ActionCategory::Application,
         }
@@ -239,6 +245,7 @@ impl Action {
             Action::SwitchDetailsTabRight,
             Action::ToggleDetailsSort,
             Action::OpenMapViewer,
+            Action::OpenCommandBar,
         ]
     }
 }

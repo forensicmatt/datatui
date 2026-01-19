@@ -2,8 +2,8 @@ use crate::core::DatasetId;
 use crate::services::search_service::{FindOptions, SearchMode};
 use crate::services::{DataService, SearchService};
 use crate::tui::components::{
-    CellViewer, ColumnWidthDialog, DataFrameDetailsDialog, DataTable, FindAllResultsDialog,
-    FindDialog, MapViewerDialog, SortDialog,
+    CellViewer, ColumnWidthDialog, CommandBarDialog, DataFrameDetailsDialog, DataTable,
+    FindAllResultsDialog, FindDialog, MapViewerDialog, SortDialog,
 };
 use crate::tui::{Action, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
@@ -45,6 +45,9 @@ pub struct App {
     /// Map viewer dialog (when active)
     map_viewer_dialog: Option<MapViewerDialog>,
 
+    /// Command bar dialog (when active)
+    command_bar_dialog: Option<CommandBarDialog>,
+
     /// Last search parameters (for F3 repeat search)
     last_search: Option<(String, FindOptions, SearchMode)>,
 
@@ -75,6 +78,7 @@ impl App {
             sort_dialog: None,
             dataframe_details_dialog: None,
             map_viewer_dialog: None,
+            command_bar_dialog: None,
             last_search: None,
             keybindings,
             theme,
@@ -269,6 +273,57 @@ impl App {
         Ok(())
     }
 
+    /// Handle a command bar dialog result
+    fn handle_command_bar_result(
+        &mut self,
+        result: crate::tui::components::command_bar_dialog::DialogResult,
+    ) -> Result<()> {
+        use crate::tui::components::command_bar_dialog::DialogResult;
+
+        match result {
+            DialogResult::ExecuteCommand(cmd) => {
+                // Parse and execute command
+                let parts: Vec<&str> = cmd.trim().split_whitespace().collect();
+                if parts.is_empty() {
+                    return Ok(());
+                }
+
+                match parts[0] {
+                    "q" | "quit" => {
+                        self.should_quit = true;
+                    }
+                    "find" => {
+                        // Open find dialog with optional pattern
+                        let mut dialog = FindDialog::new();
+                        if parts.len() > 1 {
+                            let pattern = parts[1..].join(" ");
+                            dialog.search_pattern = pattern.clone();
+                            dialog.search_pattern_cursor = pattern.len();
+                        }
+                        self.find_dialog = Some(dialog);
+                    }
+                    "sort" => {
+                        self.handle_action(Action::Sort)?;
+                    }
+                    "help" => {
+                        self.handle_action(Action::ToggleHelp)?;
+                    }
+                    _ => {
+                        // Unknown command - show error by reopening command bar with error
+                        let mut dialog = CommandBarDialog::new();
+                        dialog.set_error(format!("Unknown command: {}", parts[0]));
+                        self.command_bar_dialog = Some(dialog);
+                    }
+                }
+            }
+            DialogResult::Close => {
+                // Just close, already handled
+            }
+        }
+
+        Ok(())
+    }
+
     /// Handle a key event
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<()> {
         // Only handle key press events, ignore release/repeat
@@ -339,8 +394,34 @@ impl App {
             }
         }
 
+        // If command bar is active, handle character input
+        if let Some(dialog) = &mut self.command_bar_dialog {
+            if let KeyCode::Char(c) = key.code {
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                {
+                    dialog.command.insert(dialog.cursor, c);
+                    dialog.cursor += 1;
+                    return Ok(());
+                }
+            } else if key.code == KeyCode::Backspace {
+                if dialog.cursor > 0 && !dialog.command.is_empty() {
+                    dialog.command.remove(dialog.cursor - 1);
+                    dialog.cursor -= 1;
+                }
+                return Ok(());
+            } else if key.code == KeyCode::Delete {
+                if dialog.cursor < dialog.command.len() {
+                    dialog.command.remove(dialog.cursor);
+                }
+                return Ok(());
+            }
+        }
+
         // Determine search scope for keybindings
-        let scope = if self.column_width_dialog.is_some() {
+        let scope = if self.command_bar_dialog.is_some() {
+            "CommandBarDialog"
+        } else if self.column_width_dialog.is_some() {
             "ColumnWidthDialog"
         } else if self.sort_dialog.is_some() {
             "SortDialog"
@@ -472,6 +553,11 @@ impl App {
                         self.map_viewer_dialog = Some(dialog);
                     }
                 }
+                return Ok(());
+            }
+
+            Action::OpenCommandBar => {
+                self.command_bar_dialog = Some(CommandBarDialog::new());
                 return Ok(());
             }
 
@@ -707,6 +793,21 @@ impl App {
             return Ok(());
         }
 
+        // Route to command bar dialog if active
+        if let Some(dialog) = &mut self.command_bar_dialog {
+            let keep_open = dialog.handle_action(action)?;
+
+            // Check if dialog has a pending result to process
+            if let Some(result) = dialog.take_result() {
+                self.handle_command_bar_result(result)?;
+            }
+
+            if !keep_open {
+                self.command_bar_dialog = None;
+            }
+            return Ok(());
+        }
+
         // Route to find dialog if active
         if let Some(dialog) = &mut self.find_dialog {
             let keep_open = dialog.handle_action(action)?;
@@ -843,6 +944,17 @@ impl App {
         if let Some(dialog) = &mut self.sort_dialog {
             let dialog_area = Self::centered_rect(60, 60, area);
             dialog.render(frame, dialog_area);
+        }
+
+        // Render command bar dialog if active (always at bottom, vim-style)
+        if let Some(dialog) = &mut self.command_bar_dialog {
+            let bar_area = Rect {
+                x: area.x,
+                y: area.height.saturating_sub(3),
+                width: area.width,
+                height: 3,
+            };
+            dialog.render(frame, bar_area);
         }
     }
 
