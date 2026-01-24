@@ -6,7 +6,10 @@ use crate::tui::{Action, Component, Theme};
 use color_eyre::Result;
 use ratatui::{
     layout::Rect,
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{
+        Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState,
+    },
     Frame,
 };
 
@@ -36,9 +39,11 @@ pub struct CommandBarDialog {
     suggestions: Vec<String>,
     /// Future: Selected suggestion index
     #[allow(dead_code)]
-    selected_suggestion: Option<usize>,
+    pub selected_suggestion: Option<usize>,
     /// Pending result to be retrieved by App
     pending_result: Option<DialogResult>,
+    /// State for the suggestions list
+    suggestions_state: ListState,
 }
 
 impl Default for CommandBarDialog {
@@ -58,6 +63,7 @@ impl CommandBarDialog {
             suggestions: Vec::new(),
             selected_suggestion: None,
             pending_result: None,
+            suggestions_state: ListState::default(),
         }
     }
 
@@ -138,10 +144,12 @@ impl CommandBarDialog {
         self.suggestions = suggestions;
         if self.suggestions.is_empty() {
             self.selected_suggestion = None;
+            self.suggestions_state.select(None);
         } else {
             // Auto-select first suggestion if configured?
             // For now, let's keep it None until user cycles
             self.selected_suggestion = None;
+            self.suggestions_state.select(None);
         }
     }
 
@@ -161,6 +169,32 @@ impl CommandBarDialog {
                 }
             }
         };
+        self.suggestions_state.select(self.selected_suggestion);
+    }
+
+    /// Cycle to the previous suggestion
+    pub fn previous_suggestion(&mut self) {
+        if self.suggestions.is_empty() {
+            return;
+        }
+
+        self.selected_suggestion = match self.selected_suggestion {
+            None => Some(self.suggestions.len() - 1),
+            Some(i) => {
+                if i > 0 {
+                    Some(i - 1)
+                } else {
+                    Some(self.suggestions.len() - 1) // Wrap around
+                }
+            }
+        };
+        self.suggestions_state.select(self.selected_suggestion);
+    }
+
+    /// Clear the current suggestion selection
+    pub fn clear_selection(&mut self) {
+        self.selected_suggestion = None;
+        self.suggestions_state.select(None);
     }
 
     /// Accept the currently selected suggestion
@@ -197,6 +231,7 @@ impl CommandBarDialog {
                 // Clear suggestions after acceptance
                 self.suggestions.clear();
                 self.selected_suggestion = None;
+                self.suggestions_state.select(None);
             }
         }
     }
@@ -247,13 +282,24 @@ impl Component for CommandBarDialog {
 
         match action {
             Action::Cancel => {
-                self.pending_result = Some(DialogResult::Close);
-                Ok(false) // Close dialog
+                if !self.suggestions.is_empty() {
+                    self.suggestions.clear();
+                    self.clear_selection();
+                    Ok(true) // Keep dialog open, just hide suggestions
+                } else {
+                    self.pending_result = Some(DialogResult::Close);
+                    Ok(false) // Close dialog
+                }
             }
 
             Action::Confirm => {
-                self.execute_command();
-                Ok(false) // Close dialog after execution
+                if self.selected_suggestion.is_some() {
+                    self.accept_suggestion();
+                    Ok(true) // Keep dialog open
+                } else {
+                    self.execute_command();
+                    Ok(false) // Close dialog after execution
+                }
             }
 
             Action::MoveLeft => {
@@ -267,12 +313,41 @@ impl Component for CommandBarDialog {
             }
 
             Action::MoveUp => {
-                self.history_up();
-                Ok(true)
+                if self.selected_suggestion.is_some() {
+                    self.previous_suggestion();
+                    Ok(true)
+                } else {
+                    self.history_up();
+                    Ok(true)
+                }
             }
 
             Action::MoveDown => {
-                self.history_down();
+                if self.suggestions.is_empty() {
+                    self.history_down();
+                } else {
+                    // If we have suggestions, Down should prioritize them?
+                    // Or only if already selected?
+                    // User request: "allow up/down to be used to navigate the items" implies when active/highlighted.
+                    // But if I press down and list is visible but not selected?
+                    // The plan says: "If suggestions active: Navigate suggestion list."
+                    // "suggestions active" usually means visible.
+                    // But strict reading of "suggestion box becomes active" from user prompt might mean "highlighted".
+                    // Let's stick to plan: "If suggestions active (meaning selected/highlighted?)"
+                    // Actually, if I am typing and suggestions appear, usually Down key jumps into them in most IDEs.
+                    // Let's check `selected_suggestion.is_some()`.
+                    // BUT, if I just typed, `selected_suggestion` is None.
+                    // If is None, do we want Down to go to history or suggestions?
+                    // Usually History is Up.
+                    // If I press Down in empty input, nothing happens (unless history navigation).
+                    // If suggestions are present, Down should probably select the first one.
+
+                    if !self.suggestions.is_empty() {
+                        self.next_suggestion();
+                    } else {
+                        self.history_down();
+                    }
+                }
                 Ok(true)
             }
 
@@ -319,20 +394,33 @@ impl Component for CommandBarDialog {
                 .suggestions
                 .iter()
                 .enumerate()
-                .map(|(i, s)| {
-                    let mut style = theme.normal_style();
-                    if Some(i) == self.selected_suggestion {
-                        style = theme.focused_border_style(); // Highlight style
-                    }
-                    ListItem::new(s.clone()).style(style)
-                })
+                .map(|(_, s)| ListItem::new(s.clone()))
                 .collect();
 
             let list = List::new(items)
                 .block(Block::default().borders(Borders::ALL).title("Suggestions"))
+                .highlight_style(theme.focused_border_style())
                 .style(theme.normal_style());
 
-            frame.render_widget(list, popup_area);
+            frame.render_stateful_widget(list, popup_area, &mut self.suggestions_state);
+
+            let mut scrollbar_state = ScrollbarState::default()
+                .content_length(self.suggestions.len())
+                .position(self.suggestions_state.offset());
+
+            let scrollbar = Scrollbar::default()
+                .orientation(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("↑"))
+                .end_symbol(Some("↓"));
+
+            frame.render_stateful_widget(
+                scrollbar,
+                popup_area.inner(ratatui::layout::Margin {
+                    vertical: 1,
+                    horizontal: 0,
+                }),
+                &mut scrollbar_state,
+            );
         }
 
         frame.render_widget(paragraph, inner_area);
@@ -446,5 +534,125 @@ mod tests {
         // Cursor: 0 (before 'a')
         // Expected: ": |ab"
         assert_eq!(bar.format_content_with_cursor(None), ": |ab");
+    }
+
+    #[test]
+    fn test_accept_suggestion_on_confirm() {
+        let mut dialog = CommandBarDialog::new();
+        dialog.command = "so".to_string();
+        dialog.cursor = 2; // End of "so"
+
+        dialog.set_suggestions(vec!["sort".to_string()]);
+
+        // Select the suggestion
+        dialog.next_suggestion(); // selects "sort" (index 0)
+        assert_eq!(dialog.selected_suggestion, Some(0));
+
+        // Press Enter (Confirm)
+        let result = dialog.handle_action(Action::Confirm).unwrap();
+
+        // Should return true (keep dialog open)
+        assert!(result);
+
+        // Command should be updated
+        assert_eq!(dialog.command, "sort ");
+
+        // Suggestion should be cleared
+        assert_eq!(dialog.selected_suggestion, None);
+        // Suggestions list is also cleared in accept_suggestion
+        assert!(dialog.suggestions.is_empty());
+
+        // Now press Enter again (Confirm)
+        let result = dialog.handle_action(Action::Confirm).unwrap();
+
+        // Should return false (close dialog)
+        assert!(!result);
+
+        // Should have result
+        assert!(matches!(
+            dialog.take_result(),
+            Some(DialogResult::ExecuteCommand(cmd)) if cmd == "sort"
+        ));
+    }
+
+    #[test]
+    fn test_suggestion_selection_updates_state() {
+        let mut dialog = CommandBarDialog::new();
+        dialog.set_suggestions(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+
+        // Initial state
+        assert_eq!(dialog.selected_suggestion, None);
+        assert_eq!(dialog.suggestions_state.selected(), None);
+
+        // Next suggestion
+        dialog.next_suggestion();
+        assert_eq!(dialog.selected_suggestion, Some(0));
+        assert_eq!(dialog.suggestions_state.selected(), Some(0));
+
+        // Next suggestion (1)
+        dialog.next_suggestion();
+        assert_eq!(dialog.selected_suggestion, Some(1));
+        assert_eq!(dialog.suggestions_state.selected(), Some(1));
+
+        // Set suggestions resets state
+        dialog.set_suggestions(vec!["d".to_string()]);
+        assert_eq!(dialog.selected_suggestion, None);
+        assert_eq!(dialog.suggestions_state.selected(), None);
+    }
+
+    #[test]
+    fn test_navigation_refinement() {
+        let mut dialog = CommandBarDialog::new();
+        dialog.set_suggestions(vec!["a".to_string(), "b".to_string()]);
+
+        // Initial: None
+        assert_eq!(dialog.selected_suggestion, None);
+
+        // Down -> First (0)
+        let _ = dialog.handle_action(Action::MoveDown);
+        assert_eq!(dialog.selected_suggestion, Some(0));
+
+        // Down -> Next (1)
+        let _ = dialog.handle_action(Action::MoveDown);
+        assert_eq!(dialog.selected_suggestion, Some(1));
+
+        // Up -> Prev (0)
+        let _ = dialog.handle_action(Action::MoveUp);
+        assert_eq!(dialog.selected_suggestion, Some(0));
+
+        // Up -> Wrap (1)
+        let _ = dialog.handle_action(Action::MoveUp);
+        assert_eq!(dialog.selected_suggestion, Some(1));
+
+        // Cancel -> Clear selection (None), returns true (consumed)
+        let consumed = dialog.handle_action(Action::Cancel).unwrap();
+        assert!(consumed);
+        assert_eq!(dialog.selected_suggestion, None);
+        assert!(dialog.pending_result.is_none());
+
+        // Cancel again -> Close dialog, returns false (not consumed/close)
+        let consumed = dialog.handle_action(Action::Cancel).unwrap();
+        assert!(!consumed);
+        assert!(matches!(dialog.pending_result, Some(DialogResult::Close)));
+    }
+
+    #[test]
+    fn test_esc_hides_visible_suggestions() {
+        let mut dialog = CommandBarDialog::new();
+        // Setup suggestions but NO selection
+        dialog.set_suggestions(vec!["a".to_string()]);
+        assert!(!dialog.suggestions.is_empty());
+        assert_eq!(dialog.selected_suggestion, None);
+
+        // Cancel -> Should clear suggestions, stay open
+        let consumed = dialog.handle_action(Action::Cancel).unwrap();
+        assert!(consumed);
+        assert!(dialog.suggestions.is_empty()); // Suggestions hidden/cleared
+        assert!(dialog.pending_result.is_none());
+
+        // Cancel again -> Should close dialog
+        let consumed = dialog.handle_action(Action::Cancel).unwrap();
+        assert!(!consumed);
+        assert!(matches!(dialog.pending_result, Some(DialogResult::Close)));
     }
 }

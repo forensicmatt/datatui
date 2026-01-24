@@ -489,7 +489,11 @@ Press Esc or Enter to close this dialog.";
                 }
                 return Ok(());
             } else if key.code == KeyCode::Tab {
-                dialog.next_suggestion();
+                if dialog.selected_suggestion.is_some() {
+                    dialog.clear_selection();
+                } else {
+                    dialog.next_suggestion();
+                }
                 return Ok(());
             }
         }
