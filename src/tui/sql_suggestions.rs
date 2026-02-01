@@ -46,14 +46,27 @@ pub fn get_sql_suggestions(input: &str, cursor: usize, columns: &[String]) -> Ve
     match last_keyword {
         Some("SELECT") => {
             // After SELECT - suggest columns, *, DISTINCT, or functions
-            let mut suggestions = filter_keyword_suggestions(&["*", "DISTINCT"], current_word);
+            let mut suggestions =
+                filter_keyword_suggestions(&["*", "DISTINCT", "FROM"], current_word);
             suggestions.extend(filter_function_suggestions(DUCKDB_FUNCTIONS, current_word));
             suggestions.extend(filter_column_suggestions(columns, current_word));
             suggestions
         }
         Some("FROM") => {
-            // After FROM - in our case, this is usually {table}
-            vec![SuggestionItem::field("{table}".to_string())]
+            // Check if we are immediately after FROM (expecting table)
+            // or if we have already typed a table/alias (expecting WHERE, etc.)
+            let last_token_is_from = tokens
+                .last()
+                .map(|t| t.to_uppercase() == "FROM")
+                .unwrap_or(false);
+
+            if last_token_is_from {
+                // Immediately after FROM - suggest table placeholder
+                vec![SuggestionItem::field("{table}".to_string())]
+            } else {
+                // We have a table, treat as general context to suggest WHERE, ORDER, etc.
+                get_general_context_suggestions(input, current_word)
+            }
         }
         Some("WHERE") => {
             // After WHERE - suggest columns and comparison operators
@@ -82,39 +95,44 @@ pub fn get_sql_suggestions(input: &str, cursor: usize, columns: &[String]) -> Ve
         }
         _ => {
             // General context - suggest next clause keywords
-            let mut keyword_list = Vec::new();
-
-            // Determine what keywords make sense based on what we've seen
-            let input_upper = input.to_uppercase();
-
-            if !input_upper.contains(" FROM ") {
-                keyword_list.push("FROM");
-            }
-            if input_upper.contains(" FROM ") && !input_upper.contains(" WHERE ") {
-                keyword_list.push("WHERE");
-            }
-            if input_upper.contains(" FROM ") && !input_upper.contains(" GROUP BY ") {
-                keyword_list.push("GROUP");
-            }
-            if input_upper.contains(" FROM ") && !input_upper.contains(" ORDER BY ") {
-                keyword_list.push("ORDER");
-            }
-            if input_upper.contains(" FROM ") && !input_upper.contains(" LIMIT ") {
-                keyword_list.push("LIMIT");
-            }
-            if input_upper.contains(" LIMIT ") && !input_upper.contains(" OFFSET ") {
-                keyword_list.push("OFFSET");
-            }
-
-            // Also suggest AND/OR if we're in a WHERE clause
-            if input_upper.contains(" WHERE ") && !input_upper.contains(" ORDER BY ") {
-                keyword_list.push("AND");
-                keyword_list.push("OR");
-            }
-
-            filter_keyword_suggestions(&keyword_list, current_word)
+            get_general_context_suggestions(input, current_word)
         }
     }
+}
+
+/// Helper to get general context suggestions (next clauses)
+fn get_general_context_suggestions(input: &str, current_word: &str) -> Vec<SuggestionItem> {
+    let mut keyword_list = Vec::new();
+
+    // Determine what keywords make sense based on what we've seen
+    let input_upper = input.to_uppercase();
+
+    if !input_upper.contains(" FROM ") {
+        keyword_list.push("FROM");
+    }
+    if input_upper.contains(" FROM ") && !input_upper.contains(" WHERE ") {
+        keyword_list.push("WHERE");
+    }
+    if input_upper.contains(" FROM ") && !input_upper.contains(" GROUP BY ") {
+        keyword_list.push("GROUP");
+    }
+    if input_upper.contains(" FROM ") && !input_upper.contains(" ORDER BY ") {
+        keyword_list.push("ORDER");
+    }
+    if input_upper.contains(" FROM ") && !input_upper.contains(" LIMIT ") {
+        keyword_list.push("LIMIT");
+    }
+    if input_upper.contains(" LIMIT ") && !input_upper.contains(" OFFSET ") {
+        keyword_list.push("OFFSET");
+    }
+
+    // Also suggest AND/OR if we're in a WHERE clause
+    if input_upper.contains(" WHERE ") && !input_upper.contains(" ORDER BY ") {
+        keyword_list.push("AND");
+        keyword_list.push("OR");
+    }
+
+    filter_keyword_suggestions(&keyword_list, current_word)
 }
 
 /// Find the last SQL keyword in the tokens

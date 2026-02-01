@@ -308,7 +308,7 @@ impl DataService {
     /// ```no_run
     /// # use datatui::core::JsonImportOptions;
     /// # use std::path::PathBuf;
-    /// # let service = unimplemented!();
+    /// # let service: datatui::services::DataService = unimplemented!();
     /// // Load NDJSON file
     /// let opts = JsonImportOptions::ndjson();
     /// service.import_json(PathBuf::from("data.ndjson"), opts)?;
@@ -378,6 +378,17 @@ impl DataService {
                 // For nested paths like "Records", use DuckDB's struct field access
                 let field_name = options.records_expr.clone();
 
+                // Handle dot notation for nested fields (e.g. "response.results" -> "response"."results")
+                let unnest_expr = if field_name.contains('.') {
+                    field_name
+                        .split('.')
+                        .map(|part| format!("\"{}\"", part))
+                        .collect::<Vec<_>>()
+                        .join(".")
+                } else {
+                    format!("\"{}\"", field_name)
+                };
+
                 // Get file size and add 20% buffer for DuckDB's internal overhead
                 let file_size = std::fs::metadata(&path)
                     .map(|m| m.len())
@@ -390,13 +401,13 @@ impl DataService {
                         SELECT * FROM read_json_auto('{}', maximum_object_size={})
                     )
                     SELECT item.* FROM (
-                        SELECT unnest(\"{}\") as item
+                        SELECT unnest({}) as item
                         FROM json_data
                     )",
                     table_name,
                     path.display(),
                     max_size,
-                    field_name
+                    unnest_expr
                 )
             }
         };
