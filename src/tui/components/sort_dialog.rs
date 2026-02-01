@@ -65,6 +65,9 @@ pub struct SortDialog {
 
     /// Pending result ready for pickup
     pending_result: Option<DialogResult>,
+
+    /// Cached max visible rows (calculated during render)
+    cached_max_rows: usize,
 }
 
 impl SortDialog {
@@ -81,6 +84,7 @@ impl SortDialog {
             current_column: None,
             show_instructions: true,
             pending_result: None,
+            cached_max_rows: 10,
         }
     }
 
@@ -138,8 +142,8 @@ impl SortDialog {
 
 impl Component for SortDialog {
     fn handle_action(&mut self, action: Action) -> Result<bool> {
-        // Calculate max rows for scroll adjustment (approximate)
-        let max_rows = 10; // Will be dynamically calculated during render
+        // Use cached max rows from last render
+        let max_rows = self.cached_max_rows;
 
         match action {
             Action::Escape => {
@@ -338,8 +342,9 @@ impl Component for SortDialog {
         let inner = content_block.inner(content_area);
         frame.render_widget(content_block, content_area);
 
-        // Calculate max visible rows
+        // Calculate max visible rows and cache it for scroll adjustments
         let max_rows = inner.height.saturating_sub(0) as usize;
+        self.cached_max_rows = max_rows;
         let list_inner = inner.inner(Margin {
             vertical: 0,
             horizontal: 1,
@@ -401,7 +406,6 @@ impl Component for SortDialog {
                     }
                 }
             }
-
             SortDialogMode::AddColumn => {
                 let available = self.available_columns();
 

@@ -3,7 +3,7 @@ use crate::services::search_service::{FindOptions, SearchMode};
 use crate::services::{DataService, SearchService};
 use crate::tui::components::{
     CellViewer, ColumnWidthDialog, CommandBarDialog, DataFrameDetailsDialog, DataTable,
-    ErrorDialog, FindAllResultsDialog, FindDialog, MapViewerDialog, SortDialog,
+    ErrorDialog, FindAllResultsDialog, FindDialog, MapViewerDialog, SortDialog, SqlDialog,
 };
 use crate::tui::{Action, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
@@ -51,6 +51,9 @@ pub struct App {
     /// Error dialog (when active)
     error_dialog: Option<ErrorDialog>,
 
+    /// SQL dialog (when active)
+    sql_dialog: Option<SqlDialog>,
+
     /// Last search parameters (for F3 repeat search)
     last_search: Option<(String, FindOptions, SearchMode)>,
 
@@ -83,6 +86,7 @@ impl App {
             map_viewer_dialog: None,
             command_bar_dialog: None,
             error_dialog: None,
+            sql_dialog: None,
             last_search: None,
             keybindings,
             theme,
@@ -498,8 +502,116 @@ Press Esc or Enter to close this dialog.";
             }
         }
 
+        // If SQL dialog is active, handle character input
+        if let Some(dialog) = &mut self.sql_dialog {
+            // If a suggestion is selected, only allow Up/Down arrows, Enter, and Escape
+            // No character input should modify the query while navigating suggestions
+            if dialog.has_selected_suggestion() {
+                if key.code == KeyCode::Enter {
+                    // Accept the selected suggestion
+                    dialog.accept_suggestion();
+                    return Ok(());
+                } else if key.code == KeyCode::Up {
+                    // Handle Ctrl+Up - page up in suggestions
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        dialog.page_up_suggestion();
+                    } else {
+                        // Navigate to previous suggestion
+                        dialog.prev_suggestion();
+                    }
+                    return Ok(());
+                } else if key.code == KeyCode::Down {
+                    // Handle Ctrl+Down - page down in suggestions
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        dialog.page_down_suggestion();
+                    } else {
+                        // Navigate to next suggestion
+                        dialog.next_suggestion();
+                    }
+                    return Ok(());
+                } else if key.code == KeyCode::Esc {
+                    // Return focus to query input
+                    dialog.clear_suggestion_selection();
+                    return Ok(());
+                }
+                // Character input uses type-ahead to navigate suggestions
+                if let KeyCode::Char(c) = key.code {
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT)
+                    {
+                        // Add character to typeahead buffer and find matching suggestion
+                        dialog.add_typeahead_char(c);
+                        return Ok(());
+                    }
+                } else if key.code == KeyCode::Backspace {
+                    // Remove last character from typeahead buffer
+                    let buffer = dialog.typeahead_buffer().to_string();
+                    if !buffer.is_empty() {
+                        let mut chars: Vec<char> = buffer.chars().collect();
+                        chars.pop();
+                        dialog.clear_typeahead();
+                        for ch in chars {
+                            dialog.add_typeahead_char(ch);
+                        }
+                    } else {
+                        // If typeahead buffer is empty, dismiss suggestions and delete from query
+                        dialog.clear_suggestion_selection();
+                        dialog.delete_char();
+                    }
+                    return Ok(());
+                }
+            } else {
+                // No suggestion selected - normal text input mode
+
+                // Handle Ctrl+Enter to execute query
+                if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    dialog.execute_query();
+                    return Ok(());
+                }
+
+                // Handle Ctrl+Left - move cursor left by word
+                if key.code == KeyCode::Left && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    dialog.cursor_word_left();
+                    return Ok(());
+                }
+
+                // Handle Ctrl+Right - move cursor right by word
+                if key.code == KeyCode::Right && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    dialog.cursor_word_right();
+                    return Ok(());
+                }
+
+                if let KeyCode::Char(c) = key.code {
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT)
+                    {
+                        dialog.insert_char(c);
+                        return Ok(());
+                    }
+                } else if key.code == KeyCode::Backspace {
+                    // Handle Ctrl+Backspace - delete word to the left
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        dialog.delete_word_left();
+                    } else {
+                        dialog.delete_char();
+                    }
+                    return Ok(());
+                } else if key.code == KeyCode::Enter {
+                    // Insert newline when no suggestion is selected
+                    dialog.insert_newline();
+                    return Ok(());
+                } else if key.code == KeyCode::Tab {
+                    // Tab enters suggestion mode (selects first suggestion if available)
+                    dialog.next_suggestion();
+                    return Ok(());
+                }
+            }
+        }
+
         // Determine search scope for keybindings
-        let scope = if self.command_bar_dialog.is_some() {
+        let scope = if self.sql_dialog.is_some() {
+            "SqlDialog"
+        } else if self.command_bar_dialog.is_some() {
             "CommandBarDialog"
         } else if self.column_width_dialog.is_some() {
             "ColumnWidthDialog"
@@ -638,6 +750,18 @@ Press Esc or Enter to close this dialog.";
 
             Action::OpenCommandBar => {
                 self.command_bar_dialog = Some(CommandBarDialog::new());
+                return Ok(());
+            }
+
+            Action::OpenSqlDialog => {
+                if let Some(table) = &mut self.data_table {
+                    let columns = table.get_all_columns();
+                    let current_sql = table.dataset().get_current_sql();
+
+                    let mut dialog = SqlDialog::new(columns);
+                    dialog.set_query_text(current_sql);
+                    self.sql_dialog = Some(dialog);
+                }
                 return Ok(());
             }
 
@@ -903,6 +1027,42 @@ Press Esc or Enter to close this dialog.";
             return Ok(());
         }
 
+        // Route to SQL dialog if active (MODAL)
+        if let Some(dialog) = &mut self.sql_dialog {
+            let keep_open = dialog.handle_action(action)?;
+
+            // Check if dialog has a pending result to process
+            if let Some(result) = dialog.take_result() {
+                // Process inline - matching the pattern from command bar
+                use crate::tui::components::SqlDialogResult;
+                match result {
+                    SqlDialogResult::ExecuteQuery(sql) => {
+                        // Execute the SQL query
+                        if let Some(table) = &mut self.data_table {
+                            if let Err(e) = table.dataset_mut().execute_sql(&sql) {
+                                // Show error in dialog
+                                if let Some(d) = &mut self.sql_dialog {
+                                    d.set_error(format!("SQL Error: {}", e));
+                                }
+                            } else {
+                                // Success - close dialog and refresh
+                                self.sql_dialog = None;
+                                table.refresh_layout()?;
+                            }
+                        }
+                    }
+                    SqlDialogResult::Close => {
+                        self.sql_dialog = None;
+                    }
+                }
+            }
+
+            if !keep_open {
+                self.sql_dialog = None;
+            }
+            return Ok(());
+        }
+
         // Route to find dialog if active
         if let Some(dialog) = &mut self.find_dialog {
             let keep_open = dialog.handle_action(action)?;
@@ -1038,6 +1198,12 @@ Press Esc or Enter to close this dialog.";
         // Render sort dialog overlay if active
         if let Some(dialog) = &mut self.sort_dialog {
             let dialog_area = Self::centered_rect(60, 60, area);
+            dialog.render(frame, dialog_area);
+        }
+
+        // Render SQL dialog overlay if active
+        if let Some(dialog) = &mut self.sql_dialog {
+            let dialog_area = Self::centered_rect(90, 90, area);
             dialog.render(frame, dialog_area);
         }
 

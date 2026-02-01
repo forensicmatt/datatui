@@ -1,4 +1,5 @@
 use crate::core::column_config::ColumnWidthConfig;
+use crate::core::sql_query::{OrderByColumn, QueryBuilder};
 use crate::core::types::DatasetId;
 use crate::tui::components::SortColumn;
 use color_eyre::Result;
@@ -17,7 +18,10 @@ pub struct ManagedDataset {
     pub id: DatasetId,
     pub table_name: String,
     column_config: ColumnWidthConfig,
+    // Legacy field for backward compatibility (deprecated)
     sort_order: Vec<SortColumn>,
+    // NEW: Global SQL query as source of truth
+    current_query: QueryBuilder,
 }
 
 impl ManagedDataset {
@@ -43,12 +47,15 @@ impl ManagedDataset {
         let columns = Self::get_columns_from_table(&conn, &table_name)?;
         let column_config = ColumnWidthConfig::from_columns(columns);
 
+        let current_query = QueryBuilder::new(&table_name);
+
         Ok(Self {
             conn,
             id,
-            table_name,
+            table_name: table_name.clone(),
             column_config,
             sort_order: Vec::new(),
+            current_query,
         })
     }
 
@@ -64,11 +71,12 @@ impl ManagedDataset {
     ///
     /// Uses LIMIT/OFFSET for efficient pagination without loading full dataset
     pub fn get_page(&self, offset: usize, limit: usize) -> Result<RecordBatch> {
-        let order_by = self.build_order_by_clause();
-        let query = format!(
-            "SELECT * FROM {} {} LIMIT {} OFFSET {}",
-            self.table_name, order_by, limit, offset
-        );
+        // Build query using the global QueryBuilder
+        let mut query_builder = self.current_query.clone();
+        query_builder.set_limit(Some(limit));
+        query_builder.set_offset(Some(offset));
+
+        let query = query_builder.to_sql();
 
         let mut stmt = self.conn.prepare(&query)?;
         let batches = stmt.query_arrow([])?.collect::<Vec<_>>();
@@ -390,18 +398,40 @@ impl ManagedDataset {
             }
         }
 
-        self.sort_order = columns;
+        // Update both legacy field and global query
+        self.sort_order = columns.clone();
+
+        // Convert SortColumn to OrderByColumn
+        let order_by: Vec<OrderByColumn> = columns
+            .into_iter()
+            .map(|sc| OrderByColumn {
+                column: sc.name,
+                ascending: sc.ascending,
+            })
+            .collect();
+
+        self.current_query.set_order_by(order_by);
         Ok(())
     }
 
     /// Get current sort order
     pub fn get_sort_order(&self) -> Result<Vec<SortColumn>> {
-        Ok(self.sort_order.clone())
+        // Convert from QueryBuilder's OrderByColumn to SortColumn
+        let order_by = self.current_query.get_order_by();
+        let sort_columns: Vec<SortColumn> = order_by
+            .into_iter()
+            .map(|obc| SortColumn {
+                name: obc.column,
+                ascending: obc.ascending,
+            })
+            .collect();
+        Ok(sort_columns)
     }
 
     /// Clear all sorting
     pub fn clear_sort(&mut self) {
         self.sort_order.clear();
+        self.current_query.set_order_by(Vec::new());
     }
 
     /// Build ORDER BY clause from sort configuration
@@ -428,6 +458,58 @@ impl ManagedDataset {
         format!("ORDER BY {}", clauses.join(", "))
     }
 
+    // ========================================
+    // Global Query API (NEW)
+    // ========================================
+
+    /// Get the current query builder
+    pub fn get_current_query(&self) -> &QueryBuilder {
+        &self.current_query
+    }
+
+    /// Set the current query (replaces the entire query)
+    /// This is used by the SQL dialog to update the dataset view
+    pub fn set_current_query(&mut self, query: QueryBuilder) -> Result<()> {
+        // Validate that the query targets this dataset's table
+        if query.base_table() != self.table_name {
+            return Err(color_eyre::eyre::eyre!(
+                "Query must target table '{}', got '{}'",
+                self.table_name,
+                query.base_table()
+            ));
+        }
+
+        self.current_query = query;
+
+        // Sync back to legacy sort_order for backward compatibility
+        let order_by = self.current_query.get_order_by();
+        self.sort_order = order_by
+            .into_iter()
+            .map(|obc| SortColumn {
+                name: obc.column,
+                ascending: obc.ascending,
+            })
+            .collect();
+
+        Ok(())
+    }
+
+    /// Execute a raw SQL query and update the dataset view
+    /// This parses the SQL and sets it as the new current query
+    pub fn execute_sql(&mut self, sql: &str) -> Result<()> {
+        let query = QueryBuilder::parse(sql, &self.table_name)?;
+        self.set_current_query(query)
+    }
+
+    /// Get the current SQL query as a string
+    pub fn get_current_sql(&self) -> String {
+        self.current_query.to_sql()
+    }
+
+    // ========================================
+    // Backward Compatibility
+    // ========================================
+
     /// Get the table name for this dataset
     pub fn table_name(&self) -> &str {
         &self.table_name
@@ -451,6 +533,7 @@ impl Clone for ManagedDataset {
             table_name: self.table_name.clone(),
             column_config: self.column_config.clone(),
             sort_order: self.sort_order.clone(),
+            current_query: self.current_query.clone(),
         }
     }
 }

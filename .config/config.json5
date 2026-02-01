@@ -39,14 +39,22 @@
       "Tab": "NextTab",
       "Shift+Tab": "PrevTab",
       "w": "CloseTab",
-      "t": "NewTab",
+      "t": "OpenSqlDialog",
       "c": "Copy",
       "C": "CopyWithHeaders",
       "o": "Import",
       "e": "Export",
       "d": "OpenDetailsDialog",
-      "Ctrl+w": "OpenColumnWidthDialog",
+      "w": "OpenColumnWidthDialog",
       "m": "OpenMapViewer"
+    },
+    "SqlDialog": {
+      "Ctrl+Enter": "RunSqlQuery",
+      "Ctrl+l": "ClearSqlText",
+      "Tab": "SqlNextSuggestion",
+      "Shift+Tab": "SqlPreviousSuggestion",
+      "Ctrl+z": "SqlUndo",
+      "Ctrl+y": "SqlRedo"
     },
     "ColumnWidthDialog": {
       "t": "ToggleVisibility",

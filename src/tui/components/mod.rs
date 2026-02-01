@@ -9,6 +9,7 @@ pub mod find_all_tab;
 pub mod find_dialog;
 pub mod map_viewer_dialog;
 pub mod sort_dialog;
+pub mod sql_dialog;
 pub mod value_viewer_dialog;
 
 pub use cell_viewer::{CellInfo, CellViewer, HeightMode, ViewerConfig};
@@ -21,4 +22,5 @@ pub use find_all_results_dialog::FindAllResultsDialog;
 pub use find_dialog::FindDialog;
 pub use map_viewer_dialog::MapViewerDialog;
 pub use sort_dialog::{SortColumn, SortDialog};
+pub use sql_dialog::{DialogResult as SqlDialogResult, SqlDialog};
 pub use value_viewer_dialog::ValueViewerDialog;

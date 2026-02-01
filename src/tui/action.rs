@@ -76,6 +76,17 @@ pub enum Action {
 
     // Command Bar
     OpenCommandBar,
+
+    // SQL Dialog
+    OpenSqlDialog,
+    RunSqlQuery,
+    LoadSqlFile,
+    ClearSqlText,
+    SqlNextSuggestion,
+    SqlPreviousSuggestion,
+    SqlAcceptSuggestion,
+    SqlUndo,
+    SqlRedo,
 }
 
 impl Action {
@@ -132,6 +143,15 @@ impl Action {
             Action::ToggleDetailsSort => "Toggle sort order in details",
             Action::OpenMapViewer => "Open map viewer for selected value",
             Action::OpenCommandBar => "Open command bar",
+            Action::OpenSqlDialog => "Open SQL query dialog",
+            Action::RunSqlQuery => "Execute SQL query",
+            Action::LoadSqlFile => "Load SQL from file",
+            Action::ClearSqlText => "Clear SQL text",
+            Action::SqlNextSuggestion => "Next SQL suggestion",
+            Action::SqlPreviousSuggestion => "Previous SQL suggestion",
+            Action::SqlAcceptSuggestion => "Accept SQL suggestion",
+            Action::SqlUndo => "Undo last SQL edit",
+            Action::SqlRedo => "Redo last SQL edit",
         }
     }
 
@@ -188,6 +208,16 @@ impl Action {
             | Action::OpenMapViewer => ActionCategory::DataOps,
 
             Action::OpenCommandBar => ActionCategory::Application,
+
+            Action::OpenSqlDialog
+            | Action::RunSqlQuery
+            | Action::LoadSqlFile
+            | Action::ClearSqlText
+            | Action::SqlNextSuggestion
+            | Action::SqlPreviousSuggestion
+            | Action::SqlAcceptSuggestion
+            | Action::SqlUndo
+            | Action::SqlRedo => ActionCategory::DataOps,
 
             Action::Escape => ActionCategory::Application,
         }
@@ -246,6 +276,15 @@ impl Action {
             Action::ToggleDetailsSort,
             Action::OpenMapViewer,
             Action::OpenCommandBar,
+            Action::OpenSqlDialog,
+            Action::RunSqlQuery,
+            Action::LoadSqlFile,
+            Action::ClearSqlText,
+            Action::SqlNextSuggestion,
+            Action::SqlPreviousSuggestion,
+            Action::SqlAcceptSuggestion,
+            Action::SqlUndo,
+            Action::SqlRedo,
         ]
     }
 }

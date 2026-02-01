@@ -4,6 +4,7 @@ pub mod command;
 pub mod component;
 pub mod components;
 pub mod keybindings;
+pub mod sql_suggestions;
 pub mod theme;
 
 pub use action::{Action, ActionCategory};
