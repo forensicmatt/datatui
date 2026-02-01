@@ -1,17 +1,18 @@
 //! FindDialog: Popup dialog for searching text in a DataFrame (Notepad++ style)
 
-use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, Wrap, BorderType};
 use crate::action::Action;
+use crate::components::dialog_layout::split_dialog_area;
 use crate::components::Component;
 use crate::config::Config;
+use crate::tui::KeyEventResult;
 use color_eyre::Result;
 use crossterm::event::{KeyEvent, KeyEventKind};
-use ratatui::Frame;
 use ratatui::layout::Size;
+use ratatui::prelude::*;
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Wrap};
+use ratatui::Frame;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
-use crate::components::dialog_layout::split_dialog_area;
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FindDialogMode {
@@ -128,9 +129,9 @@ impl FindDialog {
     }
 
     pub fn render(&self, area: Rect, buf: &mut Buffer) -> usize {
+        use ratatui::style::{Color, Style};
         use ratatui::widgets::Gauge;
         use ratatui::widgets::Paragraph;
-        use ratatui::style::{Style, Color};
         Clear.render(area, buf);
         // Outer container with double border
         let outer_block = Block::default()
@@ -148,12 +149,18 @@ impl FindDialog {
             return 1;
         }
         let instructions = self.build_instructions_from_config();
-        let layout = split_dialog_area(inner_area, self.show_instructions, 
-            if instructions.is_empty() { None } else { Some(instructions.as_str()) });
+        let layout = split_dialog_area(
+            inner_area,
+            self.show_instructions,
+            if instructions.is_empty() {
+                None
+            } else {
+                Some(instructions.as_str())
+            },
+        );
         let content_area = layout.content_area;
         let instructions_area = layout.instructions_area;
-        let block = Block::default()
-            .borders(Borders::ALL);
+        let block = Block::default().borders(Borders::ALL);
         block.render(content_area, buf);
         let start_x = content_area.x + 2;
         let mut y = content_area.y + 1;
@@ -161,9 +168,19 @@ impl FindDialog {
         let pattern_label = "Search Pattern:";
         if self.active_field == FindDialogField::Pattern {
             // Show cursor in the pattern with proper highlighting
-            buf.set_string(start_x, y, pattern_label, Style::default().add_modifier(Modifier::BOLD));
-            buf.set_string(start_x + 18, y, "> ", Style::default().fg(Color::Black).bg(Color::Cyan));
-            
+            buf.set_string(
+                start_x,
+                y,
+                pattern_label,
+                Style::default().add_modifier(Modifier::BOLD),
+            );
+            buf.set_string(
+                start_x + 18,
+                y,
+                "> ",
+                Style::default().fg(Color::Black).bg(Color::Cyan),
+            );
+
             // Draw the search pattern character by character, highlighting the cursor
             let mut x_pos = start_x + 20; // Start after "> "
             for (i, c) in self.search_pattern.chars().enumerate() {
@@ -175,49 +192,106 @@ impl FindDialog {
                 buf.set_string(x_pos, y, c.to_string(), style);
                 x_pos += 1;
             }
-            
+
             // If cursor is at the end, show a highlighted space
             if self.search_pattern_cursor == self.search_pattern.len() {
-                buf.set_string(x_pos, y, " ", Style::default().fg(Color::Black).bg(Color::Yellow));
+                buf.set_string(
+                    x_pos,
+                    y,
+                    " ",
+                    Style::default().fg(Color::Black).bg(Color::Yellow),
+                );
             }
         } else {
-            buf.set_string(start_x, y, pattern_label, Style::default().add_modifier(Modifier::BOLD));
+            buf.set_string(
+                start_x,
+                y,
+                pattern_label,
+                Style::default().add_modifier(Modifier::BOLD),
+            );
             buf.set_string(start_x + 18, y, &self.search_pattern, Style::default());
         }
         y += 1;
         // Options (checkboxes)
         let options = [
-            ("Backward direction", FindDialogField::Backward, self.options.backward),
-            ("Match whole word only", FindDialogField::WholeWord, self.options.whole_word),
-            ("Match case", FindDialogField::MatchCase, self.options.match_case),
-            ("Wrap around", FindDialogField::WrapAround, self.options.wrap_around),
+            (
+                "Backward direction",
+                FindDialogField::Backward,
+                self.options.backward,
+            ),
+            (
+                "Match whole word only",
+                FindDialogField::WholeWord,
+                self.options.whole_word,
+            ),
+            (
+                "Match case",
+                FindDialogField::MatchCase,
+                self.options.match_case,
+            ),
+            (
+                "Wrap around",
+                FindDialogField::WrapAround,
+                self.options.wrap_around,
+            ),
         ];
         for (label, field, checked) in options.iter() {
             let check = if *checked { "[✓]" } else { "[ ]" };
-            let style = if self.active_field == *field { Style::default().fg(Color::Black).bg(Color::Cyan) } else { Style::default() };
+            let style = if self.active_field == *field {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default()
+            };
             buf.set_string(start_x, y, check, style);
             buf.set_string(start_x + 4, y, label, style);
             y += 1;
         }
         y += 1;
         // Search Mode (radio)
-        let normal_style = if self.active_field == FindDialogField::SearchMode && self.search_mode == SearchMode::Normal {
+        let normal_style = if self.active_field == FindDialogField::SearchMode
+            && self.search_mode == SearchMode::Normal
+        {
             Style::default().fg(Color::Black).bg(Color::Cyan)
         } else if self.search_mode == SearchMode::Normal {
             Style::default().fg(Color::Green)
         } else {
             Style::default()
         };
-        let regex_style = if self.active_field == FindDialogField::SearchMode && self.search_mode == SearchMode::Regex {
+        let regex_style = if self.active_field == FindDialogField::SearchMode
+            && self.search_mode == SearchMode::Regex
+        {
             Style::default().fg(Color::Black).bg(Color::Cyan)
         } else if self.search_mode == SearchMode::Regex {
             Style::default().fg(Color::Green)
         } else {
             Style::default()
         };
-        buf.set_string(start_x, y, "Search Mode:", Style::default().add_modifier(Modifier::BOLD));
-        buf.set_string(start_x + 14, y, if self.search_mode == SearchMode::Normal { "(o) Normal" } else { "( ) Normal" }, normal_style);
-        buf.set_string(start_x + 28, y, if self.search_mode == SearchMode::Regex { "(o) Regular Expression" } else { "( ) Regular Expression" }, regex_style);
+        buf.set_string(
+            start_x,
+            y,
+            "Search Mode:",
+            Style::default().add_modifier(Modifier::BOLD),
+        );
+        buf.set_string(
+            start_x + 14,
+            y,
+            if self.search_mode == SearchMode::Normal {
+                "(o) Normal"
+            } else {
+                "( ) Normal"
+            },
+            normal_style,
+        );
+        buf.set_string(
+            start_x + 28,
+            y,
+            if self.search_mode == SearchMode::Regex {
+                "(o) Regular Expression"
+            } else {
+                "( ) Regular Expression"
+            },
+            regex_style,
+        );
         y += 2;
         // Actions (buttons)
         let actions = [
@@ -227,10 +301,17 @@ impl FindDialog {
         ];
         let mut x = start_x;
         for (label, action) in actions.iter() {
-            let style = if self.active_field == FindDialogField::ActionsRow && self.action_selected == *action {
-                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            let style = if self.active_field == FindDialogField::ActionsRow
+                && self.action_selected == *action
+            {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else if self.action_selected == *action {
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().add_modifier(Modifier::BOLD)
             };
@@ -303,7 +384,8 @@ impl FindDialog {
         }
         // Instructions area
         if self.show_instructions
-            && let Some(instructions_area) = instructions_area {
+            && let Some(instructions_area) = instructions_area
+        {
             let instructions_paragraph = Paragraph::new(instructions)
                 .block(Block::default().borders(Borders::ALL).title("Instructions"))
                 .style(Style::default().fg(Color::Yellow))
@@ -329,19 +411,25 @@ impl FindDialog {
             (crate::config::Mode::Global, crate::action::Action::Enter),
             (crate::config::Mode::Global, crate::action::Action::Escape),
             (crate::config::Mode::Find, crate::action::Action::Tab),
-            (crate::config::Mode::Find, crate::action::Action::ToggleSpace),
+            (
+                crate::config::Mode::Find,
+                crate::action::Action::ToggleSpace,
+            ),
             (crate::config::Mode::Find, crate::action::Action::Delete),
-            (crate::config::Mode::Global, crate::action::Action::ToggleInstructions),
+            (
+                crate::config::Mode::Global,
+                crate::action::Action::ToggleInstructions,
+            ),
         ]);
-        
+
         format!("Enter search pattern. {instructions}")
     }
 
-    pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<Action> {
-        use SearchMode::*;
+    pub fn handle_key_event(&mut self, key: KeyEvent) -> KeyEventResult {
         use crossterm::event::{KeyCode, KeyModifiers};
+        use SearchMode::*;
         if key.kind != KeyEventKind::Press {
-            return None;
+            return KeyEventResult::Ignored;
         }
 
         if let FindDialogMode::Error(_) = self.mode {
@@ -368,22 +456,64 @@ impl FindDialog {
             }
             return None;
         }
-        
-        if let KeyCode::Char(c) = key.code
-            && self.active_field == FindDialogField::Pattern && !key.modifiers.contains(KeyModifiers::CONTROL) {
+
+        if let KeyCode::Char(c) = key.code {
+            if self.active_field == FindDialogField::Pattern
+                && !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT)
+            {
                 let cursor = self.search_pattern_cursor.min(self.search_pattern.len());
                 self.search_pattern.insert(cursor, c);
                 self.search_pattern_cursor = cursor + 1;
                 return None;
             }
-        
+        }
+
         if key.kind == KeyEventKind::Press {
-            // First, honor config-driven Global actions
-            if let Some(global_action) = self.config.action_for_key(crate::config::Mode::Global, key) {
+            // Handle Backspace/Delete specifically for Pattern field here if likely not covered by Global actions?
+            // Actually, usually characters are not Actions. But Backspace MIGHT be mapped to an Action if config has it.
+            // If config doesn't have it, we should handle it here.
+            // However, `config.action_for_key` might return `Action::Backspace`.
+
+            // First check Global actions
+            if let Some(global_action) =
+                self.config.action_for_key(crate::config::Mode::Global, key)
+            {
                 match global_action {
+                    Action::Backspace => {
+                        if self.active_field == FindDialogField::Pattern
+                            && self.search_pattern_cursor > 0
+                            && !self.search_pattern.is_empty()
+                        {
+                            let cursor = self.search_pattern_cursor;
+                            // Safe removal using chars iterator to respect unicode
+                            let mut chars: Vec<char> = self.search_pattern.chars().collect();
+                            if cursor <= chars.len() {
+                                chars.remove(cursor - 1);
+                                self.search_pattern = chars.into_iter().collect();
+                                self.search_pattern_cursor -= 1;
+                            }
+                        }
+                        return None; // Consumed
+                    }
+                    Action::Delete => {
+                        // Assuming there is a Global Delete action, or we handle raw KeyCode::Delete
+                        // Delete logic handled below in Find-specific or raw key check if not Action::Delete
+                        if self.active_field == FindDialogField::Pattern {
+                            let cursor = self.search_pattern_cursor;
+                            let mut chars: Vec<char> = self.search_pattern.chars().collect();
+                            if cursor < chars.len() {
+                                chars.remove(cursor);
+                                self.search_pattern = chars.into_iter().collect();
+                            }
+                        }
+                        return None;
+                    }
                     Action::Escape => return Some(Action::DialogClose),
                     Action::Enter => {
-                        if self.active_field == FindDialogField::ActionsRow || self.active_field == FindDialogField::Pattern {
+                        if self.active_field == FindDialogField::ActionsRow
+                            || self.active_field == FindDialogField::Pattern
+                        {
                             match self.action_selected {
                                 FindActionSelected::FindNext => {
                                     return Some(Action::FindNext {
@@ -473,16 +603,6 @@ impl FindDialog {
                             }
                         }
                     }
-                    Action::Backspace => {
-                        if self.active_field == FindDialogField::Pattern
-                            && self.search_pattern_cursor > 0 && !self.search_pattern.is_empty() {
-                            let cursor = self.search_pattern_cursor;
-                            let mut chars: Vec<char> = self.search_pattern.chars().collect();
-                            chars.remove(cursor - 1);
-                            self.search_pattern = chars.into_iter().collect();
-                            self.search_pattern_cursor -= 1;
-                        }
-                    }
                     Action::ToggleInstructions => {
                         self.show_instructions = !self.show_instructions;
                     }
@@ -514,22 +634,25 @@ impl FindDialog {
                         }
                         return None;
                     }
-                    Action::Delete => {
-                        if self.active_field == FindDialogField::Pattern {
-                            let cursor = self.search_pattern_cursor;
-                            if cursor < self.search_pattern.len() && !self.search_pattern.is_empty() {
-                                let mut chars: Vec<char> = self.search_pattern.chars().collect();
-                                chars.remove(cursor);
-                                self.search_pattern = chars.into_iter().collect();
-                            }
-                        }
-                        return None;
-                    }
                     _ => {}
+                        return KeyEventResult::Consumed;
+                    }
+                    _ => {} // If a find-specific action is not handled here, it's ignored by the dialog
                 }
             }
+
+            // Raw key handling for Delete if not mapped to Action::Delete
+            if key.code == KeyCode::Delete && self.active_field == FindDialogField::Pattern {
+                 let cursor = self.search_pattern_cursor;
+                 let mut chars: Vec<char> = self.search_pattern.chars().collect();
+                 if cursor < chars.len() {
+                     chars.remove(cursor);
+                     self.search_pattern = chars.into_iter().collect();
+                 }
+                 return KeyEventResult::Consumed;
+            }
         }
-        None
+        KeyEventResult::Ignored // If nothing above consumed or returned an action, ignore it
     }
 }
 
@@ -537,9 +660,9 @@ impl Component for FindDialog {
     fn register_action_handler(&mut self, _tx: UnboundedSender<Action>) -> Result<()> {
         Ok(())
     }
-    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> { 
-        self.config = _config; 
-        Ok(()) 
+    fn register_config_handler(&mut self, _config: crate::config::Config) -> Result<()> {
+        self.config = _config;
+        Ok(())
     }
     fn init(&mut self, _area: Size) -> Result<()> {
         Ok(())
@@ -547,17 +670,25 @@ impl Component for FindDialog {
     fn handle_events(&mut self, _event: Option<crate::tui::Event>) -> Result<Option<Action>> {
         Ok(None)
     }
-    fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+    fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<KeyEventResult> {
+        // Implement key handling logic directly here, or call a helper
+        // The helper `handle_key_event` currently returns `Option<Action>`, but not `Result`.
+        // We can wrap it.
         Ok(self.handle_key_event(key))
     }
-    fn handle_mouse_event(&mut self, _mouse: crossterm::event::MouseEvent) -> Result<Option<Action>> {
+
+    fn handle_mouse_event(
+        &mut self,
+        _mouse: crossterm::event::MouseEvent,
+    ) -> Result<Option<Action>> {
         Ok(None)
     }
-    fn update(&mut self, _action: Action) -> Result<Option<Action>> {
-        Ok(None)
-    }
-    fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        self.render(area, frame.buffer_mut());
+    fn update(&mut self) -> Result<()> {
+        self.tick_search_progress();
         Ok(())
     }
-} 
+    fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
+        self.render(frame, area);
+        Ok(())
+    }
+}

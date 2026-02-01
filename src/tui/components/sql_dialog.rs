@@ -3,7 +3,7 @@
 //! Modal dialog for writing and executing SQL queries against datasets.
 
 use crate::tui::sql_suggestions;
-use crate::tui::{Action, Component};
+use crate::tui::{Action, Component, KeyEventResult};
 use color_eyre::Result;
 use ratatui::{
     layout::{Margin, Rect},
@@ -632,32 +632,32 @@ impl SqlDialog {
         self.update_suggestions();
     }
     /// Handle a key event
-    /// Returns true if the event was handled
-    pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> bool {
+    /// Returns KeyEventResult
+    pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<KeyEventResult> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
         // If a suggestion is selected, only allow navigation keys
         if self.has_selected_suggestion() {
             if key.code == KeyCode::Enter {
                 self.accept_suggestion();
-                return true;
+                return Ok(KeyEventResult::Consumed);
             } else if key.code == KeyCode::Up {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
                     self.page_up_suggestion();
                 } else {
                     self.prev_suggestion();
                 }
-                return true;
+                return Ok(KeyEventResult::Consumed);
             } else if key.code == KeyCode::Down {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
                     self.page_down_suggestion();
                 } else {
                     self.next_suggestion();
                 }
-                return true;
+                return Ok(KeyEventResult::Consumed);
             } else if key.code == KeyCode::Esc {
                 self.clear_suggestion_selection();
-                return true;
+                return Ok(KeyEventResult::Consumed);
             }
 
             // Character input uses type-ahead to navigate suggestions
@@ -666,7 +666,7 @@ impl SqlDialog {
                     && !key.modifiers.contains(KeyModifiers::ALT)
                 {
                     self.add_typeahead_char(c);
-                    return true;
+                    return Ok(KeyEventResult::Consumed);
                 }
             } else if key.code == KeyCode::Backspace {
                 // Remove last character from typeahead buffer or delete char
@@ -682,31 +682,31 @@ impl SqlDialog {
                     self.clear_suggestion_selection();
                     self.delete_char();
                 }
-                return true;
+                return Ok(KeyEventResult::Consumed);
             }
             // Ignore other keys when suggestion is selected (except movement keys not handled here?)
             // Actually we probably want to let other keys fall through?
             // Original logic in App returned Ok(()) essentially consuming the key.
-            return true;
+            return Ok(KeyEventResult::Consumed);
         } else {
             // Normal text input mode
 
             // Handle Ctrl+Enter to execute query
             if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.execute_query();
-                return true;
+                return Ok(KeyEventResult::Consumed);
             }
 
             // Handle Ctrl+Left - move cursor left by word
             if key.code == KeyCode::Left && key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.cursor_word_left();
-                return true;
+                return Ok(KeyEventResult::Consumed);
             }
 
             // Handle Ctrl+Right - move cursor right by word
             if key.code == KeyCode::Right && key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.cursor_word_right();
-                return true;
+                return Ok(KeyEventResult::Consumed);
             }
 
             if let KeyCode::Char(c) = key.code {
@@ -714,7 +714,7 @@ impl SqlDialog {
                     && !key.modifiers.contains(KeyModifiers::ALT)
                 {
                     self.insert_char(c);
-                    return true;
+                    return Ok(KeyEventResult::Consumed);
                 }
             } else if key.code == KeyCode::Backspace {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -722,21 +722,25 @@ impl SqlDialog {
                 } else {
                     self.delete_char();
                 }
-                return true;
+                return Ok(KeyEventResult::Consumed);
             } else if key.code == KeyCode::Enter {
                 self.insert_newline();
-                return true;
+                return Ok(KeyEventResult::Consumed);
             } else if key.code == KeyCode::Tab {
                 self.next_suggestion();
-                return true;
+                return Ok(KeyEventResult::Consumed);
             }
         }
 
-        false
+        Ok(KeyEventResult::Ignored)
     }
 }
 
 impl Component for SqlDialog {
+    fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<KeyEventResult> {
+        self.handle_key_event(key)
+    }
+
     fn handle_action(&mut self, action: Action) -> Result<bool> {
         match action {
             Action::Escape | Action::Cancel => {

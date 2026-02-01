@@ -1,5 +1,5 @@
 use crate::core::ColumnWidthConfig;
-use crate::tui::{Action, Component};
+use crate::tui::{Action, Component, KeyEventResult};
 use color_eyre::Result;
 use ratatui::{
     layout::Rect,
@@ -217,9 +217,42 @@ impl ColumnWidthDialog {
             false
         }
     }
+
+    /// Handle key event
+    pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<KeyEventResult> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        if self.input_mode == InputMode::EditingWidth {
+            // Handle character input for width editing
+            if let KeyCode::Char(c) = key.code {
+                if c.is_ascii_digit()
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                {
+                    // Only allow digits for width input
+                    self.input_buffer.push(c);
+                    return Ok(KeyEventResult::Consumed);
+                }
+            } else if key.code == KeyCode::Backspace {
+                // Handle backspace
+                self.input_buffer.pop();
+                return Ok(KeyEventResult::Consumed);
+            } else if key.code == KeyCode::Delete {
+                // Clear the entire buffer
+                self.input_buffer.clear();
+                return Ok(KeyEventResult::Consumed);
+            }
+        }
+
+        Ok(KeyEventResult::Ignored)
+    }
 }
 
 impl Component for ColumnWidthDialog {
+    fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<KeyEventResult> {
+        self.handle_key_event(key)
+    }
+
     fn handle_action(&mut self, action: Action) -> Result<bool> {
         match action {
             Action::Escape => {

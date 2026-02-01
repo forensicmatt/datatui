@@ -34,6 +34,17 @@ pub trait Component {
     fn update(&mut self) -> Result<()> {
         Ok(())
     }
+
+    fn handle_key_event(&mut self, _key: crossterm::event::KeyEvent) -> Result<KeyEventResult> {
+        Ok(KeyEventResult::Ignored)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum KeyEventResult {
+    Consumed,       // Key handled internally, no propagation
+    Action(Action), // Key triggered an action
+    Ignored,        // Key not handled
 }
 
 /// Focusable component trait

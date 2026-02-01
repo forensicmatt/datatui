@@ -2,7 +2,7 @@
 //!
 //! A vim-style command bar for executing commands without navigating through UI components.
 
-use crate::tui::{Action, Component, Theme};
+use crate::tui::{Action, Component, KeyEventResult, Theme};
 use color_eyre::Result;
 use ratatui::{
     layout::Rect,
@@ -271,9 +271,67 @@ impl CommandBarDialog {
             content
         }
     }
+    /// Handle a key event
+    pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<KeyEventResult> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        // Handle character input
+        if let KeyCode::Char(c) = key.code {
+            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT)
+            {
+                self.command.insert(self.cursor, c);
+                self.cursor += 1;
+                // TODO: Update suggestions here or trigger an update
+                return Ok(KeyEventResult::Consumed);
+            }
+        }
+
+        match key.code {
+            KeyCode::Backspace => {
+                if self.cursor > 0 && !self.command.is_empty() {
+                    self.command.remove(self.cursor - 1);
+                    self.cursor -= 1;
+                }
+                Ok(KeyEventResult::Consumed)
+            }
+            KeyCode::Delete => {
+                if self.cursor < self.command.len() {
+                    self.command.remove(self.cursor);
+                }
+                Ok(KeyEventResult::Consumed)
+            }
+            KeyCode::Tab => {
+                if self.selected_suggestion.is_some() {
+                    self.clear_selection();
+                } else {
+                    self.next_suggestion();
+                }
+                Ok(KeyEventResult::Consumed)
+            }
+            KeyCode::Enter => {
+                if self.selected_suggestion.is_some() {
+                    self.accept_suggestion();
+                    Ok(KeyEventResult::Consumed)
+                } else {
+                    self.execute_command();
+                    Ok(KeyEventResult::Consumed)
+                }
+            }
+            KeyCode::Esc => {
+                self.pending_result = Some(DialogResult::Close);
+                Ok(KeyEventResult::Consumed)
+            }
+            _ => Ok(KeyEventResult::Ignored),
+        }
+    }
 }
 
 impl Component for CommandBarDialog {
+    fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<KeyEventResult> {
+        self.handle_key_event(key)
+    }
+
     fn handle_action(&mut self, action: Action) -> Result<bool> {
         // Clear error on any action
         if self.error.is_some() && action != Action::Cancel {

@@ -399,175 +399,204 @@ Press Esc or Enter to close this dialog.";
         Ok(())
     }
 
-    /// Handle a key event
+    /// Handle key events
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<()> {
+        use crate::tui::KeyEventResult;
+        use tracing::debug;
+
+        debug!("Handling key event: {:?}", key);
+
         // Only handle key press events, ignore release/repeat
         if key.kind != KeyEventKind::Press {
             return Ok(());
         }
 
-        // If column width dialog is active and editing, handle character input
-        if let Some(dialog) = &mut self.column_width_dialog {
-            if dialog.input_mode
-                == crate::tui::components::column_width_dialog::InputMode::EditingWidth
-            {
-                // Handle character input for width editing
-                if let KeyCode::Char(c) = key.code {
-                    if c.is_ascii_digit()
-                        && !key.modifiers.contains(KeyModifiers::CONTROL)
-                        && !key.modifiers.contains(KeyModifiers::ALT)
-                    {
-                        // Only allow digits for width input
-                        dialog.input_buffer.push(c);
-                        return Ok(());
-                    }
-                } else if key.code == KeyCode::Backspace {
-                    // Handle backspace
-                    dialog.input_buffer.pop();
-                    return Ok(());
-                } else if key.code == KeyCode::Delete {
-                    // Clear the entire buffer
-                    dialog.input_buffer.clear();
+        // Delegate to active component and handle results
+        // We check specific dialogs that produce results via take_result()
+
+        // ErrorDialog (handles differently)
+        if let Some(dialog) = &mut self.error_dialog {
+            match dialog.handle_key_event(key)? {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
                     return Ok(());
                 }
+                KeyEventResult::Ignored => {}
+            }
+            // If ignored, we might want to let it fall through to global bindings?
+            // Previous code returned Ok(())?
+            // "if let Some(action) = ... { ... } return Ok(())"
+            // So it returned Ok(()) regardless of action?
+            // "return Ok(())" means it consumes the key even if ignored?
+            // If ErrorDialog is modal, it should probably BLOCK other input.
+            // But if it ignores Esc, we verify if global handles it.
+            // But if we return Ok(()), global bindings are NOT checked (because handle_key_event returns).
+            // So we should implicit fallthrough IF we want global bindings to work.
+            // BUT ErrorDialog needs to handle Esc to close!
+            // Global keybinding for Esc -> Action::Cancel.
+            // So we MUST fall through.
+            // So we do `match result ... Ignored => {}` then continue.
+        }
+
+        // ... (other dialogs) ...
+
+        // FindDialog
+        if self.find_dialog.is_some() {
+            let (kr, dr) = if let Some(d) = &mut self.find_dialog {
+                (d.handle_key_event(key)?, d.take_result())
+            } else {
+                (KeyEventResult::Ignored, None)
+            };
+
+            if let Some(result) = dr {
+                self.handle_dialog_result(result)?;
+            }
+            match kr {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
+            }
+        }
+        // CommandBarDialog
+        else if self.command_bar_dialog.is_some() {
+            let (kr, dr) = if let Some(d) = &mut self.command_bar_dialog {
+                (d.handle_key_event(key)?, d.take_result())
+            } else {
+                (KeyEventResult::Ignored, None)
+            };
+
+            if let Some(result) = dr {
+                self.handle_command_bar_result(result)?;
+            }
+            match kr {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
+            }
+        }
+        // ColumnWidthDialog
+        else if self.column_width_dialog.is_some() {
+            let (kr, dr) = if let Some(d) = &mut self.column_width_dialog {
+                (d.handle_key_event(key)?, d.take_result())
+            } else {
+                (KeyEventResult::Ignored, None)
+            };
+
+            if let Some(result) = dr {
+                self.handle_column_dialog_result(result)?;
+            }
+            match kr {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
+            }
+        }
+        // SortDialog
+        else if self.sort_dialog.is_some() {
+            let (kr, dr) = if let Some(d) = &mut self.sort_dialog {
+                (d.handle_key_event(key)?, d.take_result())
+            } else {
+                (KeyEventResult::Ignored, None)
+            };
+
+            if let Some(result) = dr {
+                self.handle_sort_dialog_result(result)?;
+            }
+            match kr {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
+            }
+        }
+        // SqlDialog
+        else if self.sql_dialog.is_some() {
+            let (kr, dr) = if let Some(d) = &mut self.sql_dialog {
+                (d.handle_key_event(key)?, d.take_result())
+            } else {
+                (KeyEventResult::Ignored, None)
+            };
+
+            if let Some(result) = dr {
+                self.handle_sql_dialog_result(result)?;
+            }
+            match kr {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
+            }
+        }
+        // Other components that don't need explicit result extraction (via take_result)
+        // FindAllResultsDialog
+        else if let Some(dialog) = &mut self.find_all_results_dialog {
+            match dialog.handle_key_event(key)? {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
+            }
+        }
+        // MapViewerDialog
+        else if let Some(dialog) = &mut self.map_viewer_dialog {
+            match dialog.handle_key_event(key)? {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
+            }
+        }
+        // DataFrameDetailsDialog
+        else if let Some(dialog) = &mut self.dataframe_details_dialog {
+            match dialog.handle_key_event(key)? {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
             }
         }
 
-        // If find dialog is active, give it priority for character input (only when Pattern field is active)
-        if let Some(dialog) = &mut self.find_dialog {
-            // Only handle character/backspace/delete when Pattern field is active
-            if dialog.active_field == crate::tui::components::find_dialog::FindDialogField::Pattern
-            {
-                // Handle character input for pattern field
-                if let KeyCode::Char(c) = key.code {
-                    if !key.modifiers.contains(KeyModifiers::CONTROL)
-                        && !key.modifiers.contains(KeyModifiers::ALT)
-                    {
-                        // Insert character into pattern
-                        dialog
-                            .search_pattern
-                            .insert(dialog.search_pattern_cursor, c);
-                        dialog.search_pattern_cursor += 1;
-                        return Ok(());
-                    }
-                } else if key.code == KeyCode::Backspace {
-                    // Handle backspace in pattern field
-                    if dialog.search_pattern_cursor > 0 && !dialog.search_pattern.is_empty() {
-                        dialog
-                            .search_pattern
-                            .remove(dialog.search_pattern_cursor - 1);
-                        dialog.search_pattern_cursor -= 1;
-                    }
-                    return Ok(());
-                } else if key.code == KeyCode::Delete {
-                    // Handle delete in pattern field
-                    if dialog.search_pattern_cursor < dialog.search_pattern.len() {
-                        dialog.search_pattern.remove(dialog.search_pattern_cursor);
-                    }
-                    return Ok(());
-                }
-            }
-        }
-
-        // If command bar is active, handle character input
-        if let Some(dialog) = &mut self.command_bar_dialog {
-            if let KeyCode::Char(c) = key.code {
-                if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(KeyModifiers::ALT)
-                {
-                    dialog.command.insert(dialog.cursor, c);
-                    dialog.cursor += 1;
-
-                    // Update suggestions
-                    let columns = if let Some(table) = &self.data_table {
-                        table.get_all_columns()
-                    } else {
-                        Vec::new()
-                    };
-                    use crate::tui::command::Command;
-                    let suggestions = Command::get_suggestions(&dialog.command, &columns);
-                    dialog.set_suggestions(suggestions);
-
-                    return Ok(());
-                }
-            } else if key.code == KeyCode::Backspace {
-                if dialog.cursor > 0 && !dialog.command.is_empty() {
-                    dialog.command.remove(dialog.cursor - 1);
-                    dialog.cursor -= 1;
-
-                    // Update suggestions
-                    let columns = if let Some(table) = &self.data_table {
-                        table.get_all_columns()
-                    } else {
-                        Vec::new()
-                    };
-                    use crate::tui::command::Command;
-                    let suggestions = Command::get_suggestions(&dialog.command, &columns);
-                    dialog.set_suggestions(suggestions);
-                }
-                return Ok(());
-            } else if key.code == KeyCode::Delete {
-                if dialog.cursor < dialog.command.len() {
-                    dialog.command.remove(dialog.cursor);
-
-                    // Update suggestions
-                    let columns = if let Some(table) = &self.data_table {
-                        table.get_all_columns()
-                    } else {
-                        Vec::new()
-                    };
-                    use crate::tui::command::Command;
-                    let suggestions = Command::get_suggestions(&dialog.command, &columns);
-                    dialog.set_suggestions(suggestions);
-                }
-                return Ok(());
-            } else if key.code == KeyCode::Tab {
-                if dialog.selected_suggestion.is_some() {
-                    dialog.clear_selection();
-                } else {
-                    dialog.next_suggestion();
-                }
-                return Ok(());
-            }
-        }
-
-        // If SQL dialog is active, handle character input
-        let mut sql_dialog_handled = false;
-        if let Some(dialog) = &mut self.sql_dialog {
-            if dialog.handle_key_event(key) {
-                sql_dialog_handled = true;
-            }
-        }
-
-        if sql_dialog_handled {
-            if let Some(dialog) = &mut self.sql_dialog {
-                if let Some(result) = dialog.take_result() {
-                    self.handle_sql_dialog_result(result)?;
-                }
-            }
-            return Ok(());
-        }
-
-        // Determine search scope for keybindings
-        let scope = if self.sql_dialog.is_some() {
-            "SqlDialog"
+        // If not handled by component, check global/scoped keybindings matches
+        let scope = if self.error_dialog.is_some() {
+            "ErrorDialog"
+        } else if self.find_dialog.is_some() {
+            "FindDialog"
         } else if self.command_bar_dialog.is_some() {
             "CommandBarDialog"
         } else if self.column_width_dialog.is_some() {
             "ColumnWidthDialog"
         } else if self.sort_dialog.is_some() {
             "SortDialog"
-        } else if let Some(ref details_dialog) = self.dataframe_details_dialog {
-            // Check if MapViewerDialog is active inside DataFrameDetailsDialog
-            if details_dialog.has_map_viewer() {
+        } else if self.sql_dialog.is_some() {
+            "SqlDialog"
+        } else if let Some(ref details) = self.dataframe_details_dialog {
+            if details.has_map_viewer() {
                 "MapViewerDialog"
             } else {
                 "DataFrameDetailsDialog"
             }
         } else if self.map_viewer_dialog.is_some() {
             "MapViewerDialog"
-        } else if self.find_dialog.is_some() {
-            "FindDialog"
         } else if let Some(dialog) = &self.find_all_results_dialog {
             if dialog.is_focused() {
                 "FindAllResults"
@@ -575,10 +604,11 @@ Press Esc or Enter to close this dialog.";
                 "DataTable"
             }
         } else {
+            // Let's stick to "Global" or "DataTable" based on context.
+            // If no dialog is open, we are likely in DataTable.
             "DataTable"
         };
 
-        // Translate key to action using the determined scope
         if let Some(action) = self.keybindings.get_action(scope, &key) {
             self.handle_action(action)?;
         }
