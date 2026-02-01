@@ -562,9 +562,9 @@ impl Component for FindAllResultsDialog {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
+    fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         // Use default theme - App will need to handle theme properly
-        let theme = Theme::default();
+        // let theme = Theme::default(); // Removed
 
         // Determine dialog area based on display mode
         let dialog_area = match self.display_mode {

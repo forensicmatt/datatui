@@ -1,6 +1,6 @@
 //! SortDialog: Modal dialog for configuring multi-column sorting
 
-use crate::tui::{Action, Component};
+use crate::tui::{Action, Component, Theme};
 use color_eyre::Result;
 use ratatui::{
     layout::{Margin, Rect},
@@ -299,7 +299,7 @@ impl Component for SortDialog {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
+    fn render(&mut self, frame: &mut Frame, area: Rect, _theme: &Theme) {
         // Clear the background
         frame.render_widget(Clear, area);
 

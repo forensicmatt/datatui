@@ -348,8 +348,8 @@ impl Component for FindDialog {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let theme = Theme::default();
+    fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        // let theme = Theme::default(); // Removed
 
         // Clear area
         frame.render_widget(Clear, area);
@@ -369,27 +369,27 @@ impl Component for FindDialog {
         let x = inner_area.x + 2;
 
         // Render pattern input
-        self.render_pattern_field(frame.buffer_mut(), x, y, inner_area.width - 4, &theme);
+        self.render_pattern_field(frame.buffer_mut(), x, y, inner_area.width - 4, theme);
         y += 2;
 
         // Render checkboxes
-        self.render_checkboxes(frame.buffer_mut(), x, y, &theme);
+        self.render_checkboxes(frame.buffer_mut(), x, y, theme);
         y += 5;
 
         // Render search mode radio
-        self.render_search_mode(frame.buffer_mut(), x, y, &theme);
+        self.render_search_mode(frame.buffer_mut(), x, y, theme);
         y += 2;
 
         // Render action buttons
-        self.render_actions(frame.buffer_mut(), x, y, &theme);
+        self.render_actions(frame.buffer_mut(), x, y, theme);
 
         // Render overlays if needed
         match &self.mode {
             FindDialogMode::Error(msg) => {
-                self.render_error_overlay(frame, area, msg, &theme);
+                self.render_error_overlay(frame, area, msg, theme);
             }
             FindDialogMode::Count(msg) => {
-                self.render_count_overlay(frame, area, msg, &theme);
+                self.render_count_overlay(frame, area, msg, theme);
             }
             FindDialogMode::Main => {}
         }

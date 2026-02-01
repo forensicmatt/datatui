@@ -465,8 +465,8 @@ impl DataFrameDetailsDialog {
     }
 
     /// Render the dialog
-    fn render_dialog(&mut self, frame: &mut Frame, area: Rect) {
-        let theme = Theme::default();
+    fn render_dialog(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        // let theme = Theme::default(); // Removed
 
         // Clear background
         frame.render_widget(Clear, area);
@@ -502,7 +502,7 @@ impl DataFrameDetailsDialog {
         // Render map viewer overlay if active
         if let Some(viewer) = &mut self.map_viewer {
             let viewer_area = Self::centered_rect(80, 70, area);
-            viewer.render(frame, viewer_area);
+            viewer.render(frame, viewer_area, theme);
         }
     }
 
@@ -1138,8 +1138,8 @@ impl Component for DataFrameDetailsDialog {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
-        self.render_dialog(frame, area);
+    fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        self.render_dialog(frame, area, theme);
     }
 
     fn supported_actions(&self) -> &[Action] {

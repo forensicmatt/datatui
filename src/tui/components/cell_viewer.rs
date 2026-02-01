@@ -166,8 +166,8 @@ impl Component for CellViewer {
         Ok(false)
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let theme = Theme::default();
+    fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        // let theme = Theme::default(); // Removed
 
         // If no cell info, show a placeholder
         let Some(ref info) = self.cell_info else {

@@ -359,7 +359,7 @@ impl Component for ColumnWidthDialog {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
+    fn render(&mut self, frame: &mut Frame, area: Rect, _theme: &crate::tui::Theme) {
         // Clear background
         frame.render_widget(Clear, area);
 

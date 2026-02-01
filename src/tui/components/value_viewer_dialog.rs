@@ -46,8 +46,8 @@ impl ValueViewerDialog {
     }
 
     /// Render the dialog
-    fn render_dialog(&mut self, frame: &mut Frame, area: Rect) {
-        let theme = Theme::default();
+    fn render_dialog(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        // let theme = Theme::default(); // Removed
 
         // Clear background
         frame.render_widget(Clear, area);
@@ -172,8 +172,8 @@ impl Component for ValueViewerDialog {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
-        self.render_dialog(frame, area);
+    fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        self.render_dialog(frame, area, theme);
     }
 
     fn supported_actions(&self) -> &[Action] {

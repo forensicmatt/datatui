@@ -413,8 +413,8 @@ impl Component for CommandBarDialog {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let theme = Theme::default();
+    fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        // let theme = Theme::default(); // Removed
 
         // Clear area
         frame.render_widget(Clear, area);

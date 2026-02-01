@@ -17,7 +17,7 @@ pub trait Component {
     /// Render the component to the terminal
     ///
     /// Components are responsible for rendering themselves within the given area.
-    fn render(&mut self, frame: &mut Frame, area: Rect);
+    fn render(&mut self, frame: &mut Frame, area: Rect, theme: &crate::tui::Theme);
 
     /// Get list of actions this component supports
     ///
@@ -89,7 +89,7 @@ mod tests {
             }
         }
 
-        fn render(&mut self, _frame: &mut Frame, _area: Rect) {
+        fn render(&mut self, _frame: &mut Frame, _area: Rect, _theme: &crate::tui::Theme) {
             // Mock render - does nothing
         }
 

@@ -1091,7 +1091,7 @@ Press Esc or Enter to close this dialog.";
                     .split(area);
 
                 // Render the cell viewer (top)
-                self.cell_viewer.render(frame, chunks[0]);
+                self.cell_viewer.render(frame, chunks[0], &self.theme);
 
                 (chunks[1], Some(chunks[2]))
             } else {
@@ -1102,18 +1102,18 @@ Press Esc or Enter to close this dialog.";
                     .split(area);
 
                 // Render the cell viewer (top)
-                self.cell_viewer.render(frame, chunks[0]);
+                self.cell_viewer.render(frame, chunks[0], &self.theme);
 
                 (chunks[1], None)
             };
 
             // Render the data table
-            table.render(frame, table_area);
+            table.render(frame, table_area, &self.theme);
 
             // Render find all results panel if active
             if let Some(dialog) = &mut self.find_all_results_dialog {
                 if let Some(area) = results_area {
-                    dialog.render(frame, area);
+                    dialog.render(frame, area, &self.theme);
                 }
             }
         } else {
@@ -1123,37 +1123,37 @@ Press Esc or Enter to close this dialog.";
         // Render find dialog overlay on top if active (always overlay)
         if let Some(dialog) = &mut self.find_dialog {
             let dialog_area = Self::centered_rect(60, 50, area);
-            dialog.render(frame, dialog_area);
+            dialog.render(frame, dialog_area, &self.theme);
         }
 
         // Render column width dialog overlay if active
         if let Some(dialog) = &mut self.column_width_dialog {
             let dialog_area = Self::centered_rect(70, 70, area);
-            dialog.render(frame, dialog_area);
+            dialog.render(frame, dialog_area, &self.theme);
         }
 
         // Render DataFrame details dialog overlay if active
         if let Some(dialog) = &mut self.dataframe_details_dialog {
             let dialog_area = Self::centered_rect(85, 80, area);
-            dialog.render(frame, dialog_area);
+            dialog.render(frame, dialog_area, &self.theme);
         }
 
         // Render Map Viewer dialog overlay if active
         if let Some(dialog) = &mut self.map_viewer_dialog {
             let dialog_area = Self::centered_rect(60, 60, area);
-            dialog.render(frame, dialog_area);
+            dialog.render(frame, dialog_area, &self.theme);
         }
 
         // Render sort dialog overlay if active
         if let Some(dialog) = &mut self.sort_dialog {
             let dialog_area = Self::centered_rect(60, 60, area);
-            dialog.render(frame, dialog_area);
+            dialog.render(frame, dialog_area, &self.theme);
         }
 
         // Render SQL dialog overlay if active
         if let Some(dialog) = &mut self.sql_dialog {
             let dialog_area = Self::centered_rect(90, 90, area);
-            dialog.render(frame, dialog_area);
+            dialog.render(frame, dialog_area, &self.theme);
         }
 
         // Render command bar dialog if active (always at bottom, vim-style)
@@ -1164,13 +1164,13 @@ Press Esc or Enter to close this dialog.";
                 width: area.width,
                 height: 3,
             };
-            dialog.render(frame, bar_area);
+            dialog.render(frame, bar_area, &self.theme);
         }
 
         // Render error dialog if active (centered overlay, highest priority)
         if let Some(dialog) = &mut self.error_dialog {
             let dialog_area = Self::centered_rect(50, 30, area);
-            dialog.render(frame, dialog_area);
+            dialog.render(frame, dialog_area, &self.theme);
         }
     }
 

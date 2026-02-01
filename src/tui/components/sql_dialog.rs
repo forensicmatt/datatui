@@ -3,7 +3,7 @@
 //! Modal dialog for writing and executing SQL queries against datasets.
 
 use crate::tui::sql_suggestions;
-use crate::tui::{Action, Component, KeyEventResult};
+use crate::tui::{Action, Component, KeyEventResult, Theme};
 use color_eyre::Result;
 use ratatui::{
     layout::{Margin, Rect},
@@ -817,7 +817,7 @@ impl Component for SqlDialog {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
+    fn render(&mut self, frame: &mut Frame, area: Rect, _theme: &Theme) {
         // Clear background
         frame.render_widget(Clear, area);
 

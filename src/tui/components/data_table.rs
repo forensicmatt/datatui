@@ -1103,10 +1103,10 @@ impl Component for DataTable {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect) {
+    fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         self.update_viewport(area);
 
-        let theme = Theme::default();
+        // let theme = Theme::default(); // Removed
 
         // Calculate column widths
         // Calculate column widths
