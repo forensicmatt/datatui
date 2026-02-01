@@ -5,7 +5,7 @@ use crate::tui::components::{
     CellViewer, ColumnWidthDialog, CommandBarDialog, DataFrameDetailsDialog, DataTable,
     ErrorDialog, FindAllResultsDialog, FindDialog, MapViewerDialog, SortDialog, SqlDialog,
 };
-use crate::tui::{Action, Component, Focusable, KeyBindings, Theme};
+use crate::tui::{Action, Command, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
@@ -361,9 +361,12 @@ Press Esc or Enter to close this dialog.";
                 if let Some(action) = command.requires_action() {
                     self.handle_action(action)?;
                 }
+
+                // Close command bar after execution
+                self.command_bar_dialog = None;
             }
             DialogResult::Close => {
-                // Just close, already handled
+                self.command_bar_dialog = None;
             }
         }
 
@@ -397,6 +400,21 @@ Press Esc or Enter to close this dialog.";
             }
         }
         Ok(())
+    }
+
+    /// Update suggestions for the command bar based on current input
+    fn update_command_suggestions(&mut self) {
+        if let Some(dialog) = &mut self.command_bar_dialog {
+            let input = dialog.command.clone();
+            let columns = if let Some(table) = &self.data_table {
+                table.get_all_columns()
+            } else {
+                vec![]
+            };
+
+            let suggestions = Command::get_suggestions(&input, &columns);
+            dialog.set_suggestions(suggestions);
+        }
     }
 
     /// Handle key events
@@ -463,6 +481,9 @@ Press Esc or Enter to close this dialog.";
         }
         // CommandBarDialog
         else if self.command_bar_dialog.is_some() {
+            // Capture old text to check for changes
+            let old_text = self.command_bar_dialog.as_ref().map(|d| d.command.clone());
+
             let (kr, dr) = if let Some(d) = &mut self.command_bar_dialog {
                 (d.handle_key_event(key)?, d.take_result())
             } else {
@@ -472,10 +493,24 @@ Press Esc or Enter to close this dialog.";
             if let Some(result) = dr {
                 self.handle_command_bar_result(result)?;
             }
+
             match kr {
-                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Consumed => {
+                    // Check if text changed
+                    let new_text = self.command_bar_dialog.as_ref().map(|d| d.command.clone());
+                    if old_text != new_text {
+                        self.update_command_suggestions();
+                    }
+                    return Ok(());
+                }
                 KeyEventResult::Action(a) => {
                     self.handle_action(a)?;
+
+                    // Check if text changed (e.g. history navigation)
+                    let new_text = self.command_bar_dialog.as_ref().map(|d| d.command.clone());
+                    if old_text != new_text {
+                        self.update_command_suggestions();
+                    }
                     return Ok(());
                 }
                 KeyEventResult::Ignored => {}
