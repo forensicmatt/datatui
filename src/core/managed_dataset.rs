@@ -208,9 +208,16 @@ impl ManagedDataset {
     pub fn set_column_config(&mut self, config: ColumnWidthConfig) -> Result<()> {
         let columns = self.column_names()?;
 
-        // Validate config against current columns
+        // Clean config to match current columns instead of straight strict validation
+        // This handles cases where columns might have been dropped or added since config creation
+        let mut config = config;
+        config.clean_for_columns(&columns);
+
+        // Final sanity check (should pass after clean)
         if !config.validate(&columns) {
-            return Err(color_eyre::eyre::eyre!("Invalid column configuration"));
+            return Err(color_eyre::eyre::eyre!(
+                "Invalid column configuration even after cleaning"
+            ));
         }
 
         self.column_config = config;

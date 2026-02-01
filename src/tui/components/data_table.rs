@@ -518,8 +518,15 @@ impl DataTable {
                 let mut max_width = config.name.len() as u16;
 
                 if let Some(ref batch) = sample_batch {
-                    if *col_idx < batch.num_columns() {
-                        let column = batch.column(*col_idx);
+                    // Find actual column index in batch by name to support reordering
+                    let actual_idx = batch
+                        .schema()
+                        .fields()
+                        .iter()
+                        .position(|f| f.name() == &config.name);
+
+                    if let Some(idx) = actual_idx {
+                        let column = batch.column(idx);
                         for row_idx in 0..batch.num_rows() {
                             let value_str = self.format_cell_value(column, row_idx);
                             max_width = max_width.max(value_str.len() as u16);
@@ -542,7 +549,55 @@ impl DataTable {
 
         // Auto-expand if enabled
         if self.viewport_config.auto_expand {
-            self.distribute_remaining_space(&mut widths);
+            let total_current: u16 = widths.iter().sum();
+            let remaining = self.viewport.width.saturating_sub(total_current);
+
+            if remaining > 0 && !widths.is_empty() {
+                // Try to distribute remaining space, but respect max_width
+                let mut remaining_to_distribute = remaining;
+                let mut progress = true;
+
+                // Loop until no more space can be distributed or no progress is made
+                while remaining_to_distribute > 0 && progress {
+                    progress = false;
+
+                    // Identify columns that can grow
+                    let expandable_indices: Vec<usize> = widths
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, &w)| {
+                            let config = visible_configs[*i].1;
+                            w < config.max_width
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+
+                    if expandable_indices.is_empty() {
+                        break;
+                    }
+
+                    // Calculate how much to add per expandable column
+                    let amount_per_col =
+                        (remaining_to_distribute / expandable_indices.len() as u16).max(1);
+
+                    for idx in expandable_indices {
+                        if remaining_to_distribute == 0 {
+                            break;
+                        }
+
+                        let config = visible_configs[idx].1;
+                        let current_width = widths[idx];
+                        let can_add = config.max_width - current_width;
+                        let to_add = amount_per_col.min(can_add).min(remaining_to_distribute);
+
+                        if to_add > 0 {
+                            widths[idx] += to_add;
+                            remaining_to_distribute -= to_add;
+                            progress = true;
+                        }
+                    }
+                }
+            }
         }
 
         Ok(widths)
