@@ -140,6 +140,44 @@ impl DataTable {
         })
     }
 
+    /// Reload schema from dataset (e.g. after query change)
+    pub fn reload_schema(&mut self) -> Result<()> {
+        let new_names = self.dataset.column_names()?;
+
+        // Build new configs, preserving existing settings where possible
+        let mut old_configs: HashMap<String, ColumnConfig> = self
+            .column_configs
+            .drain(..)
+            .map(|c| (c.name.clone(), c))
+            .collect();
+
+        self.column_configs = new_names
+            .into_iter()
+            .enumerate()
+            .map(|(idx, name)| {
+                if let Some(mut old_config) = old_configs.remove(&name) {
+                    old_config.order = idx;
+                    old_config
+                } else {
+                    ColumnConfig {
+                        name: name.clone(),
+                        order: idx,
+                        ..Default::default()
+                    }
+                }
+            })
+            .collect();
+
+        // Reset viewport if needed
+        self.cursor.col = 0; // Safer to reset column cursor
+        self.viewport.left_col = 0;
+
+        self.refresh_layout()?;
+        self.cache_valid = false;
+
+        Ok(())
+    }
+
     /// Get mutable reference to the dataset
     pub fn dataset_mut(&mut self) -> &mut ManagedDataset {
         &mut self.dataset

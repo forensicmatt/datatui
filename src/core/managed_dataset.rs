@@ -71,12 +71,9 @@ impl ManagedDataset {
     ///
     /// Uses LIMIT/OFFSET for efficient pagination without loading full dataset
     pub fn get_page(&self, offset: usize, limit: usize) -> Result<RecordBatch> {
-        // Build query using the global QueryBuilder
-        let mut query_builder = self.current_query.clone();
-        query_builder.set_limit(Some(limit));
-        query_builder.set_offset(Some(offset));
-
-        let query = query_builder.to_sql();
+        // Use subquery for pagination to respect original query's constraints (WHERE, ORDER BY, LIMIT)
+        let sql = self.current_query.to_sql();
+        let query = format!("SELECT * FROM ({}) LIMIT {} OFFSET {}", sql, limit, offset);
 
         let mut stmt = self.conn.prepare(&query)?;
         let batches = stmt.query_arrow([])?.collect::<Vec<_>>();
@@ -100,14 +97,18 @@ impl ManagedDataset {
 
     /// Get total row count
     pub fn row_count(&self) -> Result<usize> {
-        let query = format!("SELECT COUNT(*) FROM {}", self.table_name);
+        // Count rows based on current query (respecting WHERE, LIMIT, etc.)
+        let sql = self.current_query.to_sql();
+        let query = format!("SELECT COUNT(*) FROM ({})", sql);
         let count: i64 = self.conn.query_row(&query, [], |row| row.get(0))?;
         Ok(count as usize)
     }
 
     /// Get column names
     pub fn column_names(&self) -> Result<Vec<String>> {
-        let query = format!("DESCRIBE {}", self.table_name);
+        // Describe the current query to get actual columns
+        let sql = self.current_query.to_sql();
+        let query = format!("DESCRIBE {}", sql);
         let mut stmt = self.conn.prepare(&query)?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)

@@ -631,6 +631,109 @@ impl SqlDialog {
         self.cursor_pos = 0;
         self.update_suggestions();
     }
+    /// Handle a key event
+    /// Returns true if the event was handled
+    pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        // If a suggestion is selected, only allow navigation keys
+        if self.has_selected_suggestion() {
+            if key.code == KeyCode::Enter {
+                self.accept_suggestion();
+                return true;
+            } else if key.code == KeyCode::Up {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.page_up_suggestion();
+                } else {
+                    self.prev_suggestion();
+                }
+                return true;
+            } else if key.code == KeyCode::Down {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.page_down_suggestion();
+                } else {
+                    self.next_suggestion();
+                }
+                return true;
+            } else if key.code == KeyCode::Esc {
+                self.clear_suggestion_selection();
+                return true;
+            }
+
+            // Character input uses type-ahead to navigate suggestions
+            if let KeyCode::Char(c) = key.code {
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                {
+                    self.add_typeahead_char(c);
+                    return true;
+                }
+            } else if key.code == KeyCode::Backspace {
+                // Remove last character from typeahead buffer or delete char
+                let buffer = self.typeahead_buffer().to_string();
+                if !buffer.is_empty() {
+                    let mut chars: Vec<char> = buffer.chars().collect();
+                    chars.pop();
+                    self.clear_typeahead();
+                    for ch in chars {
+                        self.add_typeahead_char(ch);
+                    }
+                } else {
+                    self.clear_suggestion_selection();
+                    self.delete_char();
+                }
+                return true;
+            }
+            // Ignore other keys when suggestion is selected (except movement keys not handled here?)
+            // Actually we probably want to let other keys fall through?
+            // Original logic in App returned Ok(()) essentially consuming the key.
+            return true;
+        } else {
+            // Normal text input mode
+
+            // Handle Ctrl+Enter to execute query
+            if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.execute_query();
+                return true;
+            }
+
+            // Handle Ctrl+Left - move cursor left by word
+            if key.code == KeyCode::Left && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.cursor_word_left();
+                return true;
+            }
+
+            // Handle Ctrl+Right - move cursor right by word
+            if key.code == KeyCode::Right && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.cursor_word_right();
+                return true;
+            }
+
+            if let KeyCode::Char(c) = key.code {
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                {
+                    self.insert_char(c);
+                    return true;
+                }
+            } else if key.code == KeyCode::Backspace {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.delete_word_left();
+                } else {
+                    self.delete_char();
+                }
+                return true;
+            } else if key.code == KeyCode::Enter {
+                self.insert_newline();
+                return true;
+            } else if key.code == KeyCode::Tab {
+                self.next_suggestion();
+                return true;
+            }
+        }
+
+        false
+    }
 }
 
 impl Component for SqlDialog {

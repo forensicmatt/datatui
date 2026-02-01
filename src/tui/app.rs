@@ -370,6 +370,35 @@ Press Esc or Enter to close this dialog.";
         Ok(())
     }
 
+    /// Handle a SQL dialog result
+    fn handle_sql_dialog_result(
+        &mut self,
+        result: crate::tui::components::SqlDialogResult,
+    ) -> Result<()> {
+        use crate::tui::components::SqlDialogResult;
+        match result {
+            SqlDialogResult::ExecuteQuery(sql) => {
+                // Execute the SQL query
+                if let Some(table) = &mut self.data_table {
+                    if let Err(e) = table.dataset_mut().execute_sql(&sql) {
+                        // Show error in dialog
+                        if let Some(d) = &mut self.sql_dialog {
+                            d.set_error(format!("SQL Error: {}", e));
+                        }
+                    } else {
+                        // Success - close dialog and refresh
+                        self.sql_dialog = None;
+                        table.reload_schema()?;
+                    }
+                }
+            }
+            SqlDialogResult::Close => {
+                self.sql_dialog = None;
+            }
+        }
+        Ok(())
+    }
+
     /// Handle a key event
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<()> {
         // Only handle key press events, ignore release/repeat
@@ -503,109 +532,20 @@ Press Esc or Enter to close this dialog.";
         }
 
         // If SQL dialog is active, handle character input
+        let mut sql_dialog_handled = false;
         if let Some(dialog) = &mut self.sql_dialog {
-            // If a suggestion is selected, only allow Up/Down arrows, Enter, and Escape
-            // No character input should modify the query while navigating suggestions
-            if dialog.has_selected_suggestion() {
-                if key.code == KeyCode::Enter {
-                    // Accept the selected suggestion
-                    dialog.accept_suggestion();
-                    return Ok(());
-                } else if key.code == KeyCode::Up {
-                    // Handle Ctrl+Up - page up in suggestions
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        dialog.page_up_suggestion();
-                    } else {
-                        // Navigate to previous suggestion
-                        dialog.prev_suggestion();
-                    }
-                    return Ok(());
-                } else if key.code == KeyCode::Down {
-                    // Handle Ctrl+Down - page down in suggestions
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        dialog.page_down_suggestion();
-                    } else {
-                        // Navigate to next suggestion
-                        dialog.next_suggestion();
-                    }
-                    return Ok(());
-                } else if key.code == KeyCode::Esc {
-                    // Return focus to query input
-                    dialog.clear_suggestion_selection();
-                    return Ok(());
-                }
-                // Character input uses type-ahead to navigate suggestions
-                if let KeyCode::Char(c) = key.code {
-                    if !key.modifiers.contains(KeyModifiers::CONTROL)
-                        && !key.modifiers.contains(KeyModifiers::ALT)
-                    {
-                        // Add character to typeahead buffer and find matching suggestion
-                        dialog.add_typeahead_char(c);
-                        return Ok(());
-                    }
-                } else if key.code == KeyCode::Backspace {
-                    // Remove last character from typeahead buffer
-                    let buffer = dialog.typeahead_buffer().to_string();
-                    if !buffer.is_empty() {
-                        let mut chars: Vec<char> = buffer.chars().collect();
-                        chars.pop();
-                        dialog.clear_typeahead();
-                        for ch in chars {
-                            dialog.add_typeahead_char(ch);
-                        }
-                    } else {
-                        // If typeahead buffer is empty, dismiss suggestions and delete from query
-                        dialog.clear_suggestion_selection();
-                        dialog.delete_char();
-                    }
-                    return Ok(());
-                }
-            } else {
-                // No suggestion selected - normal text input mode
+            if dialog.handle_key_event(key) {
+                sql_dialog_handled = true;
+            }
+        }
 
-                // Handle Ctrl+Enter to execute query
-                if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    dialog.execute_query();
-                    return Ok(());
-                }
-
-                // Handle Ctrl+Left - move cursor left by word
-                if key.code == KeyCode::Left && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    dialog.cursor_word_left();
-                    return Ok(());
-                }
-
-                // Handle Ctrl+Right - move cursor right by word
-                if key.code == KeyCode::Right && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    dialog.cursor_word_right();
-                    return Ok(());
-                }
-
-                if let KeyCode::Char(c) = key.code {
-                    if !key.modifiers.contains(KeyModifiers::CONTROL)
-                        && !key.modifiers.contains(KeyModifiers::ALT)
-                    {
-                        dialog.insert_char(c);
-                        return Ok(());
-                    }
-                } else if key.code == KeyCode::Backspace {
-                    // Handle Ctrl+Backspace - delete word to the left
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        dialog.delete_word_left();
-                    } else {
-                        dialog.delete_char();
-                    }
-                    return Ok(());
-                } else if key.code == KeyCode::Enter {
-                    // Insert newline when no suggestion is selected
-                    dialog.insert_newline();
-                    return Ok(());
-                } else if key.code == KeyCode::Tab {
-                    // Tab enters suggestion mode (selects first suggestion if available)
-                    dialog.next_suggestion();
-                    return Ok(());
+        if sql_dialog_handled {
+            if let Some(dialog) = &mut self.sql_dialog {
+                if let Some(result) = dialog.take_result() {
+                    self.handle_sql_dialog_result(result)?;
                 }
             }
+            return Ok(());
         }
 
         // Determine search scope for keybindings
@@ -1033,28 +973,7 @@ Press Esc or Enter to close this dialog.";
 
             // Check if dialog has a pending result to process
             if let Some(result) = dialog.take_result() {
-                // Process inline - matching the pattern from command bar
-                use crate::tui::components::SqlDialogResult;
-                match result {
-                    SqlDialogResult::ExecuteQuery(sql) => {
-                        // Execute the SQL query
-                        if let Some(table) = &mut self.data_table {
-                            if let Err(e) = table.dataset_mut().execute_sql(&sql) {
-                                // Show error in dialog
-                                if let Some(d) = &mut self.sql_dialog {
-                                    d.set_error(format!("SQL Error: {}", e));
-                                }
-                            } else {
-                                // Success - close dialog and refresh
-                                self.sql_dialog = None;
-                                table.refresh_layout()?;
-                            }
-                        }
-                    }
-                    SqlDialogResult::Close => {
-                        self.sql_dialog = None;
-                    }
-                }
+                self.handle_sql_dialog_result(result)?;
             }
 
             if !keep_open {
