@@ -5,7 +5,10 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{
+        Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
     Frame,
 };
 use std::collections::HashMap;
@@ -40,6 +43,7 @@ pub struct ColumnWidthDialog {
     pending_result: Option<DialogResult>,
     current_calculated_widths: HashMap<String, u16>,
     show_instructions: bool,
+    last_visible_rows: usize,
 }
 
 impl ColumnWidthDialog {
@@ -58,6 +62,7 @@ impl ColumnWidthDialog {
             pending_result: None,
             current_calculated_widths: HashMap::new(),
             show_instructions: true,
+            last_visible_rows: 10,
         }
     }
 
@@ -300,8 +305,11 @@ impl Component for ColumnWidthDialog {
                     self.active_index -= 1;
 
                     // Adjust scroll if needed
-                    if self.active_index < self.scroll_offset {
-                        self.scroll_offset = self.active_index;
+                    if self.active_index > 0 {
+                        let col_idx = self.active_index - 1;
+                        if col_idx < self.scroll_offset {
+                            self.scroll_offset = col_idx;
+                        }
                     }
                 }
                 Ok(true)
@@ -312,6 +320,15 @@ impl Component for ColumnWidthDialog {
                     let max_index = self.columns.len(); // +1 for auto-expand, -1 for 0-based
                     if self.active_index < max_index {
                         self.active_index += 1;
+
+                        // Adjust scroll if needed
+                        if self.active_index > 0 {
+                            let col_idx = self.active_index - 1;
+                            if col_idx >= self.scroll_offset + self.last_visible_rows {
+                                self.scroll_offset =
+                                    col_idx.saturating_sub(self.last_visible_rows) + 1;
+                            }
+                        }
                     }
                 }
                 Ok(true)
@@ -359,7 +376,7 @@ impl Component for ColumnWidthDialog {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect, _theme: &crate::tui::Theme) {
+    fn render(&mut self, frame: &mut Frame, area: Rect, theme: &crate::tui::Theme) {
         // Clear background
         frame.render_widget(Clear, area);
 
@@ -367,15 +384,38 @@ impl Component for ColumnWidthDialog {
         let outer_block = Block::default()
             .title("Column Width Configuration")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
+            .border_type(BorderType::Double);
 
         let inner_area = outer_block.inner(area);
         frame.render_widget(outer_block, area);
+        // Calculate layout for content and instructions
+        let (content_area, instructions_area) = if self.show_instructions {
+            let instructions_height = 6;
+            let content_height = inner_area.height.saturating_sub(instructions_height);
 
-        // Calculate visible rows (leave space for help text at bottom)
-        let max_rows = (inner_area.height.saturating_sub(4)) as usize;
+            (
+                Rect {
+                    y: inner_area.y,
+                    height: content_height,
+                    ..inner_area
+                },
+                Some(Rect {
+                    y: inner_area.y + content_height,
+                    height: instructions_height,
+                    ..inner_area
+                }),
+            )
+        } else {
+            (inner_area, None)
+        };
 
-        // Render auto-expand toggle
+        // Calculate visible rows for list
+        // Header (1) + Gap (1)
+        let reserved_lines = 2;
+        let max_rows = content_area.height.saturating_sub(reserved_lines) as usize;
+        self.last_visible_rows = max_rows;
+
+        // Render auto-expand toggle (positioned relative to content_area)
         let auto_text = format!(
             "{} Auto-expand columns: {}",
             if self.active_index == 0 { ">" } else { " " },
@@ -386,26 +426,27 @@ impl Component for ColumnWidthDialog {
             }
         );
         let auto_style = if self.active_index == 0 {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            theme.selected_style()
         } else {
-            Style::default()
+            theme.normal_style()
         };
 
         frame.render_widget(
             Paragraph::new(Line::from(auto_text)).style(auto_style),
             Rect {
-                x: inner_area.x,
-                y: inner_area.y,
-                width: inner_area.width,
+                x: content_area.x,
+                y: content_area.y,
+                width: content_area.width,
                 height: 1,
             },
         );
 
+        // Check if scrollbar is needed
+        let scrollbar_needed = self.columns.len() > max_rows;
+        let scrollbar_width = if scrollbar_needed { 1 } else { 0 };
+
         // Render column list
-        let list_start_y = inner_area.y + 2;
+        let list_start_y = content_area.y + 2;
         let end = (self.scroll_offset + max_rows).min(self.columns.len());
 
         for (vis_idx, col_idx) in (self.scroll_offset..end).enumerate() {
@@ -433,14 +474,11 @@ impl Component for ColumnWidthDialog {
                 width_display
             );
 
-            let mut style = Style::default();
+            let mut style = theme.normal_style();
             if selected {
-                style = style
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD);
+                style = theme.selected_style();
             } else if col_idx % 2 == 1 {
-                style = style.bg(Color::Rgb(30, 30, 30));
+                style = theme.alt_row_style();
             }
 
             if !is_visible {
@@ -450,62 +488,74 @@ impl Component for ColumnWidthDialog {
             frame.render_widget(
                 Paragraph::new(Line::from(text)).style(style),
                 Rect {
-                    x: inner_area.x,
+                    x: content_area.x,
                     y,
-                    width: inner_area.width,
+                    width: content_area.width.saturating_sub(scrollbar_width),
                     height: 1,
                 },
             );
         }
 
-        // Render instructions block if visible
-        if self.show_instructions {
-            let instructions_height = 5; // Allocate 5 lines for instructions
-            let instructions_area = Rect {
-                x: inner_area.x,
-                y: inner_area.bottom().saturating_sub(instructions_height),
-                width: inner_area.width,
-                height: instructions_height,
+        // Render scrollbar if needed
+        if scrollbar_needed {
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("↑"))
+                .end_symbol(Some("↓"))
+                .style(theme.focused_border_style());
+
+            // Use active_index for position to match MapViewer/FindAll dialogs behavior
+            // (Selection-based scrollbar rather than viewport-based)
+            let pos = self.active_index.saturating_sub(1);
+            let mut scrollbar_state = ScrollbarState::new(self.columns.len()).position(pos);
+
+            let scrollbar_area = Rect {
+                x: content_area.x + content_area.width.saturating_sub(1),
+                y: list_start_y,
+                width: 1,
+                height: max_rows as u16,
             };
 
-            let instructions_text = if self.input_mode == InputMode::EditingWidth {
+            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+        }
+
+        // Render instructions block if visible
+        if let Some(instructions_area) = instructions_area {
+            let text = if self.input_mode == InputMode::EditingWidth {
                 vec![
-                    Line::from("Editing Width:"),
-                    Line::from("  • Type numbers (4-255) to set width"),
-                    Line::from("  • Enter: Apply width"),
-                    Line::from("  • Esc: Cancel editing"),
+                    "  • Type numbers (4-255) to set width",
+                    "  • Enter: Apply width",
+                    "  • Esc: Cancel editing",
                 ]
             } else {
                 vec![
-                    Line::from("Column Configuration:"),
-                    Line::from("  • ↑/↓: Select column  • Enter: Apply & Close  • Esc: Cancel"),
-                    Line::from("  • Space: Edit width  • t: Toggle visibility"),
-                    Line::from("  • Ctrl+↑/↓: Reorder columns  • Ctrl+i: Toggle this help"),
+                    "  • ↑/↓: Select column | Enter: Apply & Close | Esc: Cancel",
+                    "  • Space: Edit width | t: Toggle visibility",
+                    "  • Ctrl+↑/↓: Reorder columns | Ctrl+i: Toggle this help",
                 ]
             };
 
-            let instructions_block = Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title("Instructions (Ctrl+i to hide)");
-
-            let instructions_para = Paragraph::new(instructions_text)
-                .block(instructions_block)
-                .style(Style::default().fg(Color::Gray))
+            let instructions = Paragraph::new(text.join("\n"))
+                .block(
+                    Block::default()
+                        .borders(Borders::TOP)
+                        .title("Instructions (Ctrl+i to hide)"),
+                )
+                .style(theme.warning_style())
                 .wrap(ratatui::widgets::Wrap { trim: true });
 
-            frame.render_widget(instructions_para, instructions_area);
+            frame.render_widget(instructions, instructions_area);
         } else {
             // Show minimal help hint
             let hint_area = Rect {
-                x: inner_area.x,
-                y: inner_area.bottom().saturating_sub(1),
-                width: inner_area.width,
+                x: content_area.x,
+                y: content_area.bottom().saturating_sub(1),
+                width: content_area.width,
                 height: 1,
             };
 
             frame.render_widget(
-                Paragraph::new("Press Ctrl+i for help").style(Style::default().fg(Color::DarkGray)),
+                Paragraph::new("Press Ctrl+i for help")
+                    .style(theme.normal_style().fg(Color::DarkGray)),
                 hint_area,
             );
         }

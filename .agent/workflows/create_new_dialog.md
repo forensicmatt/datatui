@@ -17,7 +17,17 @@ This workflow guides the creation of a new dialog component following project st
    - Implement `render()` using `crate::tui::Theme`.
      - Signature: `fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme)`.
      - Use the passed `theme` argument (do not use `Theme::default()`).
-     - Use `Borders::ALL` and `BorderType::Rounded`.
+     - Use `Borders::ALL` and `BorderType::Double`.
+     - **Instructions Area**:
+       - If the dialog has keybinding instructions, render them at the bottom.
+       - Use a separate `Rect` for instructions logic (e.g. `instructions_area`).
+       - Style: `Color::Yellow` for text.
+       - Block: `Borders::TOP` with title `Instructions (Ctrl+i to hide)` (or similar toggle key).
+       - Content: Bulleted list of keys and actions (e.g. `• Enter: Submit`).
+     - **Scrollbar**:
+       - If content is scrollable, use `ratatui::widgets::Scrollbar`.
+       - Place it on the right edge of the content area.
+       - Use `active_index` for position if selection-based, or viewport offset if free-scrolling.
    - Implement `handle_key_event()` logic.
      - Return `Result<KeyEventResult>`.
      - Handle standard navigation (Esc, Enter).

@@ -16,8 +16,8 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        Table,
+        Block, BorderType, Borders, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Table,
     },
     Frame,
 };
@@ -471,18 +471,10 @@ impl DataFrameDetailsDialog {
         // Clear background
         frame.render_widget(Clear, area);
 
-        // Main block
-        let border_style = if self.focused {
-            theme.focused_border_style()
-        } else {
-            theme.border_style()
-        };
-
         let block = Block::default()
             .title(" DataFrame Details ")
             .borders(Borders::ALL)
-            .border_style(border_style)
-            .style(theme.normal_style());
+            .border_type(BorderType::Double);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
