@@ -530,11 +530,9 @@ impl DataFrameDetailsDialog {
             }
 
             let style = if *tab == self.active_tab {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                theme.warning_style().add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::DarkGray)
+                theme.normal_style().fg(Color::DarkGray)
             };
 
             spans.push(Span::styled(tab.label(), style));
@@ -600,6 +598,14 @@ impl DataFrameDetailsDialog {
         let visible_end = (self.scroll_offset + viewport_height).min(self.unique_values.len());
         let visible_values = &self.unique_values[visible_start..visible_end];
 
+        // Check if scrollbar is needed and adjust table width accordingly
+        let has_scrollbar = self.unique_values.len() > viewport_height;
+        let available_width = if has_scrollbar {
+            table_area.width.saturating_sub(1)
+        } else {
+            table_area.width
+        };
+
         let rows: Vec<Row> = visible_values
             .iter()
             .enumerate()
@@ -607,6 +613,8 @@ impl DataFrameDetailsDialog {
                 let global_idx = visible_start + i;
                 let style = if global_idx == self.selected_row {
                     theme.selected_style()
+                } else if global_idx % 2 == 0 {
+                    theme.alt_row_style()
                 } else {
                     theme.normal_style()
                 };
@@ -621,7 +629,7 @@ impl DataFrameDetailsDialog {
             .collect();
 
         let (value_width, count_width) = self.calculate_column_widths(
-            table_area.width,
+            available_width,
             "Value",
             "Count",
             &data_for_width,
@@ -639,7 +647,16 @@ impl DataFrameDetailsDialog {
         .header(Row::new(vec!["Value", "Count"]).style(theme.header_style()))
         .style(theme.normal_style());
 
-        frame.render_widget(table, table_area);
+        // Render table with adjusted width if scrollbar is present
+        let render_area = if has_scrollbar {
+            Rect {
+                width: available_width,
+                ..table_area
+            }
+        } else {
+            table_area
+        };
+        frame.render_widget(table, render_area);
 
         // Render scrollbar if needed
         if self.unique_values.len() > viewport_height {
@@ -677,6 +694,14 @@ impl DataFrameDetailsDialog {
         let visible_end = (self.scroll_offset + viewport_height).min(self.column_info.len());
         let visible_info = &self.column_info[visible_start..visible_end];
 
+        // Check if scrollbar is needed and adjust table width accordingly
+        let has_scrollbar = self.column_info.len() > viewport_height;
+        let available_width = if has_scrollbar {
+            area.width.saturating_sub(1)
+        } else {
+            area.width
+        };
+
         let rows: Vec<Row> = visible_info
             .iter()
             .enumerate()
@@ -684,6 +709,8 @@ impl DataFrameDetailsDialog {
                 let global_idx = visible_start + i;
                 let style = if global_idx == self.selected_row {
                     theme.selected_style()
+                } else if global_idx % 2 == 0 {
+                    theme.alt_row_style()
                 } else {
                     theme.normal_style()
                 };
@@ -693,7 +720,7 @@ impl DataFrameDetailsDialog {
 
         // Calculate optimal column widths
         let (name_width, type_width) = self.calculate_column_widths(
-            area.width,
+            available_width,
             "Column",
             "Type",
             &self.column_info,
@@ -711,7 +738,16 @@ impl DataFrameDetailsDialog {
         .header(Row::new(vec!["Column", "Type"]).style(theme.header_style()))
         .style(theme.normal_style());
 
-        frame.render_widget(table, area);
+        // Render table with adjusted width if scrollbar is present
+        let render_area = if has_scrollbar {
+            Rect {
+                width: available_width,
+                ..area
+            }
+        } else {
+            area
+        };
+        frame.render_widget(table, render_area);
 
         // Scrollbar
         if self.column_info.len() > viewport_height {
@@ -761,6 +797,14 @@ impl DataFrameDetailsDialog {
         let visible_end = (self.scroll_offset + viewport_height).min(columns.len());
         let visible_cols = &columns[visible_start..visible_end];
 
+        // Check if scrollbar is needed and adjust table width accordingly
+        let has_scrollbar = columns.len() > viewport_height;
+        let available_width = if has_scrollbar {
+            area.width.saturating_sub(1)
+        } else {
+            area.width
+        };
+
         let rows: Vec<Row> = visible_cols
             .iter()
             .enumerate()
@@ -770,6 +814,8 @@ impl DataFrameDetailsDialog {
 
                 let style = if global_idx == self.selected_row {
                     theme.selected_style()
+                } else if global_idx % 2 == 0 {
+                    theme.alt_row_style()
                 } else {
                     theme.normal_style()
                 };
@@ -802,8 +848,8 @@ impl DataFrameDetailsDialog {
             .max(6) // "Column" header
             + 2; // padding
 
-        let col_name_width = (max_col_name_len as u16).min(area.width / 3);
-        let remaining_width = area.width.saturating_sub(col_name_width);
+        let col_name_width = (max_col_name_len as u16).min(available_width / 3);
+        let remaining_width = available_width.saturating_sub(col_name_width);
 
         // Distribute remaining width evenly across 6 stat columns
         let stat_width = (remaining_width / 6).max(10); // Minimum 10 chars per stat
@@ -828,7 +874,16 @@ impl DataFrameDetailsDialog {
         )
         .style(theme.normal_style());
 
-        frame.render_widget(table, area);
+        // Render table with adjusted width if scrollbar is present
+        let render_area = if has_scrollbar {
+            Rect {
+                width: available_width,
+                ..area
+            }
+        } else {
+            area
+        };
+        frame.render_widget(table, render_area);
 
         // Scrollbar
         if columns.len() > viewport_height {

@@ -817,7 +817,7 @@ impl Component for SqlDialog {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect, _theme: &Theme) {
+    fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         // Clear background
         frame.render_widget(Clear, area);
 
@@ -913,10 +913,7 @@ impl Component for SqlDialog {
 
                 Line::from(vec![
                     Span::raw(before),
-                    Span::styled(
-                        cursor_char.to_string(),
-                        Style::default().bg(Color::Cyan).fg(Color::Black),
-                    ),
+                    Span::styled(cursor_char.to_string(), theme.selected_cell_style()),
                     Span::raw(after),
                 ])
             } else {
@@ -939,7 +936,7 @@ impl Component for SqlDialog {
             let error_y = query_inner.bottom().saturating_sub(2);
             frame.render_widget(
                 Paragraph::new(error.as_str())
-                    .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                    .style(theme.error_style().add_modifier(Modifier::BOLD)),
                 Rect {
                     x: query_inner.x,
                     y: error_y,
@@ -991,9 +988,9 @@ impl Component for SqlDialog {
                     let selected = Some(i) == self.selected_suggestion;
 
                     let style = if selected {
-                        Style::default().bg(Color::Cyan).fg(Color::Black)
+                        theme.selected_style()
                     } else {
-                        Style::default()
+                        theme.normal_style()
                     };
 
                     let y = sug_inner.y + vis_idx as u16;
@@ -1022,7 +1019,7 @@ impl Component for SqlDialog {
                 // Render scrollbar if there are more suggestions than visible rows
                 if has_scrollbar {
                     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                        .style(Style::default().fg(Color::Cyan));
+                        .style(theme.focused_border_style());
                     let mut scrollbar_state = ScrollbarState::new(self.suggestions.len())
                         .position(self.suggestion_scroll_offset)
                         .viewport_content_length(viewport_height);
@@ -1044,7 +1041,7 @@ impl Component for SqlDialog {
 
                 let instructions = Paragraph::new(instructions_text.join("\n"))
                     .block(Block::default().borders(Borders::TOP).title("Instructions"))
-                    .style(Style::default().fg(Color::Yellow))
+                    .style(theme.warning_style())
                     .wrap(Wrap { trim: true });
 
                 frame.render_widget(instructions, inst_area);

@@ -299,7 +299,7 @@ impl Component for SortDialog {
         }
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect, _theme: &Theme) {
+    fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         // Clear the background
         frame.render_widget(Clear, area);
 
@@ -355,7 +355,7 @@ impl Component for SortDialog {
                 if self.sort_columns.is_empty() {
                     let empty_msg =
                         Paragraph::new("No sort columns selected.\nPress 'a' to add a column.")
-                            .style(Style::default().fg(Color::DarkGray));
+                            .style(theme.normal_style().fg(Color::DarkGray));
                     frame.render_widget(empty_msg, list_inner);
                 } else {
                     let end = (self.scroll_offset + max_rows).min(self.sort_columns.len());
@@ -372,15 +372,13 @@ impl Component for SortDialog {
                             format!("  {}  {}", col.name, dir)
                         };
 
-                        let mut style = Style::default();
-                        if selected {
-                            style = style
-                                .fg(Color::Black)
-                                .bg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD);
+                        let mut style = if selected {
+                            theme.selected_style()
                         } else if zebra {
-                            style = style.bg(Color::Rgb(30, 30, 30));
-                        }
+                            theme.alt_row_style()
+                        } else {
+                            theme.normal_style()
+                        };
 
                         let y = list_inner.y + vis_idx as u16;
                         let para = Paragraph::new(text).style(style);
@@ -398,7 +396,7 @@ impl Component for SortDialog {
                     // Render scrollbar if needed
                     if self.sort_columns.len() > max_rows {
                         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                            .style(Style::default().fg(Color::Cyan));
+                            .style(theme.focused_border_style());
                         let mut state = ScrollbarState::new(self.sort_columns.len())
                             .position(self.scroll_offset)
                             .viewport_content_length(max_rows);
@@ -411,7 +409,7 @@ impl Component for SortDialog {
 
                 if available.is_empty() {
                     let empty_msg = Paragraph::new("No columns available to add.")
-                        .style(Style::default().fg(Color::DarkGray));
+                        .style(theme.normal_style().fg(Color::DarkGray));
                     frame.render_widget(empty_msg, list_inner);
                 } else {
                     let end = (self.add_column_scroll_offset + max_rows).min(available.len());
@@ -421,15 +419,13 @@ impl Component for SortDialog {
                         let selected = i == self.add_column_index;
                         let zebra = i % 2 == 0;
 
-                        let mut style = Style::default();
-                        if selected {
-                            style = style
-                                .fg(Color::Black)
-                                .bg(Color::Green)
-                                .add_modifier(Modifier::BOLD);
+                        let mut style = if selected {
+                            theme.selected_style()
                         } else if zebra {
-                            style = style.bg(Color::Rgb(30, 30, 30));
-                        }
+                            theme.alt_row_style()
+                        } else {
+                            theme.normal_style()
+                        };
 
                         let y = list_inner.y + vis_idx as u16;
                         let para = Paragraph::new(col.as_str()).style(style);
@@ -447,7 +443,7 @@ impl Component for SortDialog {
                     // Render scrollbar if needed
                     if available.len() > max_rows {
                         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                            .style(Style::default().fg(Color::Cyan));
+                            .style(theme.focused_border_style());
                         let mut state = ScrollbarState::new(available.len())
                             .position(self.add_column_scroll_offset)
                             .viewport_content_length(max_rows);
@@ -482,7 +478,7 @@ impl Component for SortDialog {
                             .borders(Borders::TOP)
                             .title("Instructions (Ctrl+i to hide)"),
                     )
-                    .style(Style::default().fg(Color::Yellow))
+                    .style(theme.warning_style())
                     .wrap(Wrap { trim: true });
 
                 frame.render_widget(instructions, inst_area);
@@ -495,8 +491,8 @@ impl Component for SortDialog {
                 width: outer_inner.width,
                 height: 1,
             };
-            let hint =
-                Paragraph::new("Press Ctrl+i for help").style(Style::default().fg(Color::DarkGray));
+            let hint = Paragraph::new("Press Ctrl+i for help")
+                .style(theme.normal_style().fg(Color::DarkGray));
             frame.render_widget(hint, hint_area);
         }
     }
