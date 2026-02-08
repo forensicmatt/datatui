@@ -384,9 +384,14 @@ impl Component for ColumnWidthDialog {
 
         // Outer block
         let outer_block = Block::default()
-            .title("Column Width Configuration")
+            .title(" Column Width Configuration ")
             .borders(Borders::ALL)
-            .border_type(BorderType::Double);
+            .border_type(BorderType::Double)
+            .border_style(if self.focused {
+                theme.focused_border_style()
+            } else {
+                theme.border_style()
+            });
 
         let inner_area = outer_block.inner(area);
         frame.render_widget(outer_block, area);
@@ -571,7 +576,6 @@ impl Component for ColumnWidthDialog {
         "ColumnWidthDialog"
     }
 }
-
 
 impl Focusable for ColumnWidthDialog {
     fn is_focused(&self) -> bool {
