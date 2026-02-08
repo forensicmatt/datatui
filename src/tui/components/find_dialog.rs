@@ -248,6 +248,51 @@ impl FindDialog {
     }
 }
 
+
+impl FindDialog {
+    /// Handle a key event
+    pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<crate::tui::KeyEventResult> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use crate::tui::KeyEventResult;
+
+        // Only handle text editing when Pattern field is active
+        if self.active_field == FindDialogField::Pattern {
+            // Handle character input
+            if let KeyCode::Char(c) = key.code {
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                {
+                    self.insert_char(c);
+                    return Ok(KeyEventResult::Consumed);
+                }
+            }
+
+            match key.code {
+                KeyCode::Backspace => {
+                    self.backspace();
+                    Ok(KeyEventResult::Consumed)
+                }
+                KeyCode::Delete => {
+                    self.delete();
+                    Ok(KeyEventResult::Consumed)
+                }
+                KeyCode::Left => {
+                    self.cursor_left();
+                    Ok(KeyEventResult::Consumed)
+                }
+                KeyCode::Right => {
+                    self.cursor_right();
+                    Ok(KeyEventResult::Consumed)
+                }
+                _ => Ok(KeyEventResult::Ignored),
+            }
+        } else {
+            // For other fields, let keybindings system handle navigation
+            Ok(KeyEventResult::Ignored)
+        }
+    }
+}
+
 impl Component for FindDialog {
     fn handle_action(&mut self, action: Action) -> Result<bool> {
         // Handle overlay dismissal first
