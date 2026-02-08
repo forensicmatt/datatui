@@ -3,7 +3,7 @@
 //! Provides autocomplete suggestions for DuckDB SQL queries, similar to the command bar.
 //! Suggests keywords, column names, and functions based on cursor position and context.
 
-use crate::tui::components::sql_dialog::{SuggestionItem, SuggestionType};
+use crate::tui::components::sql_dialog::SuggestionItem;
 
 /// Get SQL autocomplete suggestions based on input and cursor position
 ///

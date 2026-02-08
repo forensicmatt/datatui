@@ -13,7 +13,7 @@ use crate::tui::{Action, Component, Focusable, Theme};
 use color_eyre::Result;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Modifier},
     text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation,

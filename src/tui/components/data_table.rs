@@ -3,7 +3,6 @@ use crate::tui::components::SortColumn;
 use crate::tui::{Action, Component, Focusable, Theme};
 use color_eyre::Result;
 use duckdb::arrow::array::Array;
-use duckdb::arrow::array::{Float64Array, Int64Array, StringArray};
 use duckdb::arrow::datatypes::DataType;
 use ratatui::{
     layout::Rect,
@@ -661,7 +660,7 @@ impl DataTable {
 
     /// Format a cell value from an Arrow array
     fn format_cell_value(&self, column: &dyn Array, row_idx: usize) -> String {
-        use chrono::{DateTime, NaiveDateTime, Utc};
+        use chrono::{DateTime, Utc};
         use duckdb::arrow::array::*;
         use duckdb::arrow::datatypes::TimeUnit;
 
@@ -843,8 +842,7 @@ impl DataTable {
                     };
 
                     // Convert to DateTime and format as ISO 8601
-                    if let Some(dt) = NaiveDateTime::from_timestamp_opt(timestamp_value, 0) {
-                        let utc_dt: DateTime<Utc> = DateTime::from_naive_utc_and_offset(dt, Utc);
+                    if let Some(utc_dt) = DateTime::<Utc>::from_timestamp(timestamp_value, 0) {
                         if tz.is_some() {
                             utc_dt.to_rfc3339()
                         } else {
@@ -864,7 +862,7 @@ impl DataTable {
                 } else {
                     // Days since Unix epoch
                     let days = array.value(row_idx);
-                    if let Some(dt) = NaiveDateTime::from_timestamp_opt(days as i64 * 86400, 0) {
+                    if let Some(dt) = DateTime::<Utc>::from_timestamp(days as i64 * 86400, 0) {
                         dt.format("%Y-%m-%d").to_string()
                     } else {
                         format!("Invalid date: {}", days)
@@ -878,10 +876,9 @@ impl DataTable {
                 } else {
                     // Milliseconds since Unix epoch
                     let ms = array.value(row_idx);
-                    if let Some(dt) = NaiveDateTime::from_timestamp_opt(
-                        ms / 1000,
-                        ((ms % 1000) * 1_000_000) as u32,
-                    ) {
+                    if let Some(dt) =
+                        DateTime::<Utc>::from_timestamp(ms / 1000, ((ms % 1000) * 1_000_000) as u32)
+                    {
                         dt.format("%Y-%m-%d").to_string()
                     } else {
                         format!("Invalid date: {}", ms)

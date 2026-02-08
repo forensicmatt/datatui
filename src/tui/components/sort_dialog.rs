@@ -4,7 +4,7 @@ use crate::tui::{Action, Component, Focusable, Theme};
 use color_eyre::Result;
 use ratatui::{
     layout::{Margin, Rect},
-    style::{Color, Modifier, Style},
+    style::Color,
     widgets::{
         Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
         ScrollbarState, Wrap,
@@ -381,7 +381,7 @@ impl Component for SortDialog {
                             format!("  {}  {}", col.name, dir)
                         };
 
-                        let mut style = if selected {
+                        let style = if selected {
                             theme.selected_style()
                         } else if zebra {
                             theme.alt_row_style()
@@ -428,7 +428,7 @@ impl Component for SortDialog {
                         let selected = i == self.add_column_index;
                         let zebra = i % 2 == 0;
 
-                        let mut style = if selected {
+                        let style = if selected {
                             theme.selected_style()
                         } else if zebra {
                             theme.alt_row_style()

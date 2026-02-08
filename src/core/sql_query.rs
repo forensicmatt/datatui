@@ -262,7 +262,7 @@ fn parse_order_by_clause(clause: &str) -> Result<Vec<OrderByColumn>> {
             continue; // Skip empty parts and the rowid tie-breaker
         }
 
-        let mut tokens: Vec<&str> = part.split_whitespace().collect();
+        let tokens: Vec<&str> = part.split_whitespace().collect();
         if tokens.is_empty() {
             continue;
         }

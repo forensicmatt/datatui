@@ -6,8 +6,8 @@ use crate::tui::sql_suggestions;
 use crate::tui::{Action, Component, Focusable, KeyEventResult, Theme};
 use color_eyre::Result;
 use ratatui::{
-    layout::{Margin, Rect},
-    style::{Color, Modifier, Style},
+    layout::Rect,
+    style::Modifier,
     text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,

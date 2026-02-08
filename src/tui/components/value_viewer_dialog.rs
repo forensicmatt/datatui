@@ -6,9 +6,8 @@
 use crate::tui::{Action, Component, Focusable, Theme};
 use color_eyre::Result;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
+    layout::Rect,
+    text::Line,
     widgets::{
         Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
     },

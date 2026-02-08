@@ -7,7 +7,7 @@ use crate::tui::components::{
 };
 use crate::tui::{Action, Command, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyEvent, KeyEventKind};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     Frame,

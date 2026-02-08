@@ -161,7 +161,7 @@ impl MapViewerDialog {
 
     /// Create from a vector of key-value tuples
     pub fn from_pairs(title: String, pairs: Vec<(String, String)>) -> Self {
-        let mut entries: Vec<MapEntry> = pairs
+        let entries: Vec<MapEntry> = pairs
             .into_iter()
             .map(|(key, value)| {
                 let data_type = DataType::from_value(&value);
@@ -373,7 +373,7 @@ impl MapViewerDialog {
         let viewport_height = content_area.height as usize;
         let mut visible_entries = Vec::new();
         let mut current_height = 0;
-        let mut start_idx = self.scroll_offset;
+        let start_idx = self.scroll_offset;
 
         // Adjust scroll to keep selection visible
         if self.selected_idx < self.scroll_offset {

@@ -3,7 +3,7 @@ use crate::tui::{Action, Component, Focusable, KeyEventResult};
 use color_eyre::Result;
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::Color,
     text::Line,
     widgets::{
         Block, BorderType, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation,
