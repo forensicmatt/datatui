@@ -19,7 +19,8 @@ pub struct Theme {
     pub header_bg: Color,
     pub selected_fg: Color,
     pub selected_bg: Color,
-    pub row_alt_bg: Color, // For zebra striping
+    pub selected_unfocused_bg: Color, // For selected rows when component is not focused
+    pub row_alt_bg: Color,            // For zebra striping
 
     // Status/feedback colors
     pub success: Color,
@@ -41,6 +42,7 @@ impl Theme {
             header_bg: Color::Reset,
             selected_fg: Color::Black,
             selected_bg: Color::Cyan,
+            selected_unfocused_bg: Color::DarkGray,
             row_alt_bg: Color::Rgb(25, 25, 35), // Slightly lighter than pure black
             success: Color::Green,
             error: Color::Red,
@@ -61,6 +63,7 @@ impl Theme {
             header_bg: Color::Rgb(240, 240, 240),
             selected_fg: Color::White,
             selected_bg: Color::Blue,
+            selected_unfocused_bg: Color::Gray,
             row_alt_bg: Color::Rgb(250, 250, 250),
             success: Color::Green,
             error: Color::Red,
@@ -83,6 +86,13 @@ impl Theme {
             .fg(self.selected_fg)
             .bg(self.selected_bg)
             .add_modifier(Modifier::BOLD)
+    }
+
+    /// Style for selected rows when component is not focused
+    pub fn selected_unfocused_style(&self) -> Style {
+        Style::default()
+            .fg(self.foreground)
+            .bg(self.selected_unfocused_bg)
     }
 
     /// Style for the currently active cell

@@ -240,13 +240,13 @@ impl FindAllResultsDialog {
     fn render_results_table(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         // Check tab count and panel focus before getting mutable reference
         let has_multiple_tabs = self.tabs.len() > 1;
-        let results_focused = self.panel_focus == PanelFocus::Results;
+        let results_focused = self.focused && self.panel_focus == PanelFocus::Results;
 
         let Some(tab) = self.get_active_tab_mut() else {
             return;
         };
 
-        // Determine border style based on panel focus
+        // Determine border style based on panel focus AND overall focus
         let border_style = if results_focused {
             theme.focused_border_style()
         } else {
@@ -297,7 +297,11 @@ impl FindAllResultsDialog {
             .map(|(visible_idx, result)| {
                 let actual_idx = tab.viewport_top + visible_idx;
                 let row_style = if actual_idx == tab.selected_index {
-                    theme.selected_style()
+                    if results_focused {
+                        theme.selected_style()
+                    } else {
+                        theme.selected_unfocused_style()
+                    }
                 } else if actual_idx % 2 == 0 {
                     theme.alt_row_style()
                 } else {
@@ -410,8 +414,8 @@ impl FindAllResultsDialog {
         let mut sorted_counts: Vec<_> = column_counts.into_iter().collect();
         sorted_counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 
-        // Determine border style based on panel focus
-        let border_style = if self.panel_focus == PanelFocus::ColumnCounts {
+        // Determine border style based on panel focus AND overall focus
+        let border_style = if self.focused && self.panel_focus == PanelFocus::ColumnCounts {
             theme.focused_border_style()
         } else {
             theme.border_style()
