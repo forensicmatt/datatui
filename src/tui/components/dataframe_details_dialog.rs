@@ -474,7 +474,12 @@ impl DataFrameDetailsDialog {
         let block = Block::default()
             .title(" DataFrame Details ")
             .borders(Borders::ALL)
-            .border_type(BorderType::Double);
+            .border_type(BorderType::Double)
+            .border_style(if self.focused {
+                theme.focused_border_style()
+            } else {
+                theme.border_style()
+            });
 
         let inner = block.inner(area);
         frame.render_widget(block, area);

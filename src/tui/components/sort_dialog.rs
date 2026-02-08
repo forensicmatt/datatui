@@ -1,6 +1,6 @@
 //! SortDialog: Modal dialog for configuring multi-column sorting
 
-use crate::tui::{Action, Component, Theme};
+use crate::tui::{Action, Component, Focusable, Theme};
 use color_eyre::Result;
 use ratatui::{
     layout::{Margin, Rect},
@@ -68,6 +68,9 @@ pub struct SortDialog {
 
     /// Cached max visible rows (calculated during render)
     cached_max_rows: usize,
+
+    /// Whether the dialog has focus
+    focused: bool,
 }
 
 impl SortDialog {
@@ -85,6 +88,7 @@ impl SortDialog {
             show_instructions: true,
             pending_result: None,
             cached_max_rows: 10,
+            focused: true,
         }
     }
 
@@ -307,7 +311,12 @@ impl Component for SortDialog {
         let outer_block = Block::default()
             .title("Sort")
             .borders(Borders::ALL)
-            .border_type(BorderType::Double);
+            .border_type(BorderType::Double)
+            .border_style(if self.focused {
+                theme.focused_border_style()
+            } else {
+                theme.border_style()
+            });
         let outer_inner = outer_block.inner(area);
         frame.render_widget(outer_block, area);
 
@@ -513,5 +522,16 @@ impl Component for SortDialog {
 
     fn name(&self) -> &str {
         "SortDialog"
+    }
+}
+
+
+impl Focusable for SortDialog {
+    fn is_focused(&self) -> bool {
+        self.focused
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
     }
 }

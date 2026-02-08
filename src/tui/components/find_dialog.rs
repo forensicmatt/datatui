@@ -4,7 +4,7 @@
 //! Inspired by Notepad++'s find dialog.
 
 use crate::services::search_service::{FindOptions, SearchMode};
-use crate::tui::{Action, Component, Theme};
+use crate::tui::{Action, Component, Focusable, Theme};
 use color_eyre::Result;
 use ratatui::{
     layout::Rect,
@@ -80,6 +80,8 @@ pub struct FindDialog {
     pub action_selected: FindActionSelected,
     /// Pending result to be retrieved by App
     pending_result: Option<DialogResult>,
+    /// Whether the dialog has focus
+    focused: bool,
 }
 
 impl Default for FindDialog {
@@ -99,6 +101,7 @@ impl FindDialog {
             mode: FindDialogMode::Main,
             action_selected: FindActionSelected::FindNext,
             pending_result: None,
+            focused: true,
         }
     }
 
@@ -359,7 +362,11 @@ impl Component for FindDialog {
             .title("Find")
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
-            .border_style(theme.focused_border_style());
+            .border_style(if self.focused {
+                theme.focused_border_style()
+            } else {
+                theme.border_style()
+            });
 
         let inner_area = outer_block.inner(area);
         frame.render_widget(outer_block, area);
@@ -435,7 +442,7 @@ impl FindDialog {
             let mut cursor_x = input_x + 2;
             for (i, c) in self.search_pattern.chars().enumerate() {
                 let style = if i == self.search_pattern_cursor {
-                    Style::default().fg(Color::Black).bg(Color::Yellow)
+                    theme.selected_cell_style()
                 } else {
                     theme.selected_style()
                 };
@@ -445,12 +452,7 @@ impl FindDialog {
 
             // Show cursor at end if needed
             if self.search_pattern_cursor == self.search_pattern.len() {
-                buf.set_string(
-                    cursor_x,
-                    y,
-                    " ",
-                    Style::default().fg(Color::Black).bg(Color::Yellow),
-                );
+                buf.set_string(cursor_x, y, " ", theme.selected_cell_style());
             }
         } else {
             buf.set_string(input_x, y, &self.search_pattern, Style::default());
@@ -509,7 +511,7 @@ impl FindDialog {
         let normal_style = if is_active && normal_selected {
             theme.selected_style()
         } else if normal_selected {
-            Style::default().fg(Color::Green)
+            theme.success_style()
         } else {
             Style::default()
         };
@@ -517,7 +519,7 @@ impl FindDialog {
         let regex_style = if is_active && regex_selected {
             theme.selected_style()
         } else if regex_selected {
-            Style::default().fg(Color::Green)
+            theme.success_style()
         } else {
             Style::default()
         };
@@ -552,9 +554,7 @@ impl FindDialog {
             let style = if is_active_row && is_selected {
                 theme.selected_style().add_modifier(Modifier::BOLD)
             } else if is_selected {
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD)
+                theme.success_style().add_modifier(Modifier::BOLD)
             } else {
                 Style::default().add_modifier(Modifier::BOLD)
             };
@@ -674,5 +674,16 @@ mod tests {
         assert_eq!(dialog.action_selected, FindActionSelected::FindNext);
         dialog.cycle_action_right();
         assert_eq!(dialog.action_selected, FindActionSelected::Count);
+    }
+}
+
+
+impl Focusable for FindDialog {
+    fn is_focused(&self) -> bool {
+        self.focused
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
     }
 }

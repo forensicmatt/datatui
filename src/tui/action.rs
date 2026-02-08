@@ -21,12 +21,12 @@ pub enum Action {
 
     // Data Operations
     Sort,
-    Filter,
     Find,
     Query,
 
     // View
     ToggleHelp,
+    ToggleInstructions,
     Refresh,
 
     // Tab Management
@@ -106,10 +106,10 @@ impl Action {
             Action::PageLeft => "Page left",
             Action::PageRight => "Page right",
             Action::Sort => "Sort column",
-            Action::Filter => "Filter data",
             Action::Find => "Find in data",
             Action::Query => "SQL query",
             Action::ToggleHelp => "Toggle help screen",
+            Action::ToggleInstructions => "Toggle instructions panel",
             Action::Refresh => "Refresh current view",
             Action::NextTab => "Next tab",
             Action::PrevTab => "Previous tab",
@@ -171,11 +171,12 @@ impl Action {
             | Action::PageLeft
             | Action::PageRight => ActionCategory::Navigation,
 
-            Action::Sort | Action::Filter | Action::Find | Action::Query => ActionCategory::DataOps,
+            Action::Sort | Action::Find | Action::Query => ActionCategory::DataOps,
 
-            Action::ToggleHelp | Action::Refresh | Action::ToggleCollapseAll => {
-                ActionCategory::View
-            }
+            Action::ToggleHelp
+            | Action::ToggleInstructions
+            | Action::Refresh
+            | Action::ToggleCollapseAll => ActionCategory::View,
 
             Action::NextTab | Action::PrevTab | Action::CloseTab | Action::NewTab => {
                 ActionCategory::Tabs
@@ -239,10 +240,10 @@ impl Action {
             Action::PageLeft,
             Action::PageRight,
             Action::Sort,
-            Action::Filter,
             Action::Find,
             Action::Query,
             Action::ToggleHelp,
+            Action::ToggleInstructions,
             Action::Refresh,
             Action::NextTab,
             Action::PrevTab,

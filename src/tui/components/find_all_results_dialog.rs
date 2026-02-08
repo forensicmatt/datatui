@@ -230,11 +230,7 @@ impl FindAllResultsDialog {
         let tabs_widget = Tabs::new(tab_titles)
             .select(self.active_tab_index)
             .style(theme.normal_style())
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .highlight_style(theme.warning_style().add_modifier(Modifier::BOLD))
             .divider("|");
 
         frame.render_widget(tabs_widget, area);
@@ -302,6 +298,8 @@ impl FindAllResultsDialog {
                 let actual_idx = tab.viewport_top + visible_idx;
                 let row_style = if actual_idx == tab.selected_index {
                     theme.selected_style()
+                } else if actual_idx % 2 == 0 {
+                    theme.alt_row_style()
                 } else {
                     Style::default()
                 };

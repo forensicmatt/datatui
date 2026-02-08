@@ -1,5 +1,5 @@
 use crate::core::ColumnWidthConfig;
-use crate::tui::{Action, Component, KeyEventResult};
+use crate::tui::{Action, Component, Focusable, KeyEventResult};
 use color_eyre::Result;
 use ratatui::{
     layout::Rect,
@@ -44,6 +44,7 @@ pub struct ColumnWidthDialog {
     current_calculated_widths: HashMap<String, u16>,
     show_instructions: bool,
     last_visible_rows: usize,
+    focused: bool,
 }
 
 impl ColumnWidthDialog {
@@ -63,6 +64,7 @@ impl ColumnWidthDialog {
             current_calculated_widths: HashMap::new(),
             show_instructions: true,
             last_visible_rows: 10,
+            focused: true,
         }
     }
 
@@ -567,5 +569,16 @@ impl Component for ColumnWidthDialog {
 
     fn name(&self) -> &str {
         "ColumnWidthDialog"
+    }
+}
+
+
+impl Focusable for ColumnWidthDialog {
+    fn is_focused(&self) -> bool {
+        self.focused
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
     }
 }

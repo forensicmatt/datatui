@@ -3,7 +3,7 @@
 //! Modal dialog for writing and executing SQL queries against datasets.
 
 use crate::tui::sql_suggestions;
-use crate::tui::{Action, Component, KeyEventResult, Theme};
+use crate::tui::{Action, Component, Focusable, KeyEventResult, Theme};
 use color_eyre::Result;
 use ratatui::{
     layout::{Margin, Rect},
@@ -114,6 +114,9 @@ pub struct SqlDialog {
 
     /// Pending result
     pending_result: Option<DialogResult>,
+
+    /// Whether the dialog has focus
+    focused: bool,
 }
 
 impl SqlDialog {
@@ -133,6 +136,7 @@ impl SqlDialog {
             error_message: None,
             show_instructions: true,
             pending_result: None,
+            focused: true,
         }
     }
 
@@ -825,7 +829,12 @@ impl Component for SqlDialog {
         let outer_block = Block::default()
             .title("SQL Query")
             .borders(Borders::ALL)
-            .border_type(BorderType::Double);
+            .border_type(BorderType::Double)
+            .border_style(if self.focused {
+                theme.focused_border_style()
+            } else {
+                theme.border_style()
+            });
         let outer_inner = outer_block.inner(area);
         frame.render_widget(outer_block, area);
 
@@ -1068,5 +1077,16 @@ impl Component for SqlDialog {
 
     fn name(&self) -> &str {
         "SqlDialog"
+    }
+}
+
+
+impl Focusable for SqlDialog {
+    fn is_focused(&self) -> bool {
+        self.focused
+    }
+
+    fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
     }
 }

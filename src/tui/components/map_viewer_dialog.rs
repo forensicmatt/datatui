@@ -73,14 +73,14 @@ impl DataType {
         }
     }
 
-    fn color(&self) -> Color {
+    fn color(&self, theme: &Theme) -> Color {
         match self {
-            DataType::String => Color::Green,
-            DataType::Number => Color::Cyan,
+            DataType::String => theme.success,
+            DataType::Number => theme.border_focused,
             DataType::Boolean => Color::Magenta,
             DataType::Null => Color::DarkGray,
-            DataType::Object => Color::Yellow,
-            DataType::Array => Color::Blue,
+            DataType::Object => theme.warning,
+            DataType::Array => theme.info,
         }
     }
 }
@@ -121,6 +121,9 @@ pub struct MapViewerDialog {
 
     /// Message display counter
     message_timer: u8,
+
+    /// Whether to show instructions
+    show_instructions: bool,
 }
 
 impl MapViewerDialog {
@@ -152,6 +155,7 @@ impl MapViewerDialog {
             search_active: false,
             copy_message: None,
             message_timer: 0,
+            show_instructions: false,
         }
     }
 
@@ -183,7 +187,13 @@ impl MapViewerDialog {
             search_active: false,
             copy_message: None,
             message_timer: 0,
+            show_instructions: false,
         }
+    }
+
+    /// Toggle instructions visibility
+    fn toggle_instructions(&mut self) {
+        self.show_instructions = !self.show_instructions;
     }
 
     /// Toggle collapse state of selected entry
@@ -316,12 +326,6 @@ impl MapViewerDialog {
             format!(" {} ({} entries) ", self.title, self.entries.len())
         };
 
-        let bottom_title = if let Some(ref msg) = self.copy_message {
-            format!(" {} ", msg)
-        } else {
-            " ↑/↓:Navigate │ Space:Collapse │ Enter:Copy Value │ c:Copy Key │ a:Copy All │ Esc:Close ".to_string()
-        };
-
         let block_border = Block::default()
             .borders(Borders::ALL)
             .border_type(ratatui::widgets::BorderType::Double)
@@ -330,7 +334,6 @@ impl MapViewerDialog {
 
         let block = Block::default()
             .title(title)
-            .title_bottom(bottom_title)
             .borders(Borders::ALL)
             .border_style(border_style)
             .style(theme.normal_style());
@@ -345,14 +348,29 @@ impl MapViewerDialog {
 
         if self.entries.is_empty() {
             let empty_msg = Paragraph::new("No entries to display")
-                .style(Style::default().fg(Color::DarkGray))
+                .style(theme.normal_style().fg(Color::DarkGray))
                 .alignment(ratatui::layout::Alignment::Center);
             frame.render_widget(empty_msg, inner);
             return;
         }
 
+        // Split area for content and optional instructions
+        let chunks = if self.show_instructions {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(7)])
+                .split(inner)
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(0)])
+                .split(inner)
+        };
+
+        let content_area = chunks[0];
+
         // Calculate visible entries
-        let viewport_height = inner.height as usize;
+        let viewport_height = content_area.height as usize;
         let mut visible_entries = Vec::new();
         let mut current_height = 0;
         let mut start_idx = self.scroll_offset;
@@ -364,7 +382,7 @@ impl MapViewerDialog {
 
         // Build visible list
         for (idx, entry) in self.entries.iter().enumerate().skip(self.scroll_offset) {
-            let entry_h = self.entry_height(entry, inner.width);
+            let entry_h = self.entry_height(entry, content_area.width);
             if current_height + entry_h as usize <= viewport_height {
                 visible_entries.push((idx, entry, entry_h));
                 current_height += entry_h as usize;
@@ -381,9 +399,9 @@ impl MapViewerDialog {
         let mut y_offset = 0;
         for (idx, entry, entry_h) in visible_entries {
             let entry_area = Rect {
-                x: inner.x,
-                y: inner.y + y_offset,
-                width: inner.width,
+                x: content_area.x,
+                y: content_area.y + y_offset,
+                width: content_area.width,
                 height: entry_h,
             };
 
@@ -409,6 +427,44 @@ impl MapViewerDialog {
 
             frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
         }
+
+        // Render instructions if enabled
+        if self.show_instructions {
+            let instructions_text = vec![
+                "• ↑/↓: Navigate entries",
+                "• Space/+/-: Collapse/Expand entry",
+                "• Shift+Space: Collapse/Expand all",
+                "• Enter: Copy value to clipboard",
+                "• c: Copy key to clipboard",
+                "• a: Copy all as JSON",
+                "• Esc: Close dialog",
+            ];
+
+            let instructions = Paragraph::new(instructions_text.join("\n"))
+                .block(
+                    Block::default()
+                        .borders(Borders::TOP)
+                        .title("Instructions (Ctrl+i to hide)"),
+                )
+                .style(theme.warning_style())
+                .wrap(Wrap { trim: true });
+
+            frame.render_widget(instructions, chunks[1]);
+        } else if let Some(ref msg) = self.copy_message {
+            // Show copy message at bottom if instructions are hidden
+            let msg_para = Paragraph::new(format!(" {} ", msg))
+                .style(theme.success_style())
+                .block(Block::default().borders(Borders::TOP));
+            frame.render_widget(
+                msg_para,
+                Rect {
+                    x: inner.x,
+                    y: inner.y + inner.height.saturating_sub(1),
+                    width: inner.width,
+                    height: 1,
+                },
+            );
+        }
     }
 
     /// Render a single entry
@@ -421,7 +477,7 @@ impl MapViewerDialog {
         theme: &Theme,
     ) {
         let bg_style = if is_selected {
-            Style::default().bg(Color::Rgb(40, 40, 60))
+            theme.alt_row_style()
         } else {
             Style::default()
         };
@@ -439,21 +495,17 @@ impl MapViewerDialog {
         // Render key line with type indicator and collapse icon
         let collapse_icon = if entry.collapsed { "+" } else { "-" };
         let type_icon = entry.data_type.icon();
-        let type_color = entry.data_type.color();
+        let type_color = entry.data_type.color(theme);
 
         let key_spans = vec![
             Span::styled(
                 format!(" {} ", collapse_icon),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                theme.warning_style().add_modifier(Modifier::BOLD),
             ),
             Span::styled(format!("[{}] ", type_icon), Style::default().fg(type_color)),
             Span::styled(
                 &entry.key,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                theme.focused_border_style().add_modifier(Modifier::BOLD),
             ),
         ];
 
@@ -467,7 +519,8 @@ impl MapViewerDialog {
                 Span::raw("   "),
                 Span::styled(
                     "(collapsed)",
-                    Style::default()
+                    theme
+                        .normal_style()
                         .fg(Color::DarkGray)
                         .add_modifier(Modifier::ITALIC),
                 ),
@@ -477,7 +530,7 @@ impl MapViewerDialog {
         } else {
             let value_text = format!("   {}", entry.value);
             let value_para = Paragraph::new(value_text)
-                .style(bg_style.fg(Color::Gray))
+                .style(bg_style.fg(theme.foreground))
                 .wrap(Wrap { trim: false });
             frame.render_widget(value_para, chunks[1]);
         }
@@ -554,6 +607,10 @@ impl Component for MapViewerDialog {
                 self.toggle_collapse();
                 Ok(true)
             }
+            Action::ToggleInstructions => {
+                self.toggle_instructions();
+                Ok(true)
+            }
             Action::Cancel => Ok(false), // Close dialog
             _ => Ok(true),               // Consume other actions
         }
@@ -577,6 +634,7 @@ impl Component for MapViewerDialog {
             Action::CopyAll,
             Action::ToggleVisibility,
             Action::ToggleCollapseAll,
+            Action::ToggleInstructions,
             Action::Cancel,
         ]
     }
