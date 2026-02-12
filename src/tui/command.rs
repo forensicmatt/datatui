@@ -75,13 +75,6 @@ impl Command {
         let parts: Vec<&str> = input.trim_start().split_whitespace().collect();
         let is_ending_with_space = input.ends_with(' ');
 
-        // precise handling of "current word being typed"
-        let current_word = if is_ending_with_space {
-            ""
-        } else {
-            parts.last().unwrap_or(&"")
-        };
-
         if parts.is_empty() {
             return Self::all_commands()
                 .iter()
@@ -258,7 +251,6 @@ impl Command {
                     return Err("Usage: columns <set|hide|width> ...".to_string());
                 }
                 let subcommand = parts[1];
-                let args_str = parts[2..].join(" ");
 
                 match subcommand {
                     "set" => {
