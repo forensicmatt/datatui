@@ -87,6 +87,9 @@ pub enum Action {
     SqlAcceptSuggestion,
     SqlUndo,
     SqlRedo,
+
+    // LLM Management
+    OpenLlmManagementDialog,
 }
 
 impl Action {
@@ -152,6 +155,7 @@ impl Action {
             Action::SqlAcceptSuggestion => "Accept SQL suggestion",
             Action::SqlUndo => "Undo last SQL edit",
             Action::SqlRedo => "Redo last SQL edit",
+            Action::OpenLlmManagementDialog => "Open LLM management dialog",
         }
     }
 
@@ -220,6 +224,8 @@ impl Action {
             | Action::SqlUndo
             | Action::SqlRedo => ActionCategory::DataOps,
 
+            Action::OpenLlmManagementDialog => ActionCategory::Application,
+
             Action::Escape => ActionCategory::Application,
         }
     }
@@ -286,6 +292,7 @@ impl Action {
             Action::SqlAcceptSuggestion,
             Action::SqlUndo,
             Action::SqlRedo,
+            Action::OpenLlmManagementDialog,
         ]
     }
 }
