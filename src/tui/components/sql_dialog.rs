@@ -1080,7 +1080,6 @@ impl Component for SqlDialog {
     }
 }
 
-
 impl Focusable for SqlDialog {
     fn is_focused(&self) -> bool {
         self.focused

@@ -19,16 +19,10 @@
       "Ctrl+Right": "PageRight"
     },
     "DataTable": {
-      "k": "MoveUp",
-      "j": "MoveDown",
-      "h": "MoveLeft",
-      "l": "MoveRight",
       "Ctrl+u": "PageUp",
       "Ctrl+d": "PageDown",
       "0": "Home",
       "$": "End",
-      "g": "GoToTop",
-      "G": "GoToBottom",
       "s": "Sort",
       "f": "Find",
       "/": "Find",
@@ -45,7 +39,8 @@
       "e": "Export",
       "d": "OpenDetailsDialog",
       "w": "OpenColumnWidthDialog",
-      "m": "OpenMapViewer"
+      "m": "OpenMapViewer",
+      "l": "OpenLlmManagementDialog"
     },
     "SqlDialog": {
       "Ctrl+Enter": "RunSqlQuery",
@@ -100,6 +95,38 @@
       "Down": "MoveDown",
       "Left": "MoveLeft",
       "Right": "MoveRight"
+    },
+    "LlmManagementDialog": {
+      "Up": "MoveUp",
+      "Down": "MoveDown",
+      "j": "MoveDown",
+      "k": "MoveUp",
+      "Enter": "Confirm",
+      "Esc": "Cancel",
+      "Ctrl+i": "ToggleInstructions"
+    },
+    "OpenAiConfigDialog": {
+      "Tab": "MoveDown",
+      "Shift+Tab": "MoveUp",
+      "Up": "MoveUp",
+      "Down": "MoveDown",
+      "Enter": "Confirm",
+      "Esc": "Cancel",
+      "Ctrl+i": "ToggleInstructions"
+    },
+    "AzureOpenAiConfigDialog": {
+      "Tab": "MoveDown",
+      "Shift+Tab": "MoveUp",
+      "Up": "MoveUp",
+      "Down": "MoveDown",
+      "Enter": "Confirm",
+      "Esc": "Cancel",
+      "Ctrl+i": "ToggleInstructions"
+    },
+    "OllamaConfigDialog": {
+      "Enter": "Confirm",
+      "Esc": "Cancel",
+      "Ctrl+i": "ToggleInstructions"
     }
   }
 }

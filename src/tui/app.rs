@@ -1,9 +1,10 @@
 use crate::core::DatasetId;
 use crate::services::search_service::{FindOptions, SearchMode};
-use crate::services::{DataService, SearchService};
+use crate::services::{DataService, LlmService, SearchService};
 use crate::tui::components::{
     CellViewer, ColumnWidthDialog, CommandBarDialog, DataFrameDetailsDialog, DataTable,
-    ErrorDialog, FindAllResultsDialog, FindDialog, MapViewerDialog, SortDialog, SqlDialog,
+    ErrorDialog, FindAllResultsDialog, FindDialog, LlmManagementDialog, MapViewerDialog,
+    SortDialog, SqlDialog,
 };
 use crate::tui::{Action, Command, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
@@ -54,6 +55,12 @@ pub struct App {
     /// SQL dialog (when active)
     sql_dialog: Option<SqlDialog>,
 
+    /// LLM management dialog (when active)
+    llm_management_dialog: Option<LlmManagementDialog>,
+
+    /// LLM service
+    llm_service: LlmService,
+
     /// Last search parameters (for F3 repeat search)
     last_search: Option<(String, FindOptions, SearchMode)>,
 
@@ -74,6 +81,16 @@ impl App {
         let keybindings = KeyBindings::default();
         let theme = Theme::default();
 
+        // Initialize LLM service
+        let config_dir = if let Some(proj_dirs) = directories::ProjectDirs::from("", "", "datatui")
+        {
+            proj_dirs.config_dir().to_path_buf()
+        } else {
+            // Fallback to current directory if we can't get project dirs
+            std::env::current_dir()?
+        };
+        let llm_service = LlmService::new(config_dir)?;
+
         Ok(Self {
             data_service,
             data_table: None,
@@ -87,6 +104,8 @@ impl App {
             command_bar_dialog: None,
             error_dialog: None,
             sql_dialog: None,
+            llm_management_dialog: None,
+            llm_service,
             last_search: None,
             keybindings,
             theme,
@@ -314,6 +333,7 @@ Available Commands:
   :sort <col> [desc]...  Sort by columns (comma separated)
   :dialog sort           Open sort dialog
   :dialog find           Open find dialog
+  :dialog llm            Open LLM management dialog
   :help                  Show this help
   :columns set <c> [w]   Show only specific columns
   :columns hide <c>...   Toggle column visibility
@@ -576,6 +596,34 @@ Press Esc or Enter to close this dialog.";
                 KeyEventResult::Ignored => {}
             }
         }
+        // LlmManagementDialog
+        else if self.llm_management_dialog.is_some() {
+            let (kr, dr) = if let Some(d) = &mut self.llm_management_dialog {
+                // First try raw key event for 'd' shortcut
+                if d.handle_raw_key_event(key)? == KeyEventResult::Consumed {
+                    (KeyEventResult::Consumed, None)
+                } else {
+                    (
+                        d.handle_key_event(key)?,
+                        if d.closed { Some(()) } else { None },
+                    )
+                }
+            } else {
+                (KeyEventResult::Ignored, None)
+            };
+
+            if dr.is_some() {
+                self.llm_management_dialog = None;
+            }
+            match kr {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
+            }
+        }
         // Other components that don't need explicit result extraction (via take_result)
         // FindAllResultsDialog
         else if let Some(dialog) = &mut self.find_all_results_dialog {
@@ -624,6 +672,8 @@ Press Esc or Enter to close this dialog.";
             "SortDialog"
         } else if self.sql_dialog.is_some() {
             "SqlDialog"
+        } else if self.llm_management_dialog.is_some() {
+            "LlmManagementDialog"
         } else if let Some(ref details) = self.dataframe_details_dialog {
             if details.has_map_viewer() {
                 "MapViewerDialog"
@@ -767,6 +817,12 @@ Press Esc or Enter to close this dialog.";
                     dialog.set_query_text(current_sql);
                     self.sql_dialog = Some(dialog);
                 }
+                return Ok(());
+            }
+
+            Action::OpenLlmManagementDialog => {
+                let dialog = LlmManagementDialog::new(self.llm_service.clone());
+                self.llm_management_dialog = Some(dialog);
                 return Ok(());
             }
 
@@ -1047,6 +1103,15 @@ Press Esc or Enter to close this dialog.";
             return Ok(());
         }
 
+        // Route to LLM management dialog if active (MODAL)
+        if let Some(dialog) = &mut self.llm_management_dialog {
+            let keep_open = dialog.handle_action(action)?;
+            if !keep_open || dialog.closed {
+                self.llm_management_dialog = None;
+            }
+            return Ok(());
+        }
+
         // Route to find dialog if active
         if let Some(dialog) = &mut self.find_dialog {
             let keep_open = dialog.handle_action(action)?;
@@ -1185,6 +1250,11 @@ Press Esc or Enter to close this dialog.";
             dialog.render(frame, dialog_area, &self.theme);
         }
 
+        if let Some(dialog) = &mut self.llm_management_dialog {
+            let dialog_area = Self::centered_rect(70, 70, area);
+            dialog.render(frame, dialog_area, &self.theme);
+        }
+
         // Render SQL dialog overlay if active
         if let Some(dialog) = &mut self.sql_dialog {
             let dialog_area = Self::centered_rect(90, 90, area);
@@ -1287,6 +1357,8 @@ mod tests {
         let keybindings = KeyBindings::default();
         let theme = Theme::default();
 
+        let llm_service = LlmService::new(workspace_path.to_path_buf()).unwrap();
+
         let mut app = App {
             data_service,
             data_table: None,
@@ -1298,6 +1370,8 @@ mod tests {
             dataframe_details_dialog: None,
             map_viewer_dialog: None,
             sql_dialog: None,
+            llm_management_dialog: None,
+            llm_service,
             command_bar_dialog: None,
             error_dialog: None,
             last_search: None,
@@ -1321,6 +1395,7 @@ mod tests {
         let global_db = workspace_path.join("global_test.duckdb");
 
         let data_service = DataService::new_impl(workspace_path, Some(global_db)).unwrap();
+        let llm_service = LlmService::new(workspace_path.to_path_buf()).unwrap();
         let app = App {
             data_service,
             data_table: None,
@@ -1332,6 +1407,8 @@ mod tests {
             dataframe_details_dialog: None,
             map_viewer_dialog: None,
             sql_dialog: None,
+            llm_management_dialog: None,
+            llm_service,
             command_bar_dialog: None,
             error_dialog: None,
             last_search: None,
@@ -1386,6 +1463,7 @@ mod tests {
         let global_db = workspace_path.join("global_test.duckdb");
 
         let data_service = DataService::new_impl(workspace_path, Some(global_db)).unwrap();
+        let llm_service = LlmService::new(workspace_path.to_path_buf()).unwrap();
         let mut app = App {
             data_service,
             data_table: None,
@@ -1397,6 +1475,8 @@ mod tests {
             dataframe_details_dialog: None,
             map_viewer_dialog: None,
             sql_dialog: None,
+            llm_management_dialog: None,
+            llm_service,
             command_bar_dialog: None,
             error_dialog: None,
             last_search: None,
@@ -1418,6 +1498,7 @@ mod tests {
         let global_db = workspace_path.join("global_test.duckdb");
 
         let data_service = DataService::new_impl(workspace_path, Some(global_db)).unwrap();
+        let llm_service = LlmService::new(workspace_path.to_path_buf()).unwrap();
         let mut app = App {
             data_service,
             data_table: None,
@@ -1429,6 +1510,8 @@ mod tests {
             dataframe_details_dialog: None,
             map_viewer_dialog: None,
             sql_dialog: None,
+            llm_management_dialog: None,
+            llm_service,
             command_bar_dialog: None,
             error_dialog: None,
             last_search: None,

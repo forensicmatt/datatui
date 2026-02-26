@@ -38,6 +38,7 @@ pub enum ColumnsCommand {
 pub enum DialogType {
     Sort,
     Find,
+    Llm,
 }
 
 impl Command {
@@ -150,6 +151,19 @@ impl Command {
                     .map(|c| c.to_string())
                     .collect();
             }
+            "dialog" => {
+                let subcommands = ["sort", "find", "llm"];
+                if parts.len() == 1 && is_ending_with_space {
+                    return subcommands.iter().map(|&s| s.to_string()).collect();
+                }
+                if parts.len() == 2 && !is_ending_with_space {
+                    return subcommands
+                        .iter()
+                        .filter(|&&sub| sub.starts_with(parts[1]))
+                        .map(|&s| s.to_string())
+                        .collect();
+                }
+            }
             "goto" => {
                 if parts.len() == 1 && is_ending_with_space {
                     return vec!["row".to_string()];
@@ -234,9 +248,10 @@ impl Command {
                 let dialog_type = match parts[1] {
                     "sort" => DialogType::Sort,
                     "find" => DialogType::Find,
+                    "llm" => DialogType::Llm,
                     other => {
                         return Err(format!(
-                            "Unknown dialog type '{}'. Available: sort, find",
+                            "Unknown dialog type '{}'. Available: sort, find, llm",
                             other
                         ))
                     }
@@ -485,6 +500,10 @@ impl Command {
                         *ctx.find_dialog = Some(FindDialog::new());
                         Ok(())
                     }
+                    DialogType::Llm => {
+                        // Handled by requires_action returning Action::OpenLlmManagementDialog
+                        Ok(())
+                    }
                 }
             }
 
@@ -594,6 +613,7 @@ impl Command {
             Command::Dialog { dialog_type } => match dialog_type {
                 DialogType::Sort => Some(Action::Sort),
                 DialogType::Find => None, // Handled directly in execute
+                DialogType::Llm => Some(Action::OpenLlmManagementDialog),
             },
             _ => None,
         }

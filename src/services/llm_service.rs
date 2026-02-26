@@ -6,9 +6,16 @@ use crate::core::llm_config::{
     AzureOpenAiConfig, LlmProvider, LlmSettings, OllamaConfig, OpenAiConfig,
 };
 
+use std::sync::{Arc, RwLock};
+
 /// Service for managing LLM configuration
 #[derive(Debug, Clone)]
 pub struct LlmService {
+    inner: Arc<RwLock<LlmServiceInner>>,
+}
+
+#[derive(Debug)]
+struct LlmServiceInner {
     settings: LlmSettings,
     config_path: PathBuf,
 }
@@ -20,8 +27,10 @@ impl LlmService {
         let settings = Self::load_settings(&config_path)?;
 
         Ok(Self {
-            settings,
-            config_path,
+            inner: Arc::new(RwLock::new(LlmServiceInner {
+                settings,
+                config_path,
+            })),
         })
     }
 
@@ -39,95 +48,113 @@ impl LlmService {
 
     /// Save current settings to the config file
     pub fn save(&self) -> Result<()> {
+        let inner = self.inner.read().unwrap();
         // Ensure parent directory exists
-        if let Some(parent) = self.config_path.parent() {
+        if let Some(parent) = inner.config_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        let toml_content = toml::to_string_pretty(&self.settings)?;
-        fs::write(&self.config_path, toml_content)?;
+        let toml_content = toml::to_string_pretty(&inner.settings)?;
+        fs::write(&inner.config_path, toml_content)?;
 
         Ok(())
     }
 
-    /// Get the current settings (read-only)
-    pub fn settings(&self) -> &LlmSettings {
-        &self.settings
+    /// Get the current settings (cloned for thread safety)
+    pub fn settings(&self) -> LlmSettings {
+        self.inner.read().unwrap().settings.clone()
     }
 
-    /// Get mutable settings
-    pub fn settings_mut(&mut self) -> &mut LlmSettings {
-        &mut self.settings
-    }
+    // The `settings_mut` method is removed as it's not compatible with the Arc<RwLock> pattern for external mutable access.
+    // Instead, direct setters are provided for specific fields.
 
     /// Set the default provider
-    pub fn set_default_provider(&mut self, provider: Option<LlmProvider>) {
-        self.settings.default_provider = provider;
+    pub fn set_default_provider(&self, provider: Option<LlmProvider>) {
+        self.inner.write().unwrap().settings.default_provider = provider;
     }
 
     /// Get the default provider
     pub fn get_default_provider(&self) -> Option<LlmProvider> {
-        self.settings.default_provider
+        self.inner.read().unwrap().settings.default_provider
     }
 
     /// Update OpenAI configuration
-    pub fn set_openai_config(&mut self, config: OpenAiConfig) {
-        self.settings.openai = Some(config);
+    pub fn set_openai_config(&self, config: OpenAiConfig) {
+        self.inner.write().unwrap().settings.openai = Some(config);
     }
 
     /// Get OpenAI configuration
-    pub fn get_openai_config(&self) -> Option<&OpenAiConfig> {
-        self.settings.openai.as_ref()
+    pub fn get_openai_config(&self) -> Option<OpenAiConfig> {
+        self.inner.read().unwrap().settings.openai.clone()
     }
 
     /// Get mutable OpenAI configuration (creates default if not exists)
-    pub fn get_or_create_openai_config(&mut self) -> &mut OpenAiConfig {
-        self.settings.get_or_create_openai()
+    pub fn get_or_create_openai_config(&self) -> OpenAiConfig {
+        self.inner
+            .write()
+            .unwrap()
+            .settings
+            .get_or_create_openai()
+            .clone()
     }
 
     /// Update Azure configuration
-    pub fn set_azure_config(&mut self, config: AzureOpenAiConfig) {
-        self.settings.azure = Some(config);
+    pub fn set_azure_config(&self, config: AzureOpenAiConfig) {
+        self.inner.write().unwrap().settings.azure = Some(config);
     }
 
     /// Get Azure configuration
-    pub fn get_azure_config(&self) -> Option<&AzureOpenAiConfig> {
-        self.settings.azure.as_ref()
+    pub fn get_azure_config(&self) -> Option<AzureOpenAiConfig> {
+        self.inner.read().unwrap().settings.azure.clone()
     }
 
     /// Get mutable Azure configuration (creates default if not exists)
-    pub fn get_or_create_azure_config(&mut self) -> &mut AzureOpenAiConfig {
-        self.settings.get_or_create_azure()
+    pub fn get_or_create_azure_config(&self) -> AzureOpenAiConfig {
+        self.inner
+            .write()
+            .unwrap()
+            .settings
+            .get_or_create_azure()
+            .clone()
     }
 
     /// Update Ollama configuration
-    pub fn set_ollama_config(&mut self, config: OllamaConfig) {
-        self.settings.ollama = Some(config);
+    pub fn set_ollama_config(&self, config: OllamaConfig) {
+        self.inner.write().unwrap().settings.ollama = Some(config);
     }
 
     /// Get Ollama configuration
-    pub fn get_ollama_config(&self) -> Option<&OllamaConfig> {
-        self.settings.ollama.as_ref()
+    pub fn get_ollama_config(&self) -> Option<OllamaConfig> {
+        self.inner.read().unwrap().settings.ollama.clone()
     }
 
     /// Get mutable Ollama configuration (creates default if not exists)
-    pub fn get_or_create_ollama_config(&mut self) -> &mut OllamaConfig {
-        self.settings.get_or_create_ollama()
+    pub fn get_or_create_ollama_config(&self) -> OllamaConfig {
+        self.inner
+            .write()
+            .unwrap()
+            .settings
+            .get_or_create_ollama()
+            .clone()
     }
 
     /// Check if a provider is configured
     pub fn is_provider_configured(&self, provider: LlmProvider) -> bool {
-        self.settings.is_provider_configured(provider)
+        self.inner
+            .read()
+            .unwrap()
+            .settings
+            .is_provider_configured(provider)
     }
 
     /// Get list of configured providers
     pub fn configured_providers(&self) -> Vec<LlmProvider> {
-        self.settings.configured_providers()
+        self.inner.read().unwrap().settings.configured_providers()
     }
 
     /// Get the config file path
-    pub fn config_path(&self) -> &PathBuf {
-        &self.config_path
+    pub fn config_path(&self) -> PathBuf {
+        self.inner.read().unwrap().config_path.clone()
     }
 }
 
@@ -150,7 +177,7 @@ mod tests {
     #[test]
     fn test_save_and_load() {
         let temp_dir = TempDir::new().unwrap();
-        let mut service = LlmService::new(temp_dir.path().to_path_buf()).unwrap();
+        let service = LlmService::new(temp_dir.path().to_path_buf()).unwrap();
 
         // Set some configuration
         service.set_openai_config(OpenAiConfig {
@@ -179,7 +206,7 @@ mod tests {
     #[test]
     fn test_provider_configuration() {
         let temp_dir = TempDir::new().unwrap();
-        let mut service = LlmService::new(temp_dir.path().to_path_buf()).unwrap();
+        let service = LlmService::new(temp_dir.path().to_path_buf()).unwrap();
 
         // Initially not configured
         assert!(

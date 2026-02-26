@@ -12,6 +12,13 @@ pub mod sort_dialog;
 pub mod sql_dialog;
 pub mod value_viewer_dialog;
 
+// LLM
+pub mod azure_openai_config_dialog;
+pub mod llm_management_dialog;
+pub mod ollama_config_dialog;
+pub mod openai_config_dialog;
+
+pub use azure_openai_config_dialog::AzureOpenAiConfigDialog;
 pub use cell_viewer::{CellInfo, CellViewer, HeightMode, ViewerConfig};
 pub use column_width_dialog::ColumnWidthDialog;
 pub use command_bar_dialog::CommandBarDialog;
@@ -20,7 +27,10 @@ pub use dataframe_details_dialog::DataFrameDetailsDialog;
 pub use error_dialog::ErrorDialog;
 pub use find_all_results_dialog::FindAllResultsDialog;
 pub use find_dialog::FindDialog;
+pub use llm_management_dialog::LlmManagementDialog;
 pub use map_viewer_dialog::MapViewerDialog;
+pub use ollama_config_dialog::OllamaConfigDialog;
+pub use openai_config_dialog::OpenAiConfigDialog;
 pub use sort_dialog::{SortColumn, SortDialog};
 pub use sql_dialog::{DialogResult as SqlDialogResult, SqlDialog};
 pub use value_viewer_dialog::ValueViewerDialog;
