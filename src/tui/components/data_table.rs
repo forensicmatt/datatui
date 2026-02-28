@@ -903,7 +903,7 @@ impl DataTable {
                         .unwrap_or_else(|| format!("{:?}", column.slice(row_idx, 1)))
                 }
             }
-            DataType::List(_) => {
+            DataType::List(_) | DataType::FixedSizeList(_, _) => {
                 if column.is_null(row_idx) {
                     "NULL".to_string()
                 } else {
@@ -932,9 +932,9 @@ impl DataTable {
             DataType::UInt16 => "UInt16".to_string(),
             DataType::UInt32 => "UInt32".to_string(),
             DataType::UInt64 => "UInt64".to_string(),
-            DataType::Float16 => "Float16".to_string(),
             DataType::Float32 => "Float32".to_string(),
             DataType::Float64 => "Float64".to_string(),
+            DataType::Float16 => "Float16".to_string(),
             DataType::Decimal32(_, _) => "Decimal32".to_string(),
             DataType::Decimal64(_, _) => "Decimal64".to_string(),
             DataType::Decimal128(_, _) => "Decimal128".to_string(),
@@ -982,6 +982,10 @@ impl DataTable {
                     let arr = array.as_any().downcast_ref::<Int64Array>()?;
                     Some(json!(arr.value(idx)))
                 }
+                DataType::Float32 => {
+                    let arr = array.as_any().downcast_ref::<Float32Array>()?;
+                    Some(json!(arr.value(idx)))
+                }
                 DataType::Float64 => {
                     let arr = array.as_any().downcast_ref::<Float64Array>()?;
                     Some(json!(arr.value(idx)))
@@ -1003,6 +1007,17 @@ impl DataTable {
                 }
                 DataType::List(_) => {
                     let arr = array.as_any().downcast_ref::<ListArray>()?;
+                    let value_array = arr.value(idx);
+                    let mut values = Vec::new();
+                    for i in 0..value_array.len() {
+                        if let Some(v) = array_element_to_json(value_array.as_ref(), i) {
+                            values.push(v);
+                        }
+                    }
+                    Some(Value::Array(values))
+                }
+                DataType::FixedSizeList(_, _) => {
+                    let arr = array.as_any().downcast_ref::<FixedSizeListArray>()?;
                     let value_array = arr.value(idx);
                     let mut values = Vec::new();
                     for i in 0..value_array.len() {

@@ -41,7 +41,7 @@ impl AzureOpenAiConfigDialog {
             active_field: AzureField::ApiKey,
             cursor_pos,
             focused: true,
-            show_instructions: true,
+            show_instructions: false,
             result: None,
             closed: false,
         }

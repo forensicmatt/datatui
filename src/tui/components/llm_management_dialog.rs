@@ -45,7 +45,7 @@ impl LlmManagementDialog {
             list_state,
             providers,
             focused: true,
-            show_instructions: true,
+            show_instructions: false,
             closed: false,
         }
     }

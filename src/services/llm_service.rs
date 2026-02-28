@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use crate::core::llm_config::{
     AzureOpenAiConfig, LlmProvider, LlmSettings, OllamaConfig, OpenAiConfig,
 };
+use crate::services::embedding_service::{
+    embed_azure, embed_ollama, embed_openai, EmbeddingRequest, ProgressCallback,
+};
 
 use std::sync::{Arc, RwLock};
 
@@ -155,6 +158,61 @@ impl LlmService {
     /// Get the config file path
     pub fn config_path(&self) -> PathBuf {
         self.inner.read().unwrap().config_path.clone()
+    }
+
+    /// Generate embeddings for the given texts using the specified provider.
+    ///
+    /// If `provider` is `None`, the configured default provider is used.
+    /// Returns one `Vec<f32>` per input text, in order.
+    ///
+    /// This call is **blocking** — run it on a background thread for UI use.
+    pub fn generate_embeddings(
+        &self,
+        texts: Vec<String>,
+        provider: Option<LlmProvider>,
+        model: impl Into<String>,
+        dimensions: Option<usize>,
+        batch_size: Option<usize>,
+        progress: Option<ProgressCallback>,
+    ) -> Result<Vec<Vec<f32>>> {
+        let provider = provider
+            .or_else(|| self.get_default_provider())
+            .ok_or_else(|| {
+                color_eyre::eyre::eyre!(
+                    "No LLM provider specified and no default provider configured."
+                )
+            })?;
+
+        let mut req = EmbeddingRequest::new(texts, model);
+        if let Some(d) = dimensions {
+            req = req.with_dimensions(d);
+        }
+        if let Some(b) = batch_size {
+            req = req.with_batch_size(b);
+        }
+
+        let progress_ref = progress.as_ref();
+
+        match provider {
+            LlmProvider::OpenAI => {
+                let config = self.get_openai_config().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("OpenAI is not configured. Open the LLM Management dialog (l) to configure it.")
+                })?;
+                embed_openai(&config, &req, progress_ref)
+            }
+            LlmProvider::Azure => {
+                let config = self.get_azure_config().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("Azure OpenAI is not configured. Open the LLM Management dialog (l) to configure it.")
+                })?;
+                embed_azure(&config, &req, progress_ref)
+            }
+            LlmProvider::Ollama => {
+                let config = self.get_ollama_config().ok_or_else(|| {
+                    color_eyre::eyre::eyre!("Ollama is not configured. Open the LLM Management dialog (l) to configure it.")
+                })?;
+                embed_ollama(&config, &req, progress_ref)
+            }
+        }
     }
 }
 

@@ -104,7 +104,28 @@ This workflow guides the creation of a new dialog component following project st
 
 6. **Define Actions and Keybindings**
    - Add new variants to `Action` enum in `src/tui/action.rs` if needed (e.g., `Open[Name]Dialog`).
-   - Add default keybindings to `.config/config.json5` under a new scope `[Name]Dialog` or `Global`.
+   - Register keybindings in `.config/config.json5`:
+     1. **Opener key** — add an entry in the `DataTable` scope (or `Global` if applicable) to open the dialog:
+        ```json5
+        "DataTable": {
+          // ... existing keys ...
+          "<key>": "Open[Name]Dialog"
+        }
+        ```
+        Choose a key that is mnemonic and not already bound. Check the existing `DataTable` scope for conflicts first.
+     2. **Dialog scope** — add a new scope named exactly `[Name]Dialog` with the standard navigation bindings and any dialog-specific actions:
+        ```json5
+        "[Name]Dialog": {
+          "Up": "MoveUp",
+          "Down": "MoveDown",
+          "Left": "MoveLeft",
+          "Right": "MoveRight",
+          "Esc": "Cancel",
+          "Enter": "Confirm",
+          "Ctrl+i": "ToggleInstructions"
+        }
+        ```
+        Add extra keys for any dialog-specific actions (e.g., `Tab`, `Space`, `Ctrl+...`).
 
 7. **Verify**
    - Run `cargo check` to ensure no errors.

@@ -290,6 +290,16 @@ impl DataService {
         &self.session_id
     }
 
+    /// Get the path to the session DuckDB file.
+    ///
+    /// Background threads that need their own DuckDB connection can open
+    /// this path independently (DuckDB supports concurrent read+write access).
+    pub fn session_db_path(&self) -> PathBuf {
+        self.session_path
+            .join(".datatui")
+            .join(format!("session_{}.duckdb", self.session_id))
+    }
+
     /// Import a JSON file into the session database
     ///
     /// This method supports:
@@ -644,6 +654,159 @@ impl DataService {
 
         Ok(dataset_id)
     }
+
+    /// Fetch all non-null text values from a column, returning (rowid, text) pairs.
+    ///
+    /// DuckDB's internal `rowid` pseudo-column is used so we can update specific rows
+    /// later, even if the table has no surrogate key.
+    pub fn fetch_column_texts(
+        &self,
+        dataset_id: &DatasetId,
+        column_name: &str,
+    ) -> Result<Vec<(i64, String)>> {
+        let dataset = self.get_dataset(dataset_id)?;
+        let table = &dataset.table_name;
+
+        // Escape the column name to prevent injection
+        let sql = format!(
+            "SELECT rowid, CAST(\"{col}\" AS VARCHAR) FROM \"{table}\" WHERE \"{col}\" IS NOT NULL",
+            col = column_name.replace('"', "\"\""),
+            table = table.replace('"', "\"\"")
+        );
+
+        let mut stmt = self.session_conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| {
+            let rowid: i64 = row.get(0)?;
+            let text: String = row.get(1)?;
+            Ok((rowid, text))
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// Add a new FLOAT[] embedding column to a dataset table and populate it.
+    ///
+    /// `rowid_embeddings` must be in the same order as the rows returned by
+    /// `fetch_column_texts` (paired rowid → embedding vector).
+    ///
+    /// If `new_column_name` already exists the method returns an error.
+    pub fn add_embedding_column(
+        &self,
+        dataset_id: &DatasetId,
+        new_column_name: &str,
+        rowid_embeddings: Vec<(i64, Vec<f32>)>,
+        hide_column: bool,
+    ) -> Result<()> {
+        let mut dataset = self.get_dataset(dataset_id)?;
+        let table = dataset.table_name.clone();
+
+        // Escape names
+        let safe_col = new_column_name.replace('"', "\"\"");
+
+        // 1. Add the new column (FLOAT[])
+        let alter_sql = format!(
+            "ALTER TABLE \"{table}\" ADD COLUMN \"{col}\" FLOAT[]",
+            table = table.replace('"', "\"\""),
+            col = safe_col,
+        );
+        self.session_conn.execute(&alter_sql, [])?;
+
+        // 2. Use a temporary table for batch update - more robust and faster than individual updates
+        let temp_table = format!("temp_emb_{}", uuid::Uuid::new_v4().simple());
+        self.session_conn.execute(
+            &format!("CREATE TEMP TABLE {} (rid BIGINT, emb FLOAT[])", temp_table),
+            [],
+        )?;
+
+        let mut success_count = 0;
+        let total_to_update = rowid_embeddings.len();
+
+        {
+            // Insert embeddings into temp table using a prepared statement
+            let mut insert_stmt = self.session_conn.prepare(&format!(
+                "INSERT INTO {} (rid, emb) VALUES (?, ?::FLOAT[])",
+                temp_table
+            ))?;
+
+            for (rowid, embedding) in &rowid_embeddings {
+                // Convert Vec<f32> to a DuckDB array string [val1, val2, ...]
+                let array_str = format!(
+                    "[{}]",
+                    embedding
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+
+                if let Err(e) = insert_stmt.execute(duckdb::params![rowid, array_str]) {
+                    tracing::error!("Failed to insert rowid {} into temp table: {}", rowid, e);
+                }
+            }
+        }
+
+        // 3. Perform a JOIN update from the temp table to the main table
+        // This is the fastest and most reliable way to update a large number of rows in DuckDB
+        let update_sql = format!(
+            "UPDATE \"{table}\" SET \"{col}\" = t.emb FROM {temp} t WHERE \"{table}\".rowid = t.rid",
+            table = table.replace('"', "\"\""),
+            col = safe_col,
+            temp = temp_table
+        );
+
+        match self.session_conn.execute(&update_sql, []) {
+            Ok(n) => {
+                success_count = n;
+            }
+            Err(e) => {
+                tracing::error!("JOIN update failed: {}", e);
+                // Cleanup temp table before returning
+                let _ = self
+                    .session_conn
+                    .execute(&format!("DROP TABLE {}", temp_table), []);
+                return Err(e.into());
+            }
+        }
+
+        // Cleanup temp table
+        let _ = self
+            .session_conn
+            .execute(&format!("DROP TABLE {}", temp_table), []);
+
+        // 3. Refresh column config on the cached dataset so the new column appears
+        dataset.reset_column_config();
+        if hide_column {
+            let _ = dataset.set_column_visible(new_column_name, false);
+        }
+
+        // Write updated dataset back into the cache
+        self.datasets
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("Failed to acquire dataset lock: {}", e))?
+            .insert(dataset_id.clone(), dataset);
+
+        // Result summary - using warn priority to ensure visibility in default log levels
+        if success_count == 0 && total_to_update > 0 {
+            tracing::warn!(
+                "CRITICAL: Embedding column '{}' added but 0/{} rows were updated. RowID mismatch?",
+                new_column_name,
+                total_to_update
+            );
+        } else {
+            tracing::warn!(
+                "Successfully added embedding column '{}': {}/{} rows updated",
+                new_column_name,
+                success_count,
+                total_to_update
+            );
+        }
+
+        Ok(())
+    }
 }
 
 // Clean up session database when DataService is dropped
@@ -668,6 +831,22 @@ impl Drop for DataService {
             if wal_path.exists() {
                 let _ = std::fs::remove_file(&wal_path);
             }
+        }
+    }
+}
+
+/// Cloning a DataService shares the same underlying Arc connections and dataset cache.
+///
+/// This is intentional: background threads can hold a clone to write results back
+/// to the same session DuckDB database without extra coordination.
+impl Clone for DataService {
+    fn clone(&self) -> Self {
+        Self {
+            global_conn: self.global_conn.clone(),
+            session_conn: self.session_conn.clone(),
+            session_id: self.session_id.clone(),
+            session_path: self.session_path.clone(),
+            datasets: self.datasets.clone(),
         }
     }
 }

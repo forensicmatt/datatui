@@ -35,12 +35,13 @@
       "t": "OpenSqlDialog",
       "c": "Copy",
       "C": "CopyWithHeaders",
-      "o": "Import",
+      "i": "Import",
       "e": "Export",
       "d": "OpenDetailsDialog",
       "w": "OpenColumnWidthDialog",
       "m": "OpenMapViewer",
-      "l": "OpenLlmManagementDialog"
+      "l": "OpenLlmManagementDialog",
+      "o": "OpenColumnOperationsDialog"
     },
     "SqlDialog": {
       "Ctrl+Enter": "RunSqlQuery",
@@ -126,6 +127,26 @@
     "OllamaConfigDialog": {
       "Enter": "Confirm",
       "Esc": "Cancel",
+      "Ctrl+i": "ToggleInstructions"
+    },
+    "ColumnOperationsDialog": {
+      "Up": "MoveUp",
+      "Down": "MoveDown",
+      "Left": "MoveLeft",
+      "Right": "MoveRight",
+      "Esc": "Cancel",
+      "Enter": "Confirm",
+      "Ctrl+i": "ToggleInstructions"
+    },
+    "ColumnOperationOptionsDialog": {
+      "Up": "MoveUp",
+      "Down": "MoveDown",
+      "Left": "MoveLeft",
+      "Right": "MoveRight",
+      "Tab": "MoveDown",
+      "Shift+Tab": "MoveUp",
+      "Esc": "Cancel",
+      "Enter": "Confirm",
       "Ctrl+i": "ToggleInstructions"
     }
   }

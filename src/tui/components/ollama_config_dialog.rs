@@ -31,7 +31,7 @@ impl OllamaConfigDialog {
             config,
             cursor_pos,
             focused: true,
-            show_instructions: true,
+            show_instructions: false,
             result: None,
             closed: false,
         }

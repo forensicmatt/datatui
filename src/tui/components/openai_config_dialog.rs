@@ -40,7 +40,7 @@ impl OpenAiConfigDialog {
             active_field: OpenAiField::ApiKey,
             cursor_pos,
             focused: true,
-            show_instructions: true,
+            show_instructions: false,
             result: None,
             closed: false,
         }

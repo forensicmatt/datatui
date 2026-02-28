@@ -2,9 +2,9 @@ use crate::core::DatasetId;
 use crate::services::search_service::{FindOptions, SearchMode};
 use crate::services::{DataService, LlmService, SearchService};
 use crate::tui::components::{
-    CellViewer, ColumnWidthDialog, CommandBarDialog, DataFrameDetailsDialog, DataTable,
-    ErrorDialog, FindAllResultsDialog, FindDialog, LlmManagementDialog, MapViewerDialog,
-    SortDialog, SqlDialog,
+    CellViewer, ColumnOperationsDialog, ColumnWidthDialog, CommandBarDialog,
+    DataFrameDetailsDialog, DataTable, EmbeddingProgressDialog, ErrorDialog, FindAllResultsDialog,
+    FindDialog, LlmManagementDialog, MapViewerDialog, SortDialog, SqlDialog,
 };
 use crate::tui::{Action, Command, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
@@ -14,6 +14,7 @@ use ratatui::{
     Frame,
 };
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver};
 
 /// Application state
 ///
@@ -58,6 +59,9 @@ pub struct App {
     /// LLM management dialog (when active)
     llm_management_dialog: Option<LlmManagementDialog>,
 
+    /// Column operations dialog (when active)
+    column_operations_dialog: Option<ColumnOperationsDialog>,
+
     /// LLM service
     llm_service: LlmService,
 
@@ -72,6 +76,21 @@ pub struct App {
 
     /// Whether the app should quit
     should_quit: bool,
+
+    /// Channel receiver for embedding job completion.
+    ///
+    /// Success payload: `(col_name, dataset_id, rowid_embeddings, hide_col)` — written to
+    ///   DuckDB on the main thread via `data_service.add_embedding_column()`.
+    /// Failure payload: `Err(message)` — displayed in ErrorDialog.
+    embedding_result_rx_typed: Option<
+        Receiver<Result<(String, crate::core::DatasetId, Vec<(i64, Vec<f32>)>, bool), String>>,
+    >,
+
+    /// Progress dialog shown while an embedding job is running.
+    embedding_progress_dialog: Option<EmbeddingProgressDialog>,
+
+    /// Receiver end of the progress channel — polled in update().
+    embedding_progress_rx: Option<Receiver<(usize, usize)>>,
 }
 
 impl App {
@@ -105,11 +124,15 @@ impl App {
             error_dialog: None,
             sql_dialog: None,
             llm_management_dialog: None,
+            column_operations_dialog: None,
             llm_service,
             last_search: None,
             keybindings,
             theme,
             should_quit: false,
+            embedding_result_rx_typed: None,
+            embedding_progress_dialog: None,
+            embedding_progress_rx: None,
         })
     }
 
@@ -270,7 +293,165 @@ impl App {
         Ok(())
     }
 
-    /// Handle a sort dialog result
+    /// Handle a column operations dialog result
+    fn handle_column_operations_result(
+        &mut self,
+        result: crate::tui::components::column_operations_dialog::DialogResult,
+    ) -> Result<()> {
+        use crate::tui::components::column_operation_options_dialog::ColumnOperationKind;
+        use crate::tui::components::column_operations_dialog::DialogResult as ColOpResult;
+
+        match result {
+            ColOpResult::Applied(config) => match config.operation {
+                ColumnOperationKind::GenerateEmbeddings => {
+                    self.dispatch_generate_embeddings(config)?;
+                }
+                op => {
+                    tracing::info!(
+                        "Column operation {:?} on '{}' — not yet implemented",
+                        op,
+                        config.source_column
+                    );
+                }
+            },
+            ColOpResult::Cancelled => {}
+        }
+        Ok(())
+    }
+
+    /// Dispatch a GenerateEmbeddings job to a background thread.
+    ///
+    /// The thread:
+    /// 1. Calls `LlmService::generate_embeddings` (blocking HTTP)
+    /// 2. Writes embeddings back via `DataService::add_embedding_column`
+    ///
+    /// Errors are logged; the UI is refreshed on completion.
+    fn dispatch_generate_embeddings(
+        &mut self,
+        config: crate::tui::components::column_operation_options_dialog::ColumnOperationConfig,
+    ) -> Result<()> {
+        use crate::tui::components::column_operation_options_dialog::OperationOptions;
+
+        let (model_name, num_dimensions) = match &config.options {
+            OperationOptions::GenerateEmbeddings {
+                model_name,
+                num_dimensions,
+            } => (model_name.clone(), *num_dimensions),
+            _ => return Ok(()),
+        };
+
+        let dataset_id = match self.data_table.as_ref() {
+            Some(table) => table.dataset().id.clone(),
+            None => {
+                tracing::warn!("No active dataset — cannot generate embeddings");
+                return Ok(());
+            }
+        };
+
+        // Read texts on the main thread (fast DuckDB read, stays on main thread)
+        let rows = match self
+            .data_service
+            .fetch_column_texts(&dataset_id, &config.source_column)
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to read source column '{}': {}",
+                    config.source_column,
+                    e
+                );
+                return Ok(());
+            }
+        };
+
+        if rows.is_empty() {
+            tracing::warn!(
+                "Source column '{}' has no non-null values — skipping embedding",
+                config.source_column
+            );
+            return Ok(());
+        }
+
+        let total = rows.len();
+        tracing::info!(
+            "Starting embedding job: {} rows, model='{}', provider={:?}",
+            total,
+            model_name,
+            config.provider
+        );
+
+        let llm_service = self.llm_service.clone();
+        let provider = config.provider;
+        let new_col = if config.new_column_name.is_empty() {
+            format!("{}_embedding", config.source_column)
+        } else {
+            config.new_column_name.clone()
+        };
+        let hide_col = config.hide_new_column;
+
+        // Completion channel.
+        // Success: (col_name, dataset_id, paired rowid→embedding, hide_col)
+        // Failure: Err(human-readable message)
+        type DonePayload =
+            Result<(String, crate::core::DatasetId, Vec<(i64, Vec<f32>)>, bool), String>;
+        let (done_tx, done_rx) = mpsc::channel::<DonePayload>();
+        self.embedding_result_rx_typed = Some(done_rx);
+
+        // Progress channel — per-batch ticks forwarded to the progress dialog
+        let (prog_tx, prog_rx) = mpsc::channel::<(usize, usize)>();
+        self.embedding_progress_rx = Some(prog_rx);
+
+        // Show the progress overlay immediately
+        self.embedding_progress_dialog = Some(EmbeddingProgressDialog::new(
+            new_col.clone(),
+            config.source_column.clone(),
+            total,
+        ));
+
+        // Clone dataset_id so we can move it into the thread
+        let dataset_id_for_thread = dataset_id.clone();
+
+        std::thread::spawn(move || {
+            let (rowids, texts): (Vec<i64>, Vec<String>) = rows.into_iter().unzip();
+
+            // Progress callback sends (done, total) ticks to the main thread
+            let prog_cb: crate::services::ProgressCallback = Box::new(move |done, tot| {
+                let _ = prog_tx.send((done, tot));
+            });
+
+            // ── HTTP only — no DuckDB here ──────────────────────────────────
+            // Opening the session file from a second thread would trigger
+            // DuckDB's exclusive-write lock and fail with "file in use".
+            let embeddings = match llm_service.generate_embeddings(
+                texts,
+                Some(provider),
+                &model_name,
+                Some(num_dimensions),
+                None,
+                Some(prog_cb),
+            ) {
+                Ok(e) => e,
+                Err(e) => {
+                    let _ = done_tx.send(Err(format!("Embedding generation failed: {}", e)));
+                    return;
+                }
+            };
+
+            // Pair rowids with their embedding vectors and send to main thread
+            let rowid_embeddings: Vec<(i64, Vec<f32>)> =
+                rowids.into_iter().zip(embeddings).collect();
+
+            let _ = done_tx.send(Ok((
+                new_col,
+                dataset_id_for_thread,
+                rowid_embeddings,
+                hide_col,
+            )));
+        });
+
+        Ok(())
+    }
+
     fn handle_sort_dialog_result(
         &mut self,
         result: crate::tui::components::sort_dialog::DialogResult,
@@ -624,9 +805,33 @@ Press Esc or Enter to close this dialog.";
                 KeyEventResult::Ignored => {}
             }
         }
-        // Other components that don't need explicit result extraction (via take_result)
-        // FindAllResultsDialog
-        else if let Some(dialog) = &mut self.find_all_results_dialog {
+        // ColumnOperationsDialog
+        else if self.column_operations_dialog.is_some() {
+            let (kr, dr) = if let Some(d) = &mut self.column_operations_dialog {
+                (d.handle_key_event(key)?, d.take_result())
+            } else {
+                (KeyEventResult::Ignored, None)
+            };
+            if let Some(result) = dr {
+                self.handle_column_operations_result(result)?;
+            }
+            if self
+                .column_operations_dialog
+                .as_ref()
+                .map(|d| d.closed)
+                .unwrap_or(false)
+            {
+                self.column_operations_dialog = None;
+            }
+            match kr {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
+            }
+        } else if let Some(dialog) = &mut self.find_all_results_dialog {
             match dialog.handle_key_event(key)? {
                 KeyEventResult::Consumed => return Ok(()),
                 KeyEventResult::Action(a) => {
@@ -674,6 +879,13 @@ Press Esc or Enter to close this dialog.";
             "SqlDialog"
         } else if self.llm_management_dialog.is_some() {
             "LlmManagementDialog"
+        } else if let Some(col_ops) = &self.column_operations_dialog {
+            // If the sub-dialog (options form) is open, use its scope
+            if col_ops.has_sub_dialog() {
+                "ColumnOperationOptionsDialog"
+            } else {
+                "ColumnOperationsDialog"
+            }
         } else if let Some(ref details) = self.dataframe_details_dialog {
             if details.has_map_viewer() {
                 "MapViewerDialog"
@@ -823,6 +1035,16 @@ Press Esc or Enter to close this dialog.";
             Action::OpenLlmManagementDialog => {
                 let dialog = LlmManagementDialog::new(self.llm_service.clone());
                 self.llm_management_dialog = Some(dialog);
+                return Ok(());
+            }
+
+            Action::OpenColumnOperationsDialog => {
+                if let Some(table) = &self.data_table {
+                    let columns = table.get_all_columns();
+                    let (_, col_idx) = table.get_cursor_position();
+                    let dialog = ColumnOperationsDialog::new(columns, col_idx);
+                    self.column_operations_dialog = Some(dialog);
+                }
                 return Ok(());
             }
 
@@ -1142,6 +1364,26 @@ Press Esc or Enter to close this dialog.";
             }
         }
 
+        // Route to column operations dialog if active (MODAL)
+        if self.column_operations_dialog.is_some() {
+            let (closed, result) = if let Some(d) = &mut self.column_operations_dialog {
+                let _handled = d.handle_action(action)?;
+                let result = d.take_result();
+                (d.closed, result)
+            } else {
+                (true, None)
+            };
+
+            if let Some(result) = result {
+                self.handle_column_operations_result(result)?;
+            }
+
+            if closed {
+                self.column_operations_dialog = None;
+            }
+            return Ok(());
+        }
+
         // Route to focused component
         if let Some(table) = &mut self.data_table {
             if table.is_focused() {
@@ -1162,6 +1404,96 @@ Press Esc or Enter to close this dialog.";
         if let Some(table) = &mut self.data_table {
             table.update()?;
         }
+
+        // Drain all pending progress ticks (non-blocking)
+        // Use a local bool to avoid borrow conflict when updating the dialog
+        let mut latest_progress: Option<(usize, usize)> = None;
+        if let Some(rx) = &self.embedding_progress_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(tick) => {
+                        latest_progress = Some(tick);
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+        if let Some((done, total)) = latest_progress {
+            if let Some(dlg) = &mut self.embedding_progress_dialog {
+                dlg.set_progress(done, total);
+            }
+        }
+
+        // Poll embedding job completion channel (non-blocking)
+        let embedding_done = if let Some(rx) = &self.embedding_result_rx_typed {
+            match rx.try_recv() {
+                Ok(result) => Some(result),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Some(Err("Embedding job terminated unexpectedly.".to_string()))
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some(result) = embedding_done {
+            // Job finished — clear all job state
+            self.embedding_result_rx_typed = None;
+            self.embedding_progress_rx = None;
+            self.embedding_progress_dialog = None;
+
+            match result {
+                Ok((col_name, dataset_id, rowid_embeddings, hide_col)) => {
+                    tracing::info!("Embedding generation finished, writing to DuckDB...");
+
+                    // Do the DB write on the main thread
+                    match self.data_service.add_embedding_column(
+                        &dataset_id,
+                        &col_name,
+                        rowid_embeddings,
+                        hide_col,
+                    ) {
+                        Ok(_) => {
+                            tracing::info!(
+                                "Embedding column '{}' written successfully, syncing UI state...",
+                                col_name
+                            );
+                            // Reload the DataTable schema and sync the dataset instance
+                            if let Some(table) = &mut self.data_table {
+                                // Re-fetch the dataset from DataService to get updated config (column_config, etc)
+                                if let Ok(updated_ds) = self.data_service.get_dataset(&dataset_id) {
+                                    *table.dataset_mut() = updated_ds;
+                                }
+
+                                if let Err(e) = table.reload_schema() {
+                                    tracing::error!(
+                                        "Failed to reload schema after embedding: {}",
+                                        e
+                                    );
+                                    self.error_dialog = Some(ErrorDialog::new(format!(
+                                        "Embeddings written to '{}' but failed to refresh view: {}",
+                                        col_name, e
+                                    )));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to write embedding column: {}", e);
+                            self.error_dialog = Some(ErrorDialog::new(format!(
+                                "Failed to write embedding column to database: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+                Err(msg) => {
+                    tracing::error!("Embedding job failed: {}", msg);
+                    self.error_dialog = Some(ErrorDialog::new(msg));
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1255,6 +1587,12 @@ Press Esc or Enter to close this dialog.";
             dialog.render(frame, dialog_area, &self.theme);
         }
 
+        // Render column operations dialog overlay if active
+        if let Some(dialog) = &mut self.column_operations_dialog {
+            let dialog_area = Self::centered_rect(70, 80, area);
+            dialog.render(frame, dialog_area, &self.theme);
+        }
+
         // Render SQL dialog overlay if active
         if let Some(dialog) = &mut self.sql_dialog {
             let dialog_area = Self::centered_rect(90, 90, area);
@@ -1277,12 +1615,33 @@ Press Esc or Enter to close this dialog.";
             let dialog_area = Self::centered_rect(50, 30, area);
             dialog.render(frame, dialog_area, &self.theme);
         }
+
+        // Render embedding progress dialog overlay if active
+        if let Some(dialog) = &mut self.embedding_progress_dialog {
+            // A compact bar: 60% wide, 9 rows tall, centred
+            let dialog_area = Self::centered_rect_absolute(area, 60, 9);
+            dialog.render(frame, dialog_area, &self.theme);
+        }
     }
 
     /// Helper to create centered rectangle
     fn centered_rect(percent_w: u16, percent_h: u16, area: Rect) -> Rect {
         let width = (area.width * percent_w) / 100;
         let height = (area.height * percent_h) / 100;
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// Helper to create a centred rect with percentage width and fixed row height.
+    fn centered_rect_absolute(area: Rect, percent_w: u16, rows: u16) -> Rect {
+        let width = (area.width * percent_w) / 100;
+        let height = rows.min(area.height);
         let x = area.x + (area.width.saturating_sub(width)) / 2;
         let y = area.y + (area.height.saturating_sub(height)) / 2;
         Rect {
