@@ -29,6 +29,9 @@ pub struct QueryBuilder {
     /// ORDER BY columns
     order_by: Vec<OrderByColumn>,
 
+    /// Calculated columns (e.g., "(1 - list_cosine_similarity(emb, [1,2,3])) as score")
+    calculated_columns: Vec<String>,
+
     /// LIMIT clause
     limit: Option<usize>,
 
@@ -44,6 +47,7 @@ impl QueryBuilder {
             select_columns: vec!["*".to_string()],
             where_clause: None,
             order_by: Vec::new(),
+            calculated_columns: Vec::new(),
             limit: None,
             offset: None,
         }
@@ -105,17 +109,37 @@ impl QueryBuilder {
         self.offset
     }
 
+    /// Set calculated columns
+    pub fn set_calculated_columns(&mut self, columns: Vec<String>) {
+        self.calculated_columns = columns;
+    }
+
+    /// Add a calculated column
+    pub fn add_calculated_column(&mut self, column: String) {
+        self.calculated_columns.push(column);
+    }
+
+    /// Get calculated columns
+    pub fn get_calculated_columns(&self) -> &[String] {
+        &self.calculated_columns
+    }
+
     /// Build the SQL query string
     pub fn to_sql(&self) -> String {
         let mut parts = Vec::new();
 
         // SELECT clause
-        let select_cols = if self.select_columns.is_empty() {
-            "*".to_string()
-        } else {
-            self.select_columns.join(", ")
-        };
-        parts.push(format!("SELECT {}", select_cols));
+        let mut select_parts = self.select_columns.clone();
+        if select_parts.is_empty() {
+            select_parts.push("*".to_string());
+        }
+
+        // Add calculated columns
+        for calc in &self.calculated_columns {
+            select_parts.push(calc.clone());
+        }
+
+        parts.push(format!("SELECT {}", select_parts.join(", ")));
 
         // FROM clause
         parts.push(format!("FROM \"{}\"", self.base_table));

@@ -11,9 +11,18 @@ pub enum LlmProvider {
 impl LlmProvider {
     pub fn display_name(&self) -> &'static str {
         match self {
-            LlmProvider::OpenAI => "OpenAI",
-            LlmProvider::Azure => "Azure OpenAI",
-            LlmProvider::Ollama => "Ollama",
+            Self::OpenAI => "OpenAI",
+            Self::Azure => "Azure OpenAI",
+            Self::Ollama => "Ollama",
+        }
+    }
+
+    pub fn from_display_name(name: &str) -> Option<Self> {
+        match name {
+            "OpenAI" => Some(Self::OpenAI),
+            "Azure OpenAI" => Some(Self::Azure),
+            "Ollama" => Some(Self::Ollama),
+            _ => None,
         }
     }
 

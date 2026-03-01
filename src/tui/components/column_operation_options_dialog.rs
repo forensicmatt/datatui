@@ -23,6 +23,7 @@ pub enum ColumnOperationKind {
     Pca,
     Cluster,
     SortByPromptSimilarity,
+    OpenSortHistory,
 }
 
 impl ColumnOperationKind {
@@ -32,6 +33,7 @@ impl ColumnOperationKind {
             Self::Pca => "PCA Reduction",
             Self::Cluster => "Cluster",
             Self::SortByPromptSimilarity => "Sort by Prompt Similarity",
+            Self::OpenSortHistory => "Open Sort History",
         }
     }
 }
@@ -103,6 +105,8 @@ pub enum OperationOptions {
     },
     SortByPromptSimilarity {
         prompt: String,
+        model_name: String,
+        num_dimensions: usize,
     },
 }
 
@@ -141,7 +145,7 @@ pub struct ColumnOperationOptionsDialog {
     hide_new_column: bool,
 
     // Column selection
-    columns: Vec<String>,
+    columns: Vec<crate::core::models::ColumnInfo>,
     selected_column_index: usize,
 
     // Provider / embedding
@@ -179,11 +183,38 @@ pub struct ColumnOperationOptionsDialog {
 impl ColumnOperationOptionsDialog {
     pub fn new(
         operation: ColumnOperationKind,
-        columns: Vec<String>,
+        all_columns: Vec<crate::core::models::ColumnInfo>,
         selected_column_index: usize,
     ) -> Self {
-        let selected_column_index = selected_column_index.min(columns.len().saturating_sub(1));
-        Self {
+        // Filter columns for similarity sorting
+        let columns: Vec<crate::core::models::ColumnInfo> =
+            if operation == ColumnOperationKind::SortByPromptSimilarity {
+                all_columns
+                    .iter()
+                    .filter(|c| {
+                        // 1. Known embedding via metadata
+                        if c.embedding_config.is_some() {
+                            return true;
+                        }
+                        // 2. Or looks like an array of floats
+                        let ty = c.data_type.to_uppercase();
+                        ty.contains("[]") || ty.contains("LIST") || ty.contains("ARRAY")
+                    })
+                    .cloned()
+                    .collect()
+            } else {
+                all_columns.clone()
+            };
+
+        // Map original selection to filtered list
+        let original_name = all_columns.get(selected_column_index).map(|c| &c.name);
+        let selected_column_index = if let Some(name) = original_name {
+            columns.iter().position(|c| &c.name == name).unwrap_or(0)
+        } else {
+            0
+        };
+
+        let mut dialog = Self {
             focused: true,
             closed: false,
             result: None,
@@ -215,6 +246,43 @@ impl ColumnOperationOptionsDialog {
             in_buttons: false,
             selected_button: 0,
             error: None,
+        };
+
+        dialog.auto_fill_settings();
+        dialog
+    }
+
+    pub fn apply_history_record(&mut self, record: crate::core::models::SortHistoryRecord) {
+        self.prompt = record.prompt;
+        self.prompt_cursor = self.prompt.len();
+        self.model_name = record.model_name;
+        self.model_name_cursor = self.model_name.len();
+        self.num_dimensions = record.num_dimensions;
+        self.num_dimensions_str = self.num_dimensions.to_string();
+        self.selected_provider =
+            LlmProvider::from_display_name(&record.provider).unwrap_or(LlmProvider::OpenAI);
+
+        // Try to match the source column if possible
+        if let Some(pos) = self
+            .columns
+            .iter()
+            .position(|c| c.name == record.source_column)
+        {
+            self.selected_column_index = pos;
+        }
+    }
+
+    fn auto_fill_settings(&mut self) {
+        if self.operation == ColumnOperationKind::SortByPromptSimilarity {
+            if let Some(col) = self.columns.get(self.selected_column_index) {
+                if let Some(config) = &col.embedding_config {
+                    self.selected_provider = config.provider;
+                    self.model_name = config.model_name.clone();
+                    self.model_name_cursor = self.model_name.len();
+                    self.num_dimensions = config.num_dimensions;
+                    self.num_dimensions_str = config.num_dimensions.to_string();
+                }
+            }
         }
     }
 
@@ -252,6 +320,12 @@ impl ColumnOperationOptionsDialog {
                 f.push(("Prompt", "text"));
                 f.push(("Provider", "enum"));
                 f.push(("Model Name", "text"));
+                f.push(("Number of Dimensions", "number"));
+            }
+            ColumnOperationKind::OpenSortHistory => {
+                // This operation doesn't have configurable fields in this dialog
+                // It's an action to open another dialog.
+                // No options to render for this action
             }
         }
         f
@@ -264,7 +338,7 @@ impl ColumnOperationOptionsDialog {
             1 => self
                 .columns
                 .get(self.selected_column_index)
-                .cloned()
+                .map(|c| c.name.clone())
                 .unwrap_or_default(),
             _ => match self.operation {
                 ColumnOperationKind::GenerateEmbeddings => match i {
@@ -301,8 +375,10 @@ impl ColumnOperationOptionsDialog {
                     2 => self.prompt.clone(),
                     3 => self.selected_provider.display_name().into(),
                     4 => self.model_name.clone(),
+                    5 => self.num_dimensions_str.clone(),
                     _ => String::new(),
                 },
+                ColumnOperationKind::OpenSortHistory => String::new(), // No fields to display
             },
         }
     }
@@ -317,7 +393,8 @@ impl ColumnOperationOptionsDialog {
 
     fn num_string_for_field_mut(&mut self) -> Option<(&mut String, &mut usize)> {
         match (self.operation, self.selected_field) {
-            (ColumnOperationKind::GenerateEmbeddings, 5) => {
+            (ColumnOperationKind::GenerateEmbeddings, 5)
+            | (ColumnOperationKind::SortByPromptSimilarity, 5) => {
                 Some((&mut self.num_dimensions_str, &mut self.num_dimensions))
             }
             (ColumnOperationKind::Pca, 2) => Some((
@@ -454,6 +531,7 @@ impl ColumnOperationOptionsDialog {
                 } else {
                     self.selected_column_index = (self.selected_column_index + n - 1) % n;
                 }
+                self.auto_fill_settings();
             }
             2 if self.operation == ColumnOperationKind::GenerateEmbeddings => {
                 self.hide_new_column = !self.hide_new_column;
@@ -477,7 +555,9 @@ impl ColumnOperationOptionsDialog {
                 if let Some((m, d)) = models.first() {
                     self.model_name = m.to_string();
                     self.model_name_cursor = self.model_name.len();
-                    if self.operation == ColumnOperationKind::GenerateEmbeddings {
+                    if self.operation == ColumnOperationKind::GenerateEmbeddings
+                        || self.operation == ColumnOperationKind::SortByPromptSimilarity
+                    {
                         self.num_dimensions = *d;
                         self.num_dimensions_str = d.to_string();
                     }
@@ -532,12 +612,6 @@ impl ColumnOperationOptionsDialog {
     // ── Apply ─────────────────────────────────────────────────────────────────
 
     fn try_apply(&mut self) {
-        let source_column = self
-            .columns
-            .get(self.selected_column_index)
-            .cloned()
-            .unwrap_or_default();
-
         let options = match self.operation {
             ColumnOperationKind::GenerateEmbeddings => {
                 if self.model_name.is_empty() {
@@ -578,16 +652,29 @@ impl ColumnOperationOptionsDialog {
                 }
                 OperationOptions::SortByPromptSimilarity {
                     prompt: self.prompt.clone(),
+                    model_name: self.model_name.clone(),
+                    num_dimensions: self.num_dimensions,
                 }
             }
+            ColumnOperationKind::OpenSortHistory => {
+                // Should not happen as this is a navigation action
+                return;
+            }
         };
+
+        let provider = self.selected_provider;
+        let source_column = self
+            .columns
+            .get(self.selected_column_index)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
 
         self.result = Some(DialogResult::Applied(ColumnOperationConfig {
             operation: self.operation,
             new_column_name: self.new_column_name.clone(),
             source_column,
             hide_new_column: self.hide_new_column,
-            provider: self.selected_provider,
+            provider,
             options,
         }));
         self.closed = true;
@@ -746,6 +833,13 @@ impl Component for ColumnOperationOptionsDialog {
                     self.backspace();
                 }
                 return Ok(KeyEventResult::Consumed);
+            }
+
+            // ── Ctrl+H: open sort history ─────────────────────────────────────
+            KeyCode::Char('h') | KeyCode::Char('H') if ctrl => {
+                if self.operation == ColumnOperationKind::SortByPromptSimilarity {
+                    return Ok(KeyEventResult::Action(Action::OpenSortHistory));
+                }
             }
 
             // ── Printable characters ──────────────────────────────────────────
@@ -1070,6 +1164,7 @@ impl ColumnOperationOptionsDialog {
                 "• Space/←/→ on Algorithm: toggle  • digits: set numeric fields"
             }
             ColumnOperationKind::SortByPromptSimilarity => "• ←/→: choose source column",
+            ColumnOperationKind::OpenSortHistory => "",
         };
 
         let text = format!(

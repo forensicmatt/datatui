@@ -46,6 +46,7 @@ fn operation_description(op: ColumnOperationKind) -> &'static str {
         ColumnOperationKind::SortByPromptSimilarity => {
             "Compute cosine similarity of an embedding column to a user prompt and sort by score"
         }
+        ColumnOperationKind::OpenSortHistory => "Open sort history",
     }
 }
 
@@ -55,6 +56,7 @@ fn operation_requirements(op: ColumnOperationKind) -> &'static str {
         ColumnOperationKind::Pca => "Requires: numerical (embedding) columns",
         ColumnOperationKind::Cluster => "Requires: numerical columns",
         ColumnOperationKind::SortByPromptSimilarity => "Requires: at least one embedding column",
+        ColumnOperationKind::OpenSortHistory => "",
     }
 }
 
@@ -76,7 +78,7 @@ pub struct ColumnOperationsDialog {
     pub show_instructions: bool,
 
     /// Column list passed down to the sub-dialog
-    columns: Vec<String>,
+    columns: Vec<crate::core::models::ColumnInfo>,
     /// Cursor column index in the data table
     col_idx: usize,
 
@@ -91,7 +93,7 @@ pub struct ColumnOperationsDialog {
 }
 
 impl ColumnOperationsDialog {
-    pub fn new(columns: Vec<String>, col_idx: usize) -> Self {
+    pub fn new(columns: Vec<crate::core::models::ColumnInfo>, col_idx: usize) -> Self {
         Self {
             focused: true,
             closed: false,
@@ -111,6 +113,12 @@ impl ColumnOperationsDialog {
     /// Returns true when the options sub-dialog is currently open.
     pub fn has_sub_dialog(&self) -> bool {
         self.sub_dialog.is_some()
+    }
+
+    pub fn apply_history_record(&mut self, record: crate::core::models::SortHistoryRecord) {
+        if let Some(sub) = &mut self.sub_dialog {
+            sub.apply_history_record(record);
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

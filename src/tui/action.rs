@@ -93,6 +93,8 @@ pub enum Action {
 
     // Column Operations
     OpenColumnOperationsDialog,
+    OpenSortHistory,
+    OpenQueryDebug,
 }
 
 impl Action {
@@ -160,6 +162,8 @@ impl Action {
             Action::SqlRedo => "Redo last SQL edit",
             Action::OpenLlmManagementDialog => "Open LLM management dialog",
             Action::OpenColumnOperationsDialog => "Open column operations dialog",
+            Action::OpenSortHistory => "Open sort history",
+            Action::OpenQueryDebug => "Open query debug dialog",
         }
     }
 
@@ -230,6 +234,8 @@ impl Action {
 
             Action::OpenLlmManagementDialog => ActionCategory::Application,
             Action::OpenColumnOperationsDialog => ActionCategory::Columns,
+            Action::OpenSortHistory => ActionCategory::DataOps,
+            Action::OpenQueryDebug => ActionCategory::DataOps,
 
             Action::Escape => ActionCategory::Application,
         }
@@ -299,6 +305,8 @@ impl Action {
             Action::SqlRedo,
             Action::OpenLlmManagementDialog,
             Action::OpenColumnOperationsDialog,
+            Action::OpenSortHistory,
+            Action::OpenQueryDebug,
         ]
     }
 }

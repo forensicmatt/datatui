@@ -4,6 +4,7 @@ use crate::tui::{Action, Component, Focusable, Theme};
 use color_eyre::Result;
 use duckdb::arrow::array::Array;
 use duckdb::arrow::datatypes::DataType;
+use duckdb::arrow::record_batch::RecordBatch;
 use ratatui::{
     layout::Rect,
     widgets::{Block, Borders, Cell, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table},
@@ -90,6 +91,9 @@ pub struct DataTable {
     // Caching
     calculated_widths: Option<Vec<u16>>,
     cache_valid: bool,
+
+    // Page caching
+    cached_page: Option<(usize, usize, String, RecordBatch)>,
 }
 
 impl DataTable {
@@ -136,6 +140,7 @@ impl DataTable {
             viewport_config: ViewportConfig::default(),
             calculated_widths: None,
             cache_valid: false,
+            cached_page: None,
         })
     }
 
@@ -173,8 +178,16 @@ impl DataTable {
 
         self.refresh_layout()?;
         self.cache_valid = false;
+        self.cached_page = None;
 
         Ok(())
+    }
+
+    /// Clear the data cache manually
+    pub fn clear_cache(&mut self) {
+        self.cached_page = None;
+        self.cache_valid = false;
+        self.calculated_widths = None;
     }
 
     /// Get mutable reference to the dataset
@@ -903,7 +916,11 @@ impl DataTable {
                         .unwrap_or_else(|| format!("{:?}", column.slice(row_idx, 1)))
                 }
             }
-            DataType::List(_) | DataType::FixedSizeList(_, _) => {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::FixedSizeList(_, _) => {
                 if column.is_null(row_idx) {
                     "NULL".to_string()
                 } else {
@@ -1007,6 +1024,39 @@ impl DataTable {
                 }
                 DataType::List(_) => {
                     let arr = array.as_any().downcast_ref::<ListArray>()?;
+                    let value_array = arr.value(idx);
+                    let mut values = Vec::new();
+                    for i in 0..value_array.len() {
+                        if let Some(v) = array_element_to_json(value_array.as_ref(), i) {
+                            values.push(v);
+                        }
+                    }
+                    Some(Value::Array(values))
+                }
+                DataType::LargeList(_) => {
+                    let arr = array.as_any().downcast_ref::<LargeListArray>()?;
+                    let value_array = arr.value(idx);
+                    let mut values = Vec::new();
+                    for i in 0..value_array.len() {
+                        if let Some(v) = array_element_to_json(value_array.as_ref(), i) {
+                            values.push(v);
+                        }
+                    }
+                    Some(Value::Array(values))
+                }
+                DataType::ListView(_) => {
+                    let arr = array.as_any().downcast_ref::<ListViewArray>()?;
+                    let value_array = arr.value(idx);
+                    let mut values = Vec::new();
+                    for i in 0..value_array.len() {
+                        if let Some(v) = array_element_to_json(value_array.as_ref(), i) {
+                            values.push(v);
+                        }
+                    }
+                    Some(Value::Array(values))
+                }
+                DataType::LargeListView(_) => {
+                    let arr = array.as_any().downcast_ref::<LargeListViewArray>()?;
                     let value_array = arr.value(idx);
                     let mut values = Vec::new();
                     for i in 0..value_array.len() {
@@ -1210,12 +1260,33 @@ impl Component for DataTable {
             .collect();
         let header = Row::new(header_cells).style(theme.header_style());
 
-        // Fetch visible rows from dataset
-        let rows: Vec<Row> = match self
-            .dataset
-            .get_page(self.viewport.top, self.viewport.height)
-        {
-            Ok(batch) => {
+        // Fetch visible rows from dataset (with caching)
+        let current_sql = self.dataset.get_current_sql();
+        let needs_fetch = match &self.cached_page {
+            Some((top, height, sql, _)) => {
+                *top != self.viewport.top || *height != self.viewport.height || sql != &current_sql
+            }
+            None => true,
+        };
+
+        if needs_fetch {
+            match self
+                .dataset
+                .get_page(self.viewport.top, self.viewport.height)
+            {
+                Ok(batch) => {
+                    self.cached_page =
+                        Some((self.viewport.top, self.viewport.height, current_sql, batch));
+                }
+                Err(e) => {
+                    tracing::error!("Failed to fetch page: {}", e);
+                    self.cached_page = None;
+                }
+            }
+        }
+
+        let rows: Vec<Row> = match &self.cached_page {
+            Some((_, _, _, batch)) => {
                 let mut result_rows = Vec::new();
 
                 // Get number of rows in this batch
@@ -1277,7 +1348,7 @@ impl Component for DataTable {
 
                 result_rows
             }
-            Err(_) => {
+            None => {
                 // Error fetching data - show error row
                 vec![Row::new(vec![Cell::from("Error loading data")])]
             }

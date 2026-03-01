@@ -700,6 +700,7 @@ impl DataService {
         new_column_name: &str,
         rowid_embeddings: Vec<(i64, Vec<f32>)>,
         hide_column: bool,
+        config: crate::core::EmbeddingColumnConfig,
     ) -> Result<()> {
         let mut dataset = self.get_dataset(dataset_id)?;
         let table = dataset.table_name.clone();
@@ -777,7 +778,16 @@ impl DataService {
             .session_conn
             .execute(&format!("DROP TABLE {}", temp_table), []);
 
-        // 3. Refresh column config on the cached dataset so the new column appears
+        // 4. Save embedding configuration as metadata
+        self.set_column_metadata(
+            dataset_id,
+            new_column_name,
+            "embedding_config",
+            &config.to_json(),
+        )?;
+        self.set_column_metadata(dataset_id, new_column_name, "is_embedding", "true")?;
+
+        // 5. Refresh column config on the cached dataset so the new column appears
         dataset.reset_column_config();
         if hide_column {
             let _ = dataset.set_column_visible(new_column_name, false);
@@ -806,6 +816,166 @@ impl DataService {
         }
 
         Ok(())
+    }
+
+    /// Set a metadata value for a column
+    pub fn set_column_metadata(
+        &self,
+        dataset_id: &DatasetId,
+        column_name: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<()> {
+        self.session_conn.execute(
+            "INSERT INTO column_metadata (dataset_id, column_name, metadata_key, metadata_value)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (dataset_id, column_name, metadata_key) DO UPDATE SET metadata_value = excluded.metadata_value",
+            duckdb::params![dataset_id.as_str(), column_name, key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Get a metadata value for a column
+    pub fn get_column_metadata(
+        &self,
+        dataset_id: &DatasetId,
+        column_name: &str,
+        key: &str,
+    ) -> Result<Option<String>> {
+        let mut stmt = self.session_conn.prepare(
+            "SELECT metadata_value FROM column_metadata WHERE dataset_id = ? AND column_name = ? AND metadata_key = ?"
+        )?;
+        let mut rows = stmt.query(duckdb::params![dataset_id.as_str(), column_name, key])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get information about all columns in a dataset, including their database types
+    /// and any associated metadata (like embedding configs).
+    pub fn get_dataset_column_info(
+        &self,
+        dataset_id: &DatasetId,
+    ) -> Result<Vec<crate::core::models::ColumnInfo>> {
+        let dataset = self.get_dataset(dataset_id)?;
+        let table = &dataset.table_name;
+
+        // Use DuckDB's DESCRIBE to get column names and types
+        let query = format!("DESCRIBE \"{}\"", table.replace('"', "\"\""));
+        let mut stmt = self.session_conn.prepare(&query)?;
+        let rows = stmt.query_map([], |row| {
+            let name: String = row.get(0)?;
+            let data_type: String = row.get(1)?;
+            Ok((name, data_type))
+        })?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            let (name, data_type) = row?;
+            // Check for embedding configuration metadata
+            let embedding_config = self
+                .get_column_metadata(dataset_id, &name, "embedding_config")?
+                .and_then(|json| crate::core::models::EmbeddingColumnConfig::from_json(&json));
+
+            result.push(crate::core::models::ColumnInfo {
+                name,
+                data_type,
+                embedding_config,
+            });
+        }
+        Ok(result)
+    }
+
+    /// Add a record to the sort history
+    pub fn add_sort_history_record(
+        &self,
+        record: crate::core::models::SortHistoryRecord,
+    ) -> Result<()> {
+        record.insert(&self.session_conn)
+    }
+
+    /// Get sort history for a dataset
+    pub fn get_sort_history(
+        &self,
+        dataset_id: &DatasetId,
+    ) -> Result<Vec<crate::core::models::SortHistoryRecord>> {
+        crate::core::models::SortHistoryRecord::load_for_dataset(&self.session_conn, dataset_id)
+    }
+
+    /// Apply a similarity sort to a dataset without creating a column.
+    /// Returns the name of the calculated column (e.g. "similarity_score").
+    pub fn apply_similarity_sort(
+        &self,
+        dataset_id: &DatasetId,
+        source_column: &str,
+        query_vector: &[f32],
+    ) -> Result<String> {
+        let mut dataset = self.get_dataset(dataset_id)?;
+        let table_name = &dataset.table_name;
+        let score_col = "similarity_score".to_string();
+
+        // 1. Ensure the column exists physically
+        // Using information_schema.columns is reliable in DuckDB
+        let check_sql = format!(
+            "SELECT count(*) FROM information_schema.columns WHERE table_name = '{}' AND column_name = '{}'",
+            table_name.replace('"', ""),
+            score_col
+        );
+        let count: i64 = self
+            .session_conn
+            .query_row(&check_sql, [], |row| row.get(0))?;
+
+        if count == 0 {
+            let add_col_sql = format!(
+                "ALTER TABLE \"{}\" ADD COLUMN \"{}\" FLOAT",
+                table_name.replace('"', "\"\""),
+                score_col
+            );
+            self.session_conn.execute(&add_col_sql, [])?;
+        }
+
+        // 2. Update the column with the similarity score
+        // We do this once here, so Selective Selects (rendering) are fast
+        let vector_str = format!("{:?}", query_vector);
+        let update_sql = format!(
+            "UPDATE \"{}\" SET \"{}\" = list_cosine_similarity(\"{}\", {})::FLOAT",
+            table_name.replace('"', "\"\""),
+            score_col,
+            source_column.replace('"', "\"\""),
+            vector_str
+        );
+        self.session_conn.execute(&update_sql, [])?;
+
+        // 3. Update the query to sort by the physical column
+        let mut query = dataset.get_current_query().clone();
+
+        // Remove from calculated columns if it was there as a virtual column
+        // We want to treat it as a regular physical column now
+        let mut new_calcs = Vec::new();
+        for calc in query.get_calculated_columns() {
+            if !calc.contains(&score_col) {
+                new_calcs.push(calc.clone());
+            }
+        }
+        query.set_calculated_columns(new_calcs);
+
+        // Apply DESC sort on the physical score column
+        query.set_order_by(vec![crate::core::sql_query::OrderByColumn {
+            column: score_col.clone(),
+            ascending: false,
+        }]);
+
+        dataset.set_current_query(query)?;
+
+        // Cache back
+        self.datasets
+            .lock()
+            .unwrap()
+            .insert(dataset_id.clone(), dataset);
+
+        Ok(score_col)
     }
 }
 

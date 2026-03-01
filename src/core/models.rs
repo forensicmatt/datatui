@@ -171,6 +171,118 @@ impl DatasetRecord {
     }
 }
 
+/// Configuration used to generate an embedding column
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EmbeddingColumnConfig {
+    pub provider: crate::core::LlmProvider,
+    pub model_name: String,
+    pub num_dimensions: usize,
+    pub source_column: String,
+}
+
+impl EmbeddingColumnConfig {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub fn from_json(json: &str) -> Option<Self> {
+        serde_json::from_str(json).ok()
+    }
+}
+
+/// Information about a column including its type and metadata
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub data_type: String,
+    pub embedding_config: Option<EmbeddingColumnConfig>,
+}
+
+/// A record in the sort history
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SortHistoryRecord {
+    pub id: String,
+    pub dataset_id: DatasetId,
+    pub source_column: String,
+    pub prompt: String,
+    pub provider: String,
+    pub model_name: String,
+    pub num_dimensions: usize,
+    pub executed_at: DateTime<Utc>,
+}
+
+impl SortHistoryRecord {
+    pub fn new(
+        dataset_id: DatasetId,
+        source_column: String,
+        prompt: String,
+        provider: String,
+        model_name: String,
+        num_dimensions: usize,
+    ) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            dataset_id,
+            source_column,
+            prompt,
+            provider,
+            model_name,
+            num_dimensions,
+            executed_at: Utc::now(),
+        }
+    }
+
+    pub fn insert(&self, conn: &Connection) -> Result<()> {
+        conn.execute(
+            "INSERT INTO sort_history (id, dataset_id, source_column, prompt, provider, model_name, num_dimensions, executed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                self.id,
+                self.dataset_id.as_str(),
+                self.source_column,
+                self.prompt,
+                self.provider,
+                self.model_name,
+                self.num_dimensions as i64,
+                self.executed_at.timestamp(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_for_dataset(conn: &Connection, dataset_id: &DatasetId) -> Result<Vec<Self>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, dataset_id, source_column, prompt, provider, model_name, num_dimensions, executed_at
+             FROM sort_history WHERE dataset_id = ? ORDER BY executed_at DESC"
+        )?;
+
+        let rows = stmt.query_map([dataset_id.as_str()], |row| {
+            Ok(Self {
+                id: row.get(0)?,
+                dataset_id: DatasetId::from_str(&row.get::<_, String>(1)?).map_err(|e| {
+                    duckdb::Error::FromSqlConversionFailure(
+                        1,
+                        duckdb::types::Type::Text,
+                        Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                    )
+                })?,
+                source_column: row.get(2)?,
+                prompt: row.get(3)?,
+                provider: row.get(4)?,
+                model_name: row.get(5)?,
+                num_dimensions: row.get::<_, i64>(6)? as usize,
+                executed_at: DateTime::from_timestamp(row.get(7)?, 0).unwrap_or_else(Utc::now),
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

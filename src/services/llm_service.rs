@@ -214,6 +214,19 @@ impl LlmService {
             }
         }
     }
+
+    /// Generate a single embedding for a query prompt.
+    pub fn generate_query_embedding(
+        &self,
+        text: String,
+        provider: Option<LlmProvider>,
+        model: impl Into<String>,
+        dimensions: Option<usize>,
+    ) -> Result<Vec<f32>> {
+        let results =
+            self.generate_embeddings(vec![text], provider, model, dimensions, None, None)?;
+        Ok(results.into_iter().next().unwrap_or_default())
+    }
 }
 
 #[cfg(test)]

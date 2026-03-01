@@ -83,7 +83,18 @@ pub struct App {
     ///   DuckDB on the main thread via `data_service.add_embedding_column()`.
     /// Failure payload: `Err(message)` — displayed in ErrorDialog.
     embedding_result_rx_typed: Option<
-        Receiver<Result<(String, crate::core::DatasetId, Vec<(i64, Vec<f32>)>, bool), String>>,
+        Receiver<
+            Result<
+                (
+                    String,
+                    crate::core::DatasetId,
+                    Vec<(i64, Vec<f32>)>,
+                    bool,
+                    crate::core::EmbeddingColumnConfig,
+                ),
+                String,
+            >,
+        >,
     >,
 
     /// Progress dialog shown while an embedding job is running.
@@ -91,6 +102,26 @@ pub struct App {
 
     /// Receiver end of the progress channel — polled in update().
     embedding_progress_rx: Option<Receiver<(usize, usize)>>,
+
+    /// Sort history dialog
+    sort_history_dialog: Option<crate::tui::components::SortHistoryDialog>,
+
+    /// Query debug dialog
+    query_debug_dialog: Option<crate::tui::components::QueryDebugDialog>,
+
+    /// Channel receiver for similarity sort completion.
+    /// Payload: Result<(query_vector, ColumnOperationConfig), String>
+    similarity_sort_result_rx: Option<
+        Receiver<
+            Result<
+                (
+                    Vec<f32>,
+                    crate::tui::components::column_operation_options_dialog::ColumnOperationConfig,
+                ),
+                String,
+            >,
+        >,
+    >,
 }
 
 impl App {
@@ -133,6 +164,9 @@ impl App {
             embedding_result_rx_typed: None,
             embedding_progress_dialog: None,
             embedding_progress_rx: None,
+            similarity_sort_result_rx: None,
+            sort_history_dialog: None,
+            query_debug_dialog: None,
         })
     }
 
@@ -306,6 +340,9 @@ impl App {
                 ColumnOperationKind::GenerateEmbeddings => {
                     self.dispatch_generate_embeddings(config)?;
                 }
+                ColumnOperationKind::SortByPromptSimilarity => {
+                    self.dispatch_similarity_sort(config)?;
+                }
                 op => {
                     tracing::info!(
                         "Column operation {:?} on '{}' — not yet implemented",
@@ -392,8 +429,16 @@ impl App {
         // Completion channel.
         // Success: (col_name, dataset_id, paired rowid→embedding, hide_col)
         // Failure: Err(human-readable message)
-        type DonePayload =
-            Result<(String, crate::core::DatasetId, Vec<(i64, Vec<f32>)>, bool), String>;
+        type DonePayload = Result<
+            (
+                String,
+                crate::core::DatasetId,
+                Vec<(i64, Vec<f32>)>,
+                bool,
+                crate::core::EmbeddingColumnConfig,
+            ),
+            String,
+        >;
         let (done_tx, done_rx) = mpsc::channel::<DonePayload>();
         self.embedding_result_rx_typed = Some(done_rx);
 
@@ -410,6 +455,7 @@ impl App {
 
         // Clone dataset_id so we can move it into the thread
         let dataset_id_for_thread = dataset_id.clone();
+        let source_col = config.source_column.clone();
 
         std::thread::spawn(move || {
             let (rowids, texts): (Vec<i64>, Vec<String>) = rows.into_iter().unzip();
@@ -441,12 +487,65 @@ impl App {
             let rowid_embeddings: Vec<(i64, Vec<f32>)> =
                 rowids.into_iter().zip(embeddings).collect();
 
+            let emb_config = crate::core::EmbeddingColumnConfig {
+                provider,
+                model_name: model_name.clone(),
+                num_dimensions,
+                source_column: source_col,
+            };
+
             let _ = done_tx.send(Ok((
                 new_col,
                 dataset_id_for_thread,
                 rowid_embeddings,
                 hide_col,
+                emb_config,
             )));
+        });
+
+        Ok(())
+    }
+
+    fn dispatch_similarity_sort(
+        &mut self,
+        config: crate::tui::components::column_operation_options_dialog::ColumnOperationConfig,
+    ) -> Result<()> {
+        let prompt = match &config.options {
+            crate::tui::components::column_operation_options_dialog::OperationOptions::SortByPromptSimilarity {
+                prompt,
+                ..
+            } => prompt.clone(),
+            _ => return Ok(()),
+        };
+
+        let model_name = match &config.options {
+            crate::tui::components::column_operation_options_dialog::OperationOptions::SortByPromptSimilarity {
+                model_name,
+                ..
+            } => model_name.clone(),
+            _ => "text-embedding-3-small".into(),
+        };
+
+        let num_dimensions = match &config.options {
+            crate::tui::components::column_operation_options_dialog::OperationOptions::SortByPromptSimilarity {
+                num_dimensions,
+                ..
+            } => Some(*num_dimensions),
+            _ => None,
+        };
+
+        let llm_service = self.llm_service.clone();
+        let provider = config.provider;
+
+        let (tx, rx) = mpsc::channel();
+        self.similarity_sort_result_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let res = llm_service
+                .generate_query_embedding(prompt, Some(provider), model_name, num_dimensions)
+                .map(|vec| (vec, config))
+                .map_err(|e| e.to_string());
+            let _ = tx.send(res);
         });
 
         Ok(())
@@ -600,6 +699,7 @@ Press Esc or Enter to close this dialog.";
                 self.sql_dialog = None;
             }
         }
+
         Ok(())
     }
 
@@ -643,19 +743,30 @@ Press Esc or Enter to close this dialog.";
                 }
                 KeyEventResult::Ignored => {}
             }
-            // If ignored, we might want to let it fall through to global bindings?
-            // Previous code returned Ok(())?
-            // "if let Some(action) = ... { ... } return Ok(())"
-            // So it returned Ok(()) regardless of action?
-            // "return Ok(())" means it consumes the key even if ignored?
-            // If ErrorDialog is modal, it should probably BLOCK other input.
-            // But if it ignores Esc, we verify if global handles it.
-            // But if we return Ok(()), global bindings are NOT checked (because handle_key_event returns).
-            // So we should implicit fallthrough IF we want global bindings to work.
-            // BUT ErrorDialog needs to handle Esc to close!
-            // Global keybinding for Esc -> Action::Cancel.
-            // So we MUST fall through.
-            // So we do `match result ... Ignored => {}` then continue.
+        }
+
+        // SortHistoryDialog (OVERLAY)
+        if let Some(dialog) = &mut self.sort_history_dialog {
+            match dialog.handle_key_event(key)? {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
+            }
+        }
+
+        // QueryDebugDialog (OVERLAY)
+        if let Some(dialog) = &mut self.query_debug_dialog {
+            match dialog.handle_key_event(key)? {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
+            }
         }
 
         // ... (other dialogs) ...
@@ -1037,11 +1148,57 @@ Press Esc or Enter to close this dialog.";
                 self.llm_management_dialog = Some(dialog);
                 return Ok(());
             }
+            Action::OpenSortHistory => {
+                if let Some(table) = &self.data_table {
+                    let dataset_id = table.dataset().id.clone();
+                    match self.data_service.get_sort_history(&dataset_id) {
+                        Ok(records) => {
+                            self.sort_history_dialog =
+                                Some(crate::tui::components::SortHistoryDialog::new(records));
+                        }
+                        Err(e) => {
+                            self.error_dialog = Some(ErrorDialog::new(format!(
+                                "Failed to load sort history: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+                return Ok(());
+            }
+
+            Action::OpenQueryDebug => {
+                if let Some(table) = &self.data_table {
+                    let dataset = table.dataset();
+                    let query = dataset.get_current_query();
+                    let sql = query.to_sql();
+                    let table_name = query.base_table().to_string();
+                    let calculated = query.get_calculated_columns().to_vec();
+                    let order_by = query
+                        .get_order_by()
+                        .iter()
+                        .map(|ob| {
+                            format!(
+                                "{} {}",
+                                ob.column,
+                                if ob.ascending { "ASC" } else { "DESC" }
+                            )
+                        })
+                        .collect();
+
+                    self.query_debug_dialog = Some(crate::tui::components::QueryDebugDialog::new(
+                        sql, table_name, calculated, order_by,
+                    ));
+                }
+                return Ok(());
+            }
 
             Action::OpenColumnOperationsDialog => {
                 if let Some(table) = &self.data_table {
-                    let columns = table.get_all_columns();
+                    let dataset_id = table.dataset().id.clone();
+                    let columns = self.data_service.get_dataset_column_info(&dataset_id)?;
                     let (_, col_idx) = table.get_cursor_position();
+
                     let dialog = ColumnOperationsDialog::new(columns, col_idx);
                     self.column_operations_dialog = Some(dialog);
                 }
@@ -1444,7 +1601,7 @@ Press Esc or Enter to close this dialog.";
             self.embedding_progress_dialog = None;
 
             match result {
-                Ok((col_name, dataset_id, rowid_embeddings, hide_col)) => {
+                Ok((col_name, dataset_id, rowid_embeddings, hide_col, emb_config)) => {
                     tracing::info!("Embedding generation finished, writing to DuckDB...");
 
                     // Do the DB write on the main thread
@@ -1453,6 +1610,7 @@ Press Esc or Enter to close this dialog.";
                         &col_name,
                         rowid_embeddings,
                         hide_col,
+                        emb_config,
                     ) {
                         Ok(_) => {
                             tracing::info!(
@@ -1491,6 +1649,102 @@ Press Esc or Enter to close this dialog.";
                     tracing::error!("Embedding job failed: {}", msg);
                     self.error_dialog = Some(ErrorDialog::new(msg));
                 }
+            }
+        }
+
+        // ── Check similarity sort results ───────────────────────────────────────
+        if let Some(rx) = &self.similarity_sort_result_rx {
+            if let Ok(res) = rx.try_recv() {
+                self.similarity_sort_result_rx = None;
+                match res {
+                    Ok((vector, config)) => {
+                        if let Some(table) = &mut self.data_table {
+                            let dataset_id = table.dataset().id.clone();
+
+                            // Apply the similarity sort
+                            if let Err(e) = self.data_service.apply_similarity_sort(
+                                &dataset_id,
+                                &config.source_column,
+                                &vector,
+                            ) {
+                                tracing::error!("Failed to apply similarity sort: {}", e);
+                                self.error_dialog = Some(ErrorDialog::new(format!(
+                                    "Similarity sort failed: {}",
+                                    e
+                                )));
+                            } else {
+                                // Add to history
+                                let model_name = match &config.options {
+                                    crate::tui::components::column_operation_options_dialog::OperationOptions::SortByPromptSimilarity { model_name, .. } => model_name.clone(),
+                                    _ => "unknown".into(),
+                                };
+                                let num_dimensions = match &config.options {
+                                    crate::tui::components::column_operation_options_dialog::OperationOptions::SortByPromptSimilarity { num_dimensions, .. } => *num_dimensions,
+                                    _ => 0,
+                                };
+                                let prompt = match &config.options {
+                                    crate::tui::components::column_operation_options_dialog::OperationOptions::SortByPromptSimilarity { prompt, .. } => prompt.clone(),
+                                    _ => "".into(),
+                                };
+
+                                let history_record = crate::core::models::SortHistoryRecord::new(
+                                    dataset_id.clone(),
+                                    config.source_column.clone(),
+                                    prompt,
+                                    config.provider.display_name().to_string(),
+                                    model_name,
+                                    num_dimensions,
+                                );
+                                if let Err(e) =
+                                    self.data_service.add_sort_history_record(history_record)
+                                {
+                                    tracing::error!("Failed to save sort history: {}", e);
+                                }
+
+                                // Reload the DataTable schema and sync the dataset instance
+                                // This is crucial because apply_similarity_sort modifies the dataset state in DataService,
+                                // and the DataTable holds its own (now stale) clone.
+                                if let Ok(updated_ds) = self.data_service.get_dataset(&dataset_id) {
+                                    *table.dataset_mut() = updated_ds;
+                                }
+
+                                if let Err(e) = table.reload_schema() {
+                                    tracing::error!("Failed to reload table schema: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.error_dialog =
+                            Some(ErrorDialog::new(format!("Similarity sort failed: {}", e)));
+                    }
+                }
+            }
+        }
+
+        // ── Check sort history results ──────────────────────────────────────────
+        if let Some(dialog) = &self.sort_history_dialog {
+            if dialog.is_closed() {
+                if let Some(result) = dialog.result() {
+                    match result {
+                        crate::tui::components::sort_history_dialog::DialogResult::Selected(
+                            record,
+                        ) => {
+                            // Apply record back to ColumnOperationOptionsDialog
+                            if let Some(col_op_dialog) = &mut self.column_operations_dialog {
+                                col_op_dialog.apply_history_record(record);
+                            }
+                        }
+                        crate::tui::components::sort_history_dialog::DialogResult::Cancel => {}
+                    }
+                }
+                self.sort_history_dialog = None;
+            }
+        }
+
+        if let Some(dialog) = &mut self.query_debug_dialog {
+            if dialog.take_result().is_some() {
+                self.query_debug_dialog = None;
             }
         }
 
@@ -1608,6 +1862,18 @@ Press Esc or Enter to close this dialog.";
                 height: 3,
             };
             dialog.render(frame, bar_area, &self.theme);
+        }
+
+        // Render sort history dialog overlay if active
+        if let Some(dialog) = &mut self.sort_history_dialog {
+            let dialog_area = Self::centered_rect(80, 80, area);
+            dialog.render(frame, dialog_area, &self.theme);
+        }
+
+        // Render query debug dialog overlay if active
+        if let Some(dialog) = &mut self.query_debug_dialog {
+            let dialog_area = Self::centered_rect(90, 80, area);
+            dialog.render(frame, dialog_area, &self.theme);
         }
 
         // Render error dialog if active (centered overlay, highest priority)

@@ -100,6 +100,27 @@ pub fn init_session_schema(conn: &Connection) -> Result<()> {
             active BOOLEAN DEFAULT 0,
             FOREIGN KEY (dataset_id) REFERENCES datasets(id)
         );
+
+        CREATE TABLE IF NOT EXISTS column_metadata (
+            dataset_id TEXT NOT NULL,
+            column_name TEXT NOT NULL,
+            metadata_key TEXT NOT NULL,
+            metadata_value TEXT NOT NULL,
+            PRIMARY KEY (dataset_id, column_name, metadata_key),
+            FOREIGN KEY (dataset_id) REFERENCES datasets(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS sort_history (
+            id TEXT PRIMARY KEY,
+            dataset_id TEXT NOT NULL,
+            source_column TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            num_dimensions INTEGER NOT NULL,
+            executed_at BIGINT NOT NULL,
+            FOREIGN KEY (dataset_id) REFERENCES datasets(id)
+        );
         "#,
     )?;
 

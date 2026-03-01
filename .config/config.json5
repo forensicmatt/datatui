@@ -16,7 +16,8 @@
       "Home": "Home",
       "End": "End",
       "Ctrl+Left": "PageLeft",
-      "Ctrl+Right": "PageRight"
+      "Ctrl+Right": "PageRight",
+      "Ctrl+q": "OpenQueryDebug"
     },
     "DataTable": {
       "Ctrl+u": "PageUp",
@@ -147,7 +148,8 @@
       "Shift+Tab": "MoveUp",
       "Esc": "Cancel",
       "Enter": "Confirm",
-      "Ctrl+i": "ToggleInstructions"
+      "Ctrl+i": "ToggleInstructions",
+      "Ctrl+h": "OpenSortHistory"
     }
   }
 }
