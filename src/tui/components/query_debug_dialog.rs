@@ -127,11 +127,15 @@ impl Component for QueryDebugDialog {
             horizontal: 8,
         });
 
+        // Clear background
+        frame.render_widget(Clear, area);
+
         let block = Block::default()
             .title(" Query Debug ")
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
-            .border_style(theme.focused_border_style());
+            .border_style(theme.focused_border_style())
+            .style(Style::default().bg(theme.background).fg(theme.foreground));
 
         let inner_area = block.inner(area);
         frame.render_widget(block, area);
