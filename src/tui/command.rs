@@ -6,6 +6,13 @@ use crate::tui::components::{FindDialog, SortColumn};
 use crate::tui::Action;
 use color_eyre::Result;
 
+/// Column operation type for the `colop` command
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColumnOpType {
+    GenerateEmbeddings,
+    SortByPromptSimilarity,
+}
+
 /// Represents a parsed command
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -23,6 +30,15 @@ pub enum Command {
     GotoRow { row: usize, column: Option<usize> },
     /// Manage columns (set visibility, hide, width)
     Columns(ColumnsCommand),
+    /// Execute a column operation directly
+    ColumnOp {
+        op_type: ColumnOpType,
+        column: String,
+        provider: Option<String>,
+        model: Option<String>,
+        dims: Option<usize>,
+        prompt: Option<String>,
+    },
 }
 
 /// Subcommands for the columns command
@@ -45,7 +61,7 @@ impl Command {
     /// Get all available command names
     fn all_commands() -> &'static [&'static str] {
         &[
-            "quit", "q", "find", "sort", "dialog", "help", "goto", "columns",
+            "quit", "q", "find", "sort", "dialog", "help", "goto", "columns", "colop",
         ]
     }
 
@@ -162,6 +178,78 @@ impl Command {
                         .filter(|&&sub| sub.starts_with(parts[1]))
                         .map(|&s| s.to_string())
                         .collect();
+                }
+            }
+            "colop" => {
+                let subcommands = ["embeddings", "similarity"];
+                // Stage 1: subcommand completion
+                if parts.len() == 1 && is_ending_with_space {
+                    return subcommands.iter().map(|&s| s.to_string()).collect();
+                }
+                if parts.len() == 2 && !is_ending_with_space {
+                    return subcommands
+                        .iter()
+                        .filter(|&&sub| sub.starts_with(parts[1]))
+                        .map(|&s| s.to_string())
+                        .collect();
+                }
+                // Stage 2: column name completion
+                if parts.len() == 2 && is_ending_with_space {
+                    return columns.iter().map(|c| c.to_string()).collect();
+                }
+                if parts.len() == 3 && !is_ending_with_space {
+                    let prefix = parts[2];
+                    return columns
+                        .iter()
+                        .filter(|c| c.starts_with(prefix))
+                        .map(|c| c.to_string())
+                        .collect();
+                }
+                // Stage 3+: named param completion (provider=, model=, dims=)
+                if parts.len() >= 3 {
+                    let last_token = if is_ending_with_space {
+                        ""
+                    } else {
+                        parts.last().unwrap_or(&"")
+                    };
+
+                    // Collect which named params are already specified
+                    let has_provider = parts.iter().any(|p| p.starts_with("provider="));
+                    let has_model = parts.iter().any(|p| p.starts_with("model="));
+                    let has_dims = parts.iter().any(|p| p.starts_with("dims="));
+
+                    let mut suggestions = Vec::new();
+
+                    if !has_provider {
+                        for p in &["provider=openai", "provider=azure", "provider=ollama"] {
+                            if p.starts_with(last_token) {
+                                suggestions.push(p.to_string());
+                            }
+                        }
+                    }
+                    if !has_model {
+                        for m in &[
+                            "model=text-embedding-3-small",
+                            "model=text-embedding-3-large",
+                            "model=nomic-embed-text",
+                            "model=mxbai-embed-large",
+                        ] {
+                            if m.starts_with(last_token) {
+                                suggestions.push(m.to_string());
+                            }
+                        }
+                    }
+                    if !has_dims {
+                        for d in &["dims=1536", "dims=3072", "dims=768", "dims=1024"] {
+                            if d.starts_with(last_token) {
+                                suggestions.push(d.to_string());
+                            }
+                        }
+                    }
+
+                    if !suggestions.is_empty() {
+                        return suggestions;
+                    }
                 }
             }
             "goto" => {
@@ -378,6 +466,81 @@ impl Command {
                 }
             }
 
+            "colop" => {
+                if parts.len() < 2 {
+                    return Err(
+                        "Usage: colop <embeddings|similarity> <column> [provider=<p>] [model=<m>] [dims=<d>] [prompt...]"
+                            .to_string(),
+                    );
+                }
+                let subcommand = parts[1];
+                let op_type = match subcommand {
+                    "embeddings" => ColumnOpType::GenerateEmbeddings,
+                    "similarity" => ColumnOpType::SortByPromptSimilarity,
+                    other => {
+                        return Err(format!(
+                            "Unknown colop subcommand '{}'. Available: embeddings, similarity",
+                            other
+                        ))
+                    }
+                };
+
+                if parts.len() < 3 {
+                    return Err(format!(
+                        "Usage: colop {} <column> [provider=<p>] [model=<m>] [dims=<d>]{}",
+                        subcommand,
+                        if op_type == ColumnOpType::SortByPromptSimilarity {
+                            " <prompt...>"
+                        } else {
+                            ""
+                        }
+                    ));
+                }
+
+                let column = parts[2].to_string();
+                let mut provider = None;
+                let mut model = None;
+                let mut dims = None;
+                let mut prompt_parts = Vec::new();
+
+                for part in &parts[3..] {
+                    if let Some(val) = part.strip_prefix("provider=") {
+                        provider = Some(val.to_string());
+                    } else if let Some(val) = part.strip_prefix("model=") {
+                        model = Some(val.to_string());
+                    } else if let Some(val) = part.strip_prefix("dims=") {
+                        dims = Some(val.parse::<usize>().map_err(|_| {
+                            format!("Invalid dimensions value: '{}'. Expected a number.", val)
+                        })?);
+                    } else {
+                        prompt_parts.push(*part);
+                    }
+                }
+
+                let prompt = if !prompt_parts.is_empty() {
+                    Some(prompt_parts.join(" "))
+                } else {
+                    None
+                };
+
+                // Validate: similarity requires a prompt
+                if op_type == ColumnOpType::SortByPromptSimilarity && prompt.is_none() {
+                    return Err(
+                        "Usage: colop similarity <column> [provider=<p>] [model=<m>] [dims=<d>] <prompt...>"
+                            .to_string(),
+                    );
+                }
+
+                Ok(Command::ColumnOp {
+                    op_type,
+                    column,
+                    provider,
+                    model,
+                    dims,
+                    prompt,
+                })
+            }
+
             _ => {
                 // Unknown command - try to suggest similar commands
                 let suggestions = Self::find_similar_commands(cmd);
@@ -407,6 +570,7 @@ impl Command {
             Command::Help => "Show command help",
             Command::GotoRow { .. } => "Navigate to a specific row and column",
             Command::Columns(_) => "Manage columns (set, hide, width)",
+            Command::ColumnOp { .. } => "Run a column operation",
         }
     }
 }
@@ -603,6 +767,9 @@ impl Command {
                 table.refresh_layout().map_err(|e| format!("{}", e))?;
                 Ok(())
             }
+
+            // ColumnOp is dispatched by handle_command_bar_result in app.rs
+            Command::ColumnOp { .. } => Ok(()),
         }
     }
 
@@ -861,5 +1028,159 @@ mod tests {
 
         // Goto
         assert_eq!(Command::get_suggestions("goto ", &columns), vec!["row"]);
+
+        // Colop subcommands
+        assert_eq!(
+            Command::get_suggestions("colop ", &columns),
+            vec!["embeddings", "similarity"]
+        );
+        assert_eq!(
+            Command::get_suggestions("colop e", &columns),
+            vec!["embeddings"]
+        );
+
+        // Colop column completion
+        assert_eq!(
+            Command::get_suggestions("colop embeddings ", &columns),
+            vec!["name", "age", "city"]
+        );
+        assert_eq!(
+            Command::get_suggestions("colop embeddings n", &columns),
+            vec!["name"]
+        );
+    }
+
+    #[test]
+    fn test_parse_colop_embeddings() {
+        let cmd = Command::parse("colop embeddings my_col").unwrap();
+        assert_eq!(
+            cmd,
+            Command::ColumnOp {
+                op_type: ColumnOpType::GenerateEmbeddings,
+                column: "my_col".to_string(),
+                provider: None,
+                model: None,
+                dims: None,
+                prompt: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_colop_embeddings_with_params() {
+        let cmd = Command::parse(
+            "colop embeddings col1 provider=azure model=text-embedding-3-large dims=3072",
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::ColumnOp {
+                op_type: ColumnOpType::GenerateEmbeddings,
+                column: "col1".to_string(),
+                provider: Some("azure".to_string()),
+                model: Some("text-embedding-3-large".to_string()),
+                dims: Some(3072),
+                prompt: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_colop_similarity() {
+        let cmd =
+            Command::parse("colop similarity emb_col find rows about machine learning").unwrap();
+        assert_eq!(
+            cmd,
+            Command::ColumnOp {
+                op_type: ColumnOpType::SortByPromptSimilarity,
+                column: "emb_col".to_string(),
+                provider: None,
+                model: None,
+                dims: None,
+                prompt: Some("find rows about machine learning".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_colop_similarity_with_params() {
+        let cmd = Command::parse(
+            "colop similarity emb_col provider=ollama model=nomic-embed-text dims=768 search for AI",
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::ColumnOp {
+                op_type: ColumnOpType::SortByPromptSimilarity,
+                column: "emb_col".to_string(),
+                provider: Some("ollama".to_string()),
+                model: Some("nomic-embed-text".to_string()),
+                dims: Some(768),
+                prompt: Some("search for AI".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_colop_missing_subcommand() {
+        let result = Command::parse("colop");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Usage"));
+    }
+
+    #[test]
+    fn test_colop_unknown_subcommand() {
+        let result = Command::parse("colop pca");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Unknown colop subcommand"));
+        assert!(err.contains("pca"));
+    }
+
+    #[test]
+    fn test_colop_missing_column() {
+        let result = Command::parse("colop embeddings");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Usage"));
+    }
+
+    #[test]
+    fn test_colop_similarity_missing_prompt() {
+        let result = Command::parse("colop similarity col1");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Usage"));
+    }
+
+    #[test]
+    fn test_colop_invalid_dims() {
+        let result = Command::parse("colop embeddings col1 dims=abc");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Invalid dimensions"));
+    }
+
+    #[test]
+    fn test_colop_named_param_suggestions() {
+        let columns = vec!["name".to_string()];
+
+        // After column, suggest named params
+        let suggestions = Command::get_suggestions("colop embeddings name ", &columns);
+        assert!(suggestions.contains(&"provider=openai".to_string()));
+        assert!(suggestions.contains(&"model=text-embedding-3-small".to_string()));
+        assert!(suggestions.contains(&"dims=1536".to_string()));
+
+        // Filter by prefix
+        let suggestions = Command::get_suggestions("colop embeddings name p", &columns);
+        assert!(suggestions.contains(&"provider=openai".to_string()));
+        assert!(!suggestions.contains(&"model=text-embedding-3-small".to_string()));
+
+        // Already-specified params should not be suggested again
+        let suggestions =
+            Command::get_suggestions("colop embeddings name provider=openai ", &columns);
+        assert!(!suggestions.iter().any(|s| s.starts_with("provider=")));
+        assert!(suggestions.contains(&"model=text-embedding-3-small".to_string()));
     }
 }

@@ -551,6 +551,115 @@ impl App {
         Ok(())
     }
 
+    /// Dispatch a column operation from the command bar.
+    ///
+    /// Builds a `ColumnOperationConfig` from parsed parameters and calls
+    /// the appropriate dispatch method.
+    fn dispatch_column_op_command(
+        &mut self,
+        op_type: crate::tui::command::ColumnOpType,
+        column: String,
+        provider_str: Option<String>,
+        model_str: Option<String>,
+        dims: Option<usize>,
+        prompt: Option<String>,
+    ) -> Result<()> {
+        use crate::core::llm_config::LlmProvider;
+        use crate::tui::command::ColumnOpType;
+        use crate::tui::components::column_operation_options_dialog::{
+            ColumnOperationConfig, ColumnOperationKind, OperationOptions,
+        };
+
+        let table = self
+            .data_table
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("No active data table"))?;
+
+        let dataset_id = table.dataset().id.clone();
+        let columns = self.data_service.get_dataset_column_info(&dataset_id)?;
+
+        // Find the source column
+        let col_info = columns.iter().find(|c| c.name == column).ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "Column '{}' not found. Available: {}",
+                column,
+                columns
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?;
+
+        // Resolve provider from string
+        let resolve_provider = |s: &str| -> Option<LlmProvider> {
+            match s.to_lowercase().as_str() {
+                "openai" => Some(LlmProvider::OpenAI),
+                "azure" => Some(LlmProvider::Azure),
+                "ollama" => Some(LlmProvider::Ollama),
+                _ => None,
+            }
+        };
+
+        match op_type {
+            ColumnOpType::GenerateEmbeddings => {
+                let provider = provider_str
+                    .as_deref()
+                    .and_then(resolve_provider)
+                    .unwrap_or(LlmProvider::OpenAI);
+                let model_name = model_str.unwrap_or_else(|| "text-embedding-3-small".to_string());
+                let num_dimensions = dims.unwrap_or(1536);
+
+                let config = ColumnOperationConfig {
+                    operation: ColumnOperationKind::GenerateEmbeddings,
+                    new_column_name: String::new(), // default: {source}_embedding
+                    source_column: column,
+                    hide_new_column: false,
+                    provider,
+                    options: OperationOptions::GenerateEmbeddings {
+                        model_name,
+                        num_dimensions,
+                    },
+                };
+                self.dispatch_generate_embeddings(config)?;
+            }
+            ColumnOpType::SortByPromptSimilarity => {
+                let prompt_text = prompt.unwrap_or_default();
+
+                // Auto-detect from embedding config if available
+                let emb_cfg = col_info.embedding_config.as_ref();
+
+                let provider = provider_str
+                    .as_deref()
+                    .and_then(resolve_provider)
+                    .or_else(|| emb_cfg.map(|c| c.provider))
+                    .unwrap_or(LlmProvider::OpenAI);
+                let model_name = model_str
+                    .or_else(|| emb_cfg.map(|c| c.model_name.clone()))
+                    .unwrap_or_else(|| "text-embedding-3-small".to_string());
+                let num_dimensions = dims
+                    .or_else(|| emb_cfg.map(|c| c.num_dimensions))
+                    .unwrap_or(1536);
+
+                let config = ColumnOperationConfig {
+                    operation: ColumnOperationKind::SortByPromptSimilarity,
+                    new_column_name: String::new(),
+                    source_column: column,
+                    hide_new_column: false,
+                    provider,
+                    options: OperationOptions::SortByPromptSimilarity {
+                        prompt: prompt_text,
+                        model_name,
+                        num_dimensions,
+                    },
+                };
+                self.dispatch_similarity_sort(config)?;
+            }
+        }
+
+        Ok(())
+    }
+
     fn handle_sort_dialog_result(
         &mut self,
         result: crate::tui::components::sort_dialog::DialogResult,
@@ -619,6 +728,9 @@ Available Commands:
   :columns hide <c>...   Toggle column visibility
   :columns width <c> <w> Set column width (or auto)
   :goto row <N> [col]    Navigate to row N, optionally column col
+  :colop embeddings <c>  Generate embeddings for column
+  :colop similarity <c> <prompt...>
+                         Sort by prompt similarity
 
 Examples:
   :quit                  Exit application
@@ -629,6 +741,9 @@ Examples:
   :dialog find           Open interactive find dialog
   :goto row 10           Go to row 10
   :goto row 5 2          Go to row 5, column 2
+  :colop embeddings name Generate embeddings for 'name'
+  :colop embeddings name provider=azure model=text-embedding-3-large dims=3072
+  :colop similarity name_embedding find rows about ML
 
 Press Esc or Enter to close this dialog.";
 
@@ -660,6 +775,26 @@ Press Esc or Enter to close this dialog.";
                 // Handle commands that require actions
                 if let Some(action) = command.requires_action() {
                     self.handle_action(action)?;
+                }
+
+                // Handle ColumnOp dispatch directly
+                if let Command::ColumnOp {
+                    op_type,
+                    column,
+                    provider,
+                    model,
+                    dims,
+                    prompt,
+                } = &command
+                {
+                    self.dispatch_column_op_command(
+                        op_type.clone(),
+                        column.clone(),
+                        provider.clone(),
+                        model.clone(),
+                        *dims,
+                        prompt.clone(),
+                    )?;
                 }
 
                 // Close command bar after execution
