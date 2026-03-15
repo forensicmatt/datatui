@@ -347,6 +347,143 @@ impl DataService {
         Ok(())
     }
 
+    /// Run a read-only query for the LLM to gather context.
+    ///
+    /// The query is always wrapped with a LIMIT (capped at 50 rows) to prevent
+    /// unbounded result sets from consuming too many tokens. Results are serialized
+    /// as TOON format — a compact, token-efficient representation that is ~18-25%
+    /// smaller than JSON, making it ideal for LLM context.
+    ///
+    /// Uses Arrow RecordBatch output (not DuckDB's `to_json(row(t.*))`) to avoid
+    /// the "Can't pack nothing into a struct" error that occurs when wrapping
+    /// subqueries.
+    pub fn execute_query_for_context(
+        &self,
+        dataset_id: &crate::core::DatasetId,
+        sql: &str,
+        mut limit: usize,
+    ) -> Result<String> {
+        use duckdb::arrow::array::Array;
+        use duckdb::arrow::datatypes::DataType;
+
+        // Enforce max limit of 50 rows
+        limit = limit.min(50);
+
+        let datasets = self
+            .datasets
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("Dataset lock poisoned: {}", e))?;
+        let _dataset = datasets.get(dataset_id).ok_or_else(|| {
+            color_eyre::eyre::eyre!("Dataset '{}' not found", dataset_id.as_str())
+        })?;
+
+        // 1. Syntax check against the existing session connection (no new file open)
+        self.session_conn
+            .prepare(sql)
+            .map_err(|e| color_eyre::eyre::eyre!("Invalid SQL syntax: {}", e))?;
+
+        // 2. Execute wrapped in a LIMIT subquery using Arrow output.
+        //    Avoid DuckDB's to_json(row(t.*)) which fails on subquery aliases.
+        let wrapped_sql = format!("SELECT * FROM ({}) LIMIT {}", sql, limit);
+        let mut stmt = self.session_conn.prepare(&wrapped_sql)?;
+        let mut arrow_stream = stmt.query_arrow([])?;
+
+        // 3. Collect all batches and pull column names from the schema.
+        let mut all_batches = Vec::new();
+        let mut schema_opt = None;
+        for batch in arrow_stream.by_ref() {
+            if schema_opt.is_none() {
+                schema_opt = Some(batch.schema());
+            }
+            all_batches.push(batch);
+        }
+
+        let schema = match schema_opt {
+            Some(s) => s,
+            None => return Ok("No results found.".to_string()),
+        };
+
+        let col_names: Vec<String> = schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+
+        // 4. A minimal cell-value formatter that covers the types DuckDB returns.
+        fn arrow_cell_to_json(col: &dyn Array, row: usize) -> serde_json::Value {
+            use duckdb::arrow::array::*;
+            if col.is_null(row) {
+                return serde_json::Value::Null;
+            }
+            match col.data_type() {
+                DataType::Utf8 => {
+                    let a = col.as_any().downcast_ref::<StringArray>().unwrap();
+                    serde_json::Value::String(a.value(row).to_string())
+                }
+                DataType::LargeUtf8 => {
+                    let a = col.as_any().downcast_ref::<LargeStringArray>().unwrap();
+                    serde_json::Value::String(a.value(row).to_string())
+                }
+                DataType::Boolean => {
+                    let a = col.as_any().downcast_ref::<BooleanArray>().unwrap();
+                    serde_json::Value::Bool(a.value(row))
+                }
+                DataType::Int8 => serde_json::json!(col.as_any().downcast_ref::<Int8Array>().unwrap().value(row)),
+                DataType::Int16 => serde_json::json!(col.as_any().downcast_ref::<Int16Array>().unwrap().value(row)),
+                DataType::Int32 => serde_json::json!(col.as_any().downcast_ref::<Int32Array>().unwrap().value(row)),
+                DataType::Int64 => serde_json::json!(col.as_any().downcast_ref::<Int64Array>().unwrap().value(row)),
+                DataType::UInt8 => serde_json::json!(col.as_any().downcast_ref::<UInt8Array>().unwrap().value(row)),
+                DataType::UInt16 => serde_json::json!(col.as_any().downcast_ref::<UInt16Array>().unwrap().value(row)),
+                DataType::UInt32 => serde_json::json!(col.as_any().downcast_ref::<UInt32Array>().unwrap().value(row)),
+                DataType::UInt64 => serde_json::json!(col.as_any().downcast_ref::<UInt64Array>().unwrap().value(row)),
+                DataType::Float32 => serde_json::json!(col.as_any().downcast_ref::<Float32Array>().unwrap().value(row)),
+                DataType::Float64 => serde_json::json!(col.as_any().downcast_ref::<Float64Array>().unwrap().value(row)),
+                // Decimal types — emit as string to preserve precision
+                DataType::Decimal128(_, scale) => {
+                    let a = col.as_any().downcast_ref::<Decimal128Array>().unwrap();
+                    let raw = a.value(row);
+                    let divisor = 10_i128.pow(*scale as u32);
+                    let whole = raw / divisor;
+                    let frac = (raw % divisor).abs();
+                    serde_json::Value::String(format!("{}.{:0>scale$}", whole, frac, scale = *scale as usize))
+                }
+                // Everything else: format as debug string
+                _ => serde_json::Value::String(format!("{:?}", col.slice(row, 1))),
+            }
+        }
+
+        // 5. Convert each batch row → JSON object keyed by column name.
+        let mut json_rows: Vec<serde_json::Value> = Vec::new();
+        for batch in &all_batches {
+            for row_idx in 0..batch.num_rows() {
+                let mut obj = serde_json::Map::new();
+                for (col_idx, name) in col_names.iter().enumerate() {
+                    let val = arrow_cell_to_json(batch.column(col_idx).as_ref(), row_idx);
+                    obj.insert(name.clone(), val);
+                }
+                json_rows.push(serde_json::Value::Object(obj));
+            }
+        }
+
+        if json_rows.is_empty() {
+            return Ok("No results found.".to_string());
+        }
+
+        // 6. Wrap in { "rows": [...] } and encode as TOON.
+        //    TOON hoists the column names into the array header, producing compact
+        //    comma-separated rows, e.g.:
+        //
+        //    rows[3]{boardgame,avg_rating}:
+        //      Pandemic,8.6
+        //      Catan,7.4
+        //      Chess,9.0
+        let value = serde_json::json!({ "rows": json_rows });
+        let toon = toon_format::encode_default(&value)
+            .map_err(|e| color_eyre::eyre::eyre!("TOON encode error: {}", e))?;
+
+        Ok(toon)
+    }
+
     /// Import a JSON file into the session database
     ///
     /// This method supports:

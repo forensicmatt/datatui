@@ -23,6 +23,8 @@ use std::sync::{Arc, Mutex};
 pub enum ToolRequest {
     /// Ask the main thread to validate and apply the given SQL.
     ApplySql(String),
+    /// Ask the main thread to run a read-only query and return formatted results.
+    QueryForContext { sql: String, limit: usize },
 }
 
 /// The main thread's reply to a `ToolRequest`.
@@ -33,6 +35,8 @@ pub enum ToolResponse {
     /// Validation or application failed — the error message is returned
     /// to the LLM so it can self-correct.
     Err(String),
+    /// Formatted tabular results from a QueryForContext request.
+    QueryResult(String),
 }
 
 // ── Tool error ──────────────────────────────────────────────────────────
@@ -176,6 +180,131 @@ impl Tool for QueryDuckDb {
                 ),
                 applied_sql: None,
             }),
+            ToolResponse::QueryResult(_) => {
+                // Should not happen for this tool
+                Ok(QueryToolOutput {
+                    success: false,
+                    message: "Unexpected response type".to_string(),
+                    applied_sql: None,
+                })
+            }
+        }
+    }
+}
+
+// ── QueryForContext tool ────────────────────────────────────────────────
+
+/// Arguments for the `query_for_context` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct QueryContextArgs {
+    /// The DuckDB SQL SELECT query to run (e.g. for aggregations or finding specifics).
+    pub query: String,
+    /// The maximum number of rows to return. Capped at 50 if higher or omitted.
+    pub limit: Option<usize>,
+}
+
+/// The result of querying DuckDB for context.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct QueryContextOutput {
+    /// Whether the query was successfully executed.
+    pub success: bool,
+    /// The result of the query, typically a markdown table or an error message.
+    pub result: String,
+}
+
+/// A Rig tool that sends a read-only SQL query to the main thread to get formatted
+/// results back as context, helping the agent answer questions.
+#[derive(Serialize, Deserialize)]
+pub struct QueryForContext {
+    table_name: String,
+
+    /// Channel used to send SQL requests to the main thread.
+    #[serde(skip)]
+    tool_tx: Option<std::sync::mpsc::SyncSender<ToolRequest>>,
+
+    /// Channel used to receive the main thread's reply (formatted table string).
+    #[serde(skip)]
+    response_rx: Option<Arc<Mutex<std::sync::mpsc::Receiver<ToolResponse>>>>,
+}
+
+impl QueryForContext {
+    pub fn new(
+        table_name: impl Into<String>,
+        tool_tx: std::sync::mpsc::SyncSender<ToolRequest>,
+        response_rx: std::sync::mpsc::Receiver<ToolResponse>,
+    ) -> Self {
+        Self {
+            table_name: table_name.into(),
+            tool_tx: Some(tool_tx),
+            response_rx: Some(Arc::new(Mutex::new(response_rx))),
+        }
+    }
+}
+
+impl Tool for QueryForContext {
+    const NAME: &'static str = "query_for_context";
+
+    type Error = QueryToolError;
+    type Args = QueryContextArgs;
+    type Output = QueryContextOutput;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        let parameters = schemars::schema_for!(QueryContextArgs);
+
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: format!(
+                "Run a read-only DuckDB SQL SELECT query against table '{}' to gather context \
+                 in order to answer a user's question (e.g. finding the highest value, \
+                 averages, or specific rows). Does NOT modify the dataset view. \
+                 Results are returned as a markdown table. \
+                 Keep limit small (max 50) and use SQL aggregations where possible.",
+                self.table_name
+            ),
+            parameters: serde_json::to_value(parameters)
+                .expect("QueryContextArgs schema should always serialise"),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let tx = self
+            .tool_tx
+            .as_ref()
+            .ok_or_else(|| QueryToolError::Channel("tool channel not initialised".to_string()))?;
+        let rx_arc = self.response_rx.as_ref().ok_or_else(|| {
+            QueryToolError::Channel("response channel not initialised".to_string())
+        })?;
+
+        let limit = args.limit.unwrap_or(50).min(50); // Cap at 50
+
+        // Send the SQL to the main thread for execution.
+        tx.send(ToolRequest::QueryForContext {
+            sql: args.query.clone(),
+            limit,
+        })
+        .map_err(|e| QueryToolError::Channel(e.to_string()))?;
+
+        // Block until the main thread replies.
+        let rx = rx_arc
+            .lock()
+            .map_err(|e| QueryToolError::Channel(e.to_string()))?;
+        let response = rx
+            .recv()
+            .map_err(|e| QueryToolError::Channel(e.to_string()))?;
+
+        match response {
+            ToolResponse::QueryResult(result_table) => Ok(QueryContextOutput {
+                success: true,
+                result: result_table,
+            }),
+            ToolResponse::Err(msg) => Ok(QueryContextOutput {
+                success: false,
+                result: format!("Query failed: {}", msg),
+            }),
+            ToolResponse::Ok => Ok(QueryContextOutput {
+                success: false,
+                result: "Unexpected response type (Ok)".to_string(),
+            }),
         }
     }
 }
@@ -245,25 +374,48 @@ impl AgentService {
              ## Current Query\n\n\
              ```sql\n{current_sql}\n```\n\n\
              ## Instructions\n\n\
-             - Use the `query_duckdb` tool to apply SQL queries to the dataset.\n\
+             - Use the `query_duckdb` tool to apply SQL queries that change what the user sees in the data table.\n\
+             - Use the `query_for_context` tool to run a read-only SQL query to gather information to answer the user's question, without changing the view.\n\
              - Always use DuckDB SQL syntax.\n\
              - Queries MUST be SELECT statements targeting the table `{table_name}`.\n\
-             - When modifying the view, base your query on the current query shown above.\n\
+             - For `query_duckdb`, base your query on the Current Query. For `query_for_context`, you can construct any SELECT query against `{table_name}` to get the needed data.\n\
              - If a query fails, analyse the error message and try a corrected query.\n\
-             - After applying a query, briefly explain what the query does.\n\
-             - If the user asks a question that doesn't require changing the view, \
-               just answer it without using the tool."
+             - After applying a query (`query_duckdb`), briefly explain what the query does.\n\
+             - If the user asks a factual question, use `query_for_context` to find the answer and then provide the answer."
         );
 
-        // Shared slot for the tool to deposit the applied query.
+        // Shared slot for the apply tool to deposit the applied query.
         let applied_query: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
-        let tool = QueryDuckDb::new(table_name, tool_tx, response_rx, applied_query.clone());
+        // We need to clone channels for both tools
+        let tool_tx_apply = tool_tx.clone();
+        let tool_tx_context = tool_tx;
+
+        // The receiver is already behind a Mutex inside the tools, but we need
+        // an Arc wrapping the receiver to share it between tools.
+        // The original method passes the raw receiver in `response_rx`.
+        let shared_rx = Arc::new(Mutex::new(response_rx));
+
+        // Instantiate both tools
+        // We modify the tool constructors to accept the Arc directly for convenience in sharing
+        let query_apply_tool = QueryDuckDb {
+            table_name: table_name.to_string(),
+            tool_tx: Some(tool_tx_apply),
+            response_rx: Some(shared_rx.clone()),
+            applied_query: Some(applied_query.clone()),
+        };
+
+        let query_context_tool = QueryForContext {
+            table_name: table_name.to_string(),
+            tool_tx: Some(tool_tx_context),
+            response_rx: Some(shared_rx),
+        };
 
         let agent = openai_client
             .agent(model)
             .preamble(&preamble)
-            .tool(tool)
+            .tool(query_apply_tool)
+            .tool(query_context_tool)
             .build();
 
         let response = agent

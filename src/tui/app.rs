@@ -2076,39 +2076,68 @@ Press Esc or Enter to close this dialog.";
                 .as_ref()
                 .and_then(|rx| rx.try_recv().ok());
 
-            if let Some(ToolRequest::ApplySql(sql)) = request {
-                // Determine the active dataset ID.
+            if let Some(req) = request {
                 let dataset_id = self.data_table.as_ref().map(|t| t.dataset().id.clone());
 
                 let response = if let Some(dataset_id) = dataset_id {
-                    match self.data_service.validate_and_apply_sql(&dataset_id, &sql) {
-                        Ok(()) => {
-                            tracing::info!("Agent applied SQL: {}", sql);
-                            // Refresh the DataTable so the user sees the change.
-                            if let Some(table) = &mut self.data_table {
-                                if let Ok(updated_ds) = self.data_service.get_dataset(&dataset_id) {
-                                    *table.dataset_mut() = updated_ds;
+                    match req {
+                        ToolRequest::ApplySql(sql) => {
+                            match self.data_service.validate_and_apply_sql(&dataset_id, &sql) {
+                                Ok(()) => {
+                                    tracing::info!("Agent applied SQL: {}", sql);
+                                    // Refresh the DataTable so the user sees the change.
+                                    if let Some(table) = &mut self.data_table {
+                                        if let Ok(updated_ds) =
+                                            self.data_service.get_dataset(&dataset_id)
+                                        {
+                                            *table.dataset_mut() = updated_ds;
+                                        }
+                                        if let Err(e) = table.reload_schema() {
+                                            tracing::error!(
+                                                "Failed to reload table after agent SQL: {}",
+                                                e
+                                            );
+                                        }
+                                    }
+                                    if let Some(dialog) = &mut self.llm_chat_dialog {
+                                        dialog.messages.push(
+                                            crate::tui::components::ChatMessage::System(format!(
+                                                "Applied SQL: {}",
+                                                sql
+                                            )),
+                                        );
+                                    }
+                                    ToolResponse::Ok
                                 }
-                                if let Err(e) = table.reload_schema() {
-                                    tracing::error!(
-                                        "Failed to reload table after agent SQL: {}",
-                                        e
-                                    );
+                                Err(e) => {
+                                    tracing::warn!("Agent SQL rejected: {}", e);
+                                    ToolResponse::Err(e.to_string())
                                 }
                             }
-                            if let Some(dialog) = &mut self.llm_chat_dialog {
-                                dialog
-                                    .messages
-                                    .push(crate::tui::components::ChatMessage::System(format!(
-                                        "Applied SQL: {}",
-                                        sql
-                                    )));
-                            }
-                            ToolResponse::Ok
                         }
-                        Err(e) => {
-                            tracing::warn!("Agent SQL rejected: {}", e);
-                            ToolResponse::Err(e.to_string())
+                        ToolRequest::QueryForContext { sql, limit } => {
+                            match self.data_service.execute_query_for_context(
+                                &dataset_id,
+                                &sql,
+                                limit,
+                            ) {
+                                Ok(output) => {
+                                    tracing::info!("Agent queried context SQL: {}", sql);
+                                    if let Some(dialog) = &mut self.llm_chat_dialog {
+                                        let tool_result = ChatMessage::ToolResult {
+                                            success: true,
+                                            message: format!("Query: {}\nResult: {}", sql, output),
+                                        };
+                                        dialog.messages.push(tool_result);
+                                    }
+                                    tracing::info!("Query: {}\nResult: {}", sql, output);
+                                    ToolResponse::QueryResult(output)
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Agent context query rejected: {}", e);
+                                    ToolResponse::Err(e.to_string())
+                                }
+                            }
                         }
                     }
                 } else {
