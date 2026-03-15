@@ -90,6 +90,7 @@ pub enum Action {
 
     // LLM Management
     OpenLlmManagementDialog,
+    OpenLlmChat,
 
     // Column Operations
     OpenColumnOperationsDialog,
@@ -161,6 +162,7 @@ impl Action {
             Action::SqlUndo => "Undo last SQL edit",
             Action::SqlRedo => "Redo last SQL edit",
             Action::OpenLlmManagementDialog => "Open LLM management dialog",
+            Action::OpenLlmChat => "Open LLM chat dialog",
             Action::OpenColumnOperationsDialog => "Open column operations dialog",
             Action::OpenSortHistory => "Open sort history",
             Action::OpenQueryDebug => "Open query debug dialog",
@@ -232,7 +234,7 @@ impl Action {
             | Action::SqlUndo
             | Action::SqlRedo => ActionCategory::DataOps,
 
-            Action::OpenLlmManagementDialog => ActionCategory::Application,
+            Action::OpenLlmManagementDialog | Action::OpenLlmChat => ActionCategory::Application,
             Action::OpenColumnOperationsDialog => ActionCategory::Columns,
             Action::OpenSortHistory => ActionCategory::DataOps,
             Action::OpenQueryDebug => ActionCategory::DataOps,
@@ -304,6 +306,7 @@ impl Action {
             Action::SqlUndo,
             Action::SqlRedo,
             Action::OpenLlmManagementDialog,
+            Action::OpenLlmChat,
             Action::OpenColumnOperationsDialog,
             Action::OpenSortHistory,
             Action::OpenQueryDebug,

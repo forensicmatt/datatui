@@ -2,9 +2,10 @@ use crate::core::DatasetId;
 use crate::services::search_service::{FindOptions, SearchMode};
 use crate::services::{DataService, LlmService, SearchService};
 use crate::tui::components::{
-    CellViewer, ColumnOperationsDialog, ColumnWidthDialog, CommandBarDialog,
+    CellViewer, ChatMessage, ColumnOperationsDialog, ColumnWidthDialog, CommandBarDialog,
     DataFrameDetailsDialog, DataTable, EmbeddingProgressDialog, ErrorDialog, FindAllResultsDialog,
-    FindDialog, LlmManagementDialog, MapViewerDialog, SortDialog, SqlDialog,
+    FindDialog, LlmChatDialog, LlmChatDialogResult, LlmManagementDialog, MapViewerDialog,
+    SortDialog, SqlDialog,
 };
 use crate::tui::{Action, Command, Component, Focusable, KeyBindings, Theme};
 use color_eyre::Result;
@@ -13,6 +14,8 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     Frame,
 };
+use rig::message::{AssistantContent, Text, UserContent};
+use rig::OneOrMany;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 
@@ -122,6 +125,25 @@ pub struct App {
             >,
         >,
     >,
+
+    /// LLM chat dialog
+    llm_chat_dialog: Option<LlmChatDialog>,
+
+    /// Channel receiver for LLM chat agent results
+    llm_chat_result_rx:
+        Option<mpsc::Receiver<Result<crate::services::agent_service::AgentResponse, String>>>,
+
+    /// Receiver end of the tool-request channel.
+    /// The agent tool sends `ToolRequest::ApplySql` here; `App::update` replies
+    /// via `agent_tool_resp_tx`.
+    agent_tool_rx: Option<std::sync::mpsc::Receiver<crate::services::agent_service::ToolRequest>>,
+
+    /// Sender used to reply to the agent tool with `ToolResponse::Ok/Err`.
+    agent_tool_resp_tx:
+        Option<std::sync::mpsc::SyncSender<crate::services::agent_service::ToolResponse>>,
+
+    /// Persisted chat history for the LLM agent
+    llm_chat_history: Vec<rig::completion::Message>,
 }
 
 impl App {
@@ -167,6 +189,11 @@ impl App {
             similarity_sort_result_rx: None,
             sort_history_dialog: None,
             query_debug_dialog: None,
+            llm_chat_dialog: None,
+            llm_chat_result_rx: None,
+            agent_tool_rx: None,
+            agent_tool_resp_tx: None,
+            llm_chat_history: Vec::new(),
         })
     }
 
@@ -689,6 +716,111 @@ impl App {
         Ok(())
     }
 
+    /// Handle a result from the LLM chat dialog
+    fn handle_llm_chat_result(&mut self, result: LlmChatDialogResult) -> Result<()> {
+        match result {
+            LlmChatDialogResult::SendMessage(prompt) => {
+                self.dispatch_llm_chat(prompt)?;
+            }
+            LlmChatDialogResult::Close => {
+                // Restore focus to table
+                if let Some(table) = &mut self.data_table {
+                    table.set_focused(true);
+                }
+                self.llm_chat_dialog = None;
+            }
+        }
+        Ok(())
+    }
+
+    /// Dispatch a prompt to the LLM agent in the background
+    fn dispatch_llm_chat(&mut self, prompt: String) -> Result<()> {
+        use crate::services::agent_service::{ToolRequest, ToolResponse};
+
+        let table = self
+            .data_table
+            .as_ref()
+            .ok_or_else(|| color_eyre::eyre::eyre!("No active dataset"))?;
+        let dataset = table.dataset();
+
+        let _provider = self
+            .llm_service
+            .get_default_provider()
+            .unwrap_or(crate::core::llm_config::LlmProvider::OpenAI);
+        let config = self.llm_service.get_openai_config().ok_or_else(|| {
+            color_eyre::eyre::eyre!("OpenAI is not configured. Configure it in LLM Management (l).")
+        })?;
+
+        let api_key = config.api_key.clone();
+        let model = "gpt-4o".to_string();
+        let table_name = dataset.table_name().to_string();
+        let columns = dataset.column_names()?;
+        let current_sql = dataset.get_current_sql();
+
+        // Update history with user message immediately for the UI
+        self.llm_chat_history.push(rig::completion::Message::User {
+            content: OneOrMany::one(UserContent::Text(Text {
+                text: prompt.clone(),
+            })),
+        });
+        if let Some(dialog) = &mut self.llm_chat_dialog {
+            dialog.messages.push(ChatMessage::User(prompt.clone()));
+            dialog.set_waiting(true);
+        }
+
+        // ── Channel setup ────────────────────────────────────────────────
+        // tool_tx  / tool_rx   : agent tool → main thread (SQL apply requests)
+        // resp_tx  / resp_rx   : main thread → agent tool (Ok / Err replies)
+        // The bound=1 on the sync channels prevents unbounded buffering.
+        let (tool_tx, tool_rx) = std::sync::mpsc::sync_channel::<ToolRequest>(1);
+        let (resp_tx, resp_rx) = std::sync::mpsc::sync_channel::<ToolResponse>(1);
+
+        // Store main-thread ends on App so update() can poll them.
+        self.agent_tool_rx = Some(tool_rx);
+        self.agent_tool_resp_tx = Some(resp_tx);
+
+        // ── Agent result channel ─────────────────────────────────────────
+        let mut chat_history = self.llm_chat_history.clone();
+        let (result_tx, result_rx) = mpsc::channel();
+        self.llm_chat_result_rx = Some(result_rx);
+
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    tracing::error!("Failed to create tokio runtime for LLM agent: {}", e);
+                    let _ = result_tx.send(Err(format!("Failed to create tokio runtime: {}", e)));
+                    return;
+                }
+            };
+
+            let res = rt.block_on(async {
+                crate::services::agent_service::AgentService::prompt(
+                    &api_key,
+                    &model,
+                    &prompt,
+                    &table_name,
+                    &columns,
+                    &current_sql,
+                    tool_tx,
+                    resp_rx,
+                    &mut chat_history,
+                )
+                .await
+            });
+
+            if let Err(ref e) = res {
+                tracing::error!("LLM agent error: {}", e);
+            }
+            let _ = result_tx.send(res.map_err(|e| e.to_string()));
+        });
+
+        Ok(())
+    }
+
     /// Handle a command bar dialog result
     fn handle_command_bar_result(
         &mut self,
@@ -1099,6 +1231,32 @@ Press Esc or Enter to close this dialog.";
             }
         }
         // DataFrameDetailsDialog
+        // LlmChatDialog
+        else if self.llm_chat_dialog.is_some() {
+            let kr = if let Some(d) = &mut self.llm_chat_dialog {
+                d.handle_key_event(key)?
+            } else {
+                KeyEventResult::Ignored
+            };
+
+            // Check for pending result after key event
+            if let Some(d) = &mut self.llm_chat_dialog {
+                if let Some(result) = d.take_result() {
+                    self.handle_llm_chat_result(result)?;
+                    return Ok(());
+                }
+            }
+
+            match kr {
+                KeyEventResult::Consumed => return Ok(()),
+                KeyEventResult::Action(a) => {
+                    self.handle_action(a)?;
+                    return Ok(());
+                }
+                KeyEventResult::Ignored => {}
+            }
+        }
+        // DataFrameDetailsDialog
         else if let Some(dialog) = &mut self.dataframe_details_dialog {
             match dialog.handle_key_event(key)? {
                 KeyEventResult::Consumed => return Ok(()),
@@ -1121,6 +1279,8 @@ Press Esc or Enter to close this dialog.";
             "ColumnWidthDialog"
         } else if self.sort_dialog.is_some() {
             "SortDialog"
+        } else if self.llm_chat_dialog.is_some() {
+            "LlmChatDialog"
         } else if self.sql_dialog.is_some() {
             "SqlDialog"
         } else if self.llm_management_dialog.is_some() {
@@ -1166,6 +1326,17 @@ Press Esc or Enter to close this dialog.";
             Action::Quit => {
                 self.should_quit = true;
                 return Ok(());
+            }
+
+            // Route to LLM Chat dialog if active
+            _ if self.llm_chat_dialog.is_some() => {
+                let dialog = self.llm_chat_dialog.as_mut().unwrap();
+                if dialog.handle_action(action)? {
+                    if let Some(result) = dialog.take_result() {
+                        return self.handle_llm_chat_result(result);
+                    }
+                    return Ok(());
+                }
             }
             Action::NextTab => {
                 // If FindAllResultsDialog is active, toggle focus between it and DataTable
@@ -1336,6 +1507,43 @@ Press Esc or Enter to close this dialog.";
 
                     let dialog = ColumnOperationsDialog::new(columns, col_idx);
                     self.column_operations_dialog = Some(dialog);
+                }
+                return Ok(());
+            }
+
+            Action::OpenLlmChat => {
+                if let Some(table) = &mut self.data_table {
+                    let mut dialog = LlmChatDialog::new();
+                    // Load existing history
+                    dialog.messages = self
+                        .llm_chat_history
+                        .iter()
+                        .map(|m| match m {
+                            rig::completion::Message::User { content, .. } => {
+                                let text = match content.first() {
+                                    UserContent::Text(t) => t.text.clone(),
+                                    _ => "non-text content".to_string(),
+                                };
+                                ChatMessage::User(text)
+                            }
+                            rig::completion::Message::Assistant { content, .. } => {
+                                let text = match content.first() {
+                                    AssistantContent::Text(t) => t.text.clone(),
+                                    _ => "non-text content".to_string(),
+                                };
+                                ChatMessage::Assistant(text)
+                            }
+                        })
+                        .collect();
+
+                    use crate::tui::component::Focusable;
+                    dialog.set_focused(true);
+                    table.set_focused(false);
+                    self.llm_chat_dialog = Some(dialog);
+                } else {
+                    self.error_dialog = Some(ErrorDialog::new(
+                        "LLM Chat requires an active dataset.".to_string(),
+                    ));
                 }
                 return Ok(());
             }
@@ -1857,7 +2065,127 @@ Press Esc or Enter to close this dialog.";
             }
         }
 
-        // ── Check sort history results ──────────────────────────────────────────
+        // ── Service tool requests from the agent ────────────────────────────────
+        // The agent tool sends ApplySql requests here; we validate/apply via
+        // DataService (existing connection, no new file open), then reply.
+        if self.agent_tool_rx.is_some() {
+            use crate::services::agent_service::{ToolRequest, ToolResponse};
+
+            let request = self
+                .agent_tool_rx
+                .as_ref()
+                .and_then(|rx| rx.try_recv().ok());
+
+            if let Some(ToolRequest::ApplySql(sql)) = request {
+                // Determine the active dataset ID.
+                let dataset_id = self.data_table.as_ref().map(|t| t.dataset().id.clone());
+
+                let response = if let Some(dataset_id) = dataset_id {
+                    match self.data_service.validate_and_apply_sql(&dataset_id, &sql) {
+                        Ok(()) => {
+                            tracing::info!("Agent applied SQL: {}", sql);
+                            // Refresh the DataTable so the user sees the change.
+                            if let Some(table) = &mut self.data_table {
+                                if let Ok(updated_ds) = self.data_service.get_dataset(&dataset_id) {
+                                    *table.dataset_mut() = updated_ds;
+                                }
+                                if let Err(e) = table.reload_schema() {
+                                    tracing::error!(
+                                        "Failed to reload table after agent SQL: {}",
+                                        e
+                                    );
+                                }
+                            }
+                            if let Some(dialog) = &mut self.llm_chat_dialog {
+                                dialog
+                                    .messages
+                                    .push(crate::tui::components::ChatMessage::System(format!(
+                                        "Applied SQL: {}",
+                                        sql
+                                    )));
+                            }
+                            ToolResponse::Ok
+                        }
+                        Err(e) => {
+                            tracing::warn!("Agent SQL rejected: {}", e);
+                            ToolResponse::Err(e.to_string())
+                        }
+                    }
+                } else {
+                    ToolResponse::Err("No active dataset".to_string())
+                };
+
+                if let Some(tx) = &self.agent_tool_resp_tx {
+                    let _ = tx.send(response);
+                }
+            }
+        }
+
+        // ── Check LLM chat results ──────────────────────────────────────────────
+        if let Some(rx) = &self.llm_chat_result_rx {
+            if let Ok(res) = rx.try_recv() {
+                self.llm_chat_result_rx = None;
+                if let Some(dialog) = &mut self.llm_chat_dialog {
+                    dialog.set_waiting(false);
+                }
+
+                match res {
+                    Ok(response) => {
+                        // Update persisted history
+                        self.llm_chat_history
+                            .push(rig::completion::Message::Assistant {
+                                id: None,
+                                content: OneOrMany::one(AssistantContent::Text(Text {
+                                    text: response.response_text.clone(),
+                                })),
+                            });
+
+                        if let Some(dialog) = &mut self.llm_chat_dialog {
+                            dialog
+                                .messages
+                                .push(ChatMessage::Assistant(response.response_text.clone()));
+                            dialog.set_token_usage(
+                                response.input_tokens,
+                                response.output_tokens,
+                                response.total_tokens,
+                            );
+                            dialog.set_system_prompt(response.system_prompt);
+
+                            if let Some(sql) = &response.applied_sql {
+                                dialog
+                                    .messages
+                                    .push(ChatMessage::System(format!("Applied SQL: {}", sql)));
+
+                                // Refresh the data table
+                                if let Some(table) = &mut self.data_table {
+                                    let dataset_id = table.dataset().id.clone();
+                                    if let Ok(updated_ds) =
+                                        self.data_service.get_dataset(&dataset_id)
+                                    {
+                                        *table.dataset_mut() = updated_ds;
+                                    }
+                                    if let Err(e) = table.reload_schema() {
+                                        tracing::error!(
+                                            "Failed to reload table schema after agent SQL: {}",
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(dialog) = &mut self.llm_chat_dialog {
+                            dialog
+                                .messages
+                                .push(ChatMessage::System(format!("Error: {}", e)));
+                        }
+                        self.error_dialog =
+                            Some(ErrorDialog::new(format!("LLM Agent error: {}", e)));
+                    }
+                }
+            }
+        }
         if let Some(dialog) = &self.sort_history_dialog {
             if dialog.is_closed() {
                 if let Some(result) = dialog.result() {
@@ -2008,6 +2336,12 @@ Press Esc or Enter to close this dialog.";
         // Render query debug dialog overlay if active
         if let Some(dialog) = &mut self.query_debug_dialog {
             let dialog_area = Self::centered_rect(90, 80, area);
+            dialog.render(frame, dialog_area, &self.theme);
+        }
+
+        // Render LLM Chat dialog overlay if active
+        if let Some(dialog) = &mut self.llm_chat_dialog {
+            let dialog_area = Self::centered_rect(85, 85, area);
             dialog.render(frame, dialog_area, &self.theme);
         }
 

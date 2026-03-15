@@ -42,7 +42,8 @@
       "w": "OpenColumnWidthDialog",
       "m": "OpenMapViewer",
       "l": "OpenLlmManagementDialog",
-      "o": "OpenColumnOperationsDialog"
+      "o": "OpenColumnOperationsDialog",
+      "a": "OpenLlmChat"
     },
     "SqlDialog": {
       "Ctrl+Enter": "RunSqlQuery",
@@ -150,6 +151,14 @@
       "Enter": "Confirm",
       "Ctrl+i": "ToggleInstructions",
       "Ctrl+h": "OpenSortHistory"
+    },
+    "LlmChatDialog": {
+      "Up": "MoveUp",
+      "Down": "MoveDown",
+      "PageUp": "PageUp",
+      "PageDown": "PageDown",
+      "Esc": "Cancel",
+      "Ctrl+i": "ToggleHelp"
     }
   }
 }

@@ -291,13 +291,60 @@ impl DataService {
     }
 
     /// Get the path to the session DuckDB file.
-    ///
-    /// Background threads that need their own DuckDB connection can open
-    /// this path independently (DuckDB supports concurrent read+write access).
     pub fn session_db_path(&self) -> PathBuf {
         self.session_path
             .join(".datatui")
             .join(format!("session_{}.duckdb", self.session_id))
+    }
+
+    /// Validate a raw SQL query and apply it to the specified dataset.
+    ///
+    /// This is the service API used by the LLM agent tool — the tool never
+    /// opens the database file directly; instead it sends the SQL to the main
+    /// thread which calls this method using the existing open connection.
+    ///
+    /// Returns `Ok(())` on success or an `Err` whose message should be
+    /// forwarded back to the LLM so it can self-correct.
+    pub fn validate_and_apply_sql(
+        &mut self,
+        dataset_id: &crate::core::DatasetId,
+        sql: &str,
+    ) -> Result<()> {
+        use crate::core::sql_query::QueryBuilder;
+
+        // 1. Syntax-check via the existing session connection (no new file open).
+        self.session_conn
+            .prepare(sql)
+            .map_err(|e| color_eyre::eyre::eyre!("Invalid SQL syntax: {}", e))?;
+
+        // 2. Parse into a QueryBuilder (validates it is a SELECT targeting this table).
+        let table_name = {
+            let datasets = self
+                .datasets
+                .lock()
+                .map_err(|e| color_eyre::eyre::eyre!("Dataset lock poisoned: {}", e))?;
+            datasets
+                .get(dataset_id)
+                .map(|ds| ds.table_name().to_string())
+                .ok_or_else(|| {
+                    color_eyre::eyre::eyre!("Dataset '{}' not found", dataset_id.as_str())
+                })?
+        };
+
+        let qb = QueryBuilder::parse(sql, &table_name)
+            .map_err(|e| color_eyre::eyre::eyre!("Query parse error: {}", e))?;
+
+        // 3. Apply to the dataset.
+        let mut datasets = self
+            .datasets
+            .lock()
+            .map_err(|e| color_eyre::eyre::eyre!("Dataset lock poisoned: {}", e))?;
+        let dataset = datasets.get_mut(dataset_id).ok_or_else(|| {
+            color_eyre::eyre::eyre!("Dataset '{}' not found", dataset_id.as_str())
+        })?;
+        dataset.set_current_query(qb)?;
+
+        Ok(())
     }
 
     /// Import a JSON file into the session database
